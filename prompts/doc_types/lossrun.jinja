@@ -1,0 +1,55 @@
+{#-
+  Loss Run specific extraction block. Included by system_prompt_template.jinja.
+
+  The load-bearing rule is the stated-count one. SPEC_09's row-completeness
+  check compares the model's row count against a count the DOCUMENT states. If
+  the model derives that count from the rows it just emitted, the cross-check
+  compares a number to itself, always agrees, and the one signal that can see a
+  dropped row goes silent. That is why it is an instruction, not a format note.
+
+  Roles and structure only - never a printed label. `output_shape` is derived
+  from the schema at render time so the shown key set cannot drift from the one
+  the output is validated against.
+-#}
+# This document type: Loss Run
+
+A Loss Run reports claim history. Its substance is the per-claim listing; everything above and around that listing describes the report itself, not any individual claim.
+
+## What you are given
+One or more pages of a single claims report, typically:
+
+1. A header block identifying the account, the coverage the history is drawn on, and the report's own parameters - including the point in time the figures were taken at, and sometimes a stated count of claims.
+2. The claim listing - a wide grid, one row per claim, running across as many pages as it needs. Column headings usually repeat at the top of each page.
+3. Subtotal and total lines - per coverage period, per coverage, or at the foot of the listing.
+
+## Where the values are
+- Account, coverage and report-level values come from the header block. They are never taken from a claim row.
+- Every per-claim value comes from the listing, one row at a time.
+- Subtotal and total lines are summaries of the rows. Nothing is extracted from them.
+
+## How to work through it
+1. Read the header block and fill the report-level fields.
+2. Find the first data row of the listing. Ignore the column headings and any repeat of them on later pages.
+3. Walk the rows in document order to the end of the listing, including its continuation onto later pages, emitting one entry per row.
+4. Stop at the subtotal or total lines; do not emit them.
+5. Re-read the header for a stated claim count and transcribe it exactly as stated.
+
+## Rules for this document type
+- Header values identify the report. A claim value is never promoted into a header field because the header was blank.
+- The point in time the figures were taken is a property of the **report**, not of the coverage. A report can be drawn long after the period it covers has ended, and that point is not one of the period's two dates.
+- The coverage period bounds the claims listed. Where a report spans several periods, the header fields describe the coverage the report is drawn on - not whichever period appears first in the listing.
+- **A stated claim count is extracted as stated, never computed from the rows you produced.** Transcribe it even when it disagrees with the number of rows you extracted; that disagreement is the signal. Where the document states no count, output null. Do not fill the field by counting your own output.
+- Amounts paid, amounts held in reserve, and the total carried for the claim are separate figures. Where the document states the total, extract it as stated - do not add the other two to produce it, and do not adjust any of them to make them agree.
+- A claim's loss date is when the loss happened. Dates on which it was reported, entered, revalued or closed are different events, belonging to different fields or to none.
+- Status wording varies by carrier; map it onto the permitted values by meaning. A claim that was paid and shut is not the same as one that was refused.
+- Zero-value rows, closed rows and refused rows are all rows. So is a row whose only content is an identifier and a date.
+- The same claim can appear on more than one line where the report breaks it out by coverage or by claimant. Emit the lines as presented; do not combine them, and do not drop one as a duplicate.
+- Where a row wraps onto a second physical line, it is still one claim.
+
+## Output for this document type
+```
+{
+{{ output_shape }}
+}
+```
+Emit exactly these keys. `claims` is an array holding **every** row of the listing in document order — it is `[]` only when the report genuinely lists no claims, and never omitted. Row completeness matters more here than per-value precision: a row you drop produces no output to be checked and no low confidence to be caught. The schema below is the authority on types and permitted values.

@@ -1,0 +1,32 @@
+{
+  "$comment": "SEED registry - hand-written starting point, to be REPLACED by data_pipeline/labeling/derive_aliases.py once labeled documents exist (SPEC_04 section 3). Derived entries carry evidence (document counts, matched layout pattern, example source_ids); these seeds carry none. NEVER rendered into a prompt and NEVER consulted at inference (master 1.4).",
+  "$doc_type": "policy",
+  "insured_name": {
+    "aliases": ["Insured Name", "Named Insured", "Insured", "Applicant", "Name of Applicant", "Applicant Name", "Name of Insured", "Name Insured"],
+    "confusables": ["Certificate Holder", "Producer", "Agency", "Additional Insured", "Loss Payee", "Mortgagee", "Carrier", "Insurer"]
+  },
+  "policy_number": {
+    "aliases": ["Policy Number", "Policy No.", "Policy #", "Policy No", "Pol. No."],
+    "confusables": ["Quote Number", "Binder Number", "Claim Number", "Submission Number", "Certificate Number"]
+  },
+  "carrier": {
+    "aliases": ["Carrier", "Insurer", "Insurance Company", "Underwritten By", "Company"],
+    "confusables": ["Producer", "Agency", "Broker", "Named Insured"]
+  },
+  "producer": {
+    "aliases": ["Producer", "Agency", "Broker", "Agent", "Producer Name"],
+    "confusables": ["Carrier", "Insurer", "Named Insured", "Certificate Holder"]
+  },
+  "effective_date": {
+    "aliases": ["Effective Date", "Effective", "Policy Effective Date", "Inception Date", "From"],
+    "confusables": ["Expiration Date", "Issue Date", "Date Printed", "Valuation Date"]
+  },
+  "expiration_date": {
+    "aliases": ["Expiration Date", "Expiration", "Policy Expiration Date", "Expiry Date", "To"],
+    "confusables": ["Effective Date", "Cancellation Date", "Renewal Date"]
+  },
+  "total_premium": {
+    "aliases": ["Total Premium", "Policy Premium", "Total Policy Premium", "Premium"],
+    "confusables": ["Deposit Premium", "Minimum Premium", "Surcharge", "Taxes and Fees"]
+  }
+}

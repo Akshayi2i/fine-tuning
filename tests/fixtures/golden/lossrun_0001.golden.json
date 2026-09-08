@@ -1,0 +1,15 @@
+{
+  "carrier": "Sentinel Insurance Company",
+  "policy_number": "WC-8842317-01",
+  "insured_name": "Rivera Fabrication LLC",
+  "effective_date": null,
+  "expiration_date": null,
+  "line_of_business": "workers_comp",
+  "valuation_date": "2026-03-31",
+  "total_claims_reported": 3,
+  "claims": [
+    {"claim_number": "WC24-00817", "loss_date": "2024-02-14", "status": "closed", "paid": 12400.00, "reserved": 0.00, "total_incurred": 12400.00, "description": null},
+    {"claim_number": "WC24-01109", "loss_date": "2024-07-03", "status": "open", "paid": 3150.00, "reserved": 18000.00, "total_incurred": 21150.00, "description": null},
+    {"claim_number": "WC25-00204", "loss_date": "2025-01-22", "status": "open", "paid": 875.00, "reserved": 5500.00, "total_incurred": 6375.00, "description": null}
+  ]
+}

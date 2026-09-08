@@ -1,0 +1,123 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://fideon.local/schemas/acord125.schema.json",
+  "title": "ACORD 125 - Commercial Insurance Application",
+  "version": "1.0.0",
+  "description": "Canonical extraction target for ACORD form 125 (doc_type 'acord', acord_form '125'). A commercial insurance application: the party seeking coverage, the business it operates, the premises to be covered, and the coverages requested.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "insured_name",
+    "line_of_business"
+  ],
+  "properties": {
+    "insured_name": {
+      "$ref": "common_fields.json#/$defs/insured_name"
+    },
+    "insured_address": {
+      "$ref": "common_fields.json#/$defs/insured_address"
+    },
+    "producer": {
+      "$ref": "common_fields.json#/$defs/producer"
+    },
+    "carrier": {
+      "$ref": "common_fields.json#/$defs/carrier"
+    },
+    "effective_date": {
+      "$ref": "common_fields.json#/$defs/effective_date"
+    },
+    "expiration_date": {
+      "$ref": "common_fields.json#/$defs/expiration_date"
+    },
+    "line_of_business": {
+      "$ref": "lob.enum.json#/$defs/line_of_business"
+    },
+    "business_type": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "The applicant's legal form, for example Corporation, LLC, Partnership, or Individual, as marked on the form."
+    },
+    "sic_code": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "The SIC classification code for the applicant's business, if given."
+    },
+    "naics_code": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "The NAICS classification code for the applicant's business, if given."
+    },
+    "years_in_business": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "description": "How long the applicant has operated, in whole years, if stated."
+    },
+    "annual_revenue": {
+      "type": [
+        "number",
+        "null"
+      ],
+      "description": "Stated annual revenue or gross sales, as a number without currency symbols or separators."
+    },
+    "premises": {
+      "type": "array",
+      "description": "The premises or locations listed on the application, one entry per location.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "address"
+        ],
+        "properties": {
+          "location_number": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The location or building number as printed on the form."
+          },
+          "address": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The street address of this premises. Not the applicant's mailing address unless they are the same."
+          },
+          "occupancy": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "How this location is used, as described on the form."
+          },
+          "interest": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The applicant's interest in the location, for example Owner or Tenant."
+          }
+        }
+      }
+    },
+    "coverages_requested": {
+      "type": [
+        "array",
+        "null"
+      ],
+      "description": "The coverages the applicant is applying for, as listed or checked on the form.",
+      "items": {
+        "type": "string"
+      }
+    }
+  },
+  "$comment": "AUTHORING NOTE - not injected into the prompt. On an application the party seeking coverage is usually labelled differently from how a bound policy labels it, yet it maps to the same canonical insured_name. That mapping is learned from training examples plus the field's semantic gloss - never from an alias list in the prompt, which would give the model a lexical prior and make confusable errors worse (arch 0c)."
+}

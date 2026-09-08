@@ -1,0 +1,18 @@
+{
+  "insured_name": "Rivera Fabrication LLC",
+  "insured_address": "1420 Foundry Road, Toledo OH 43604",
+  "producer": "Hanover Risk Partners",
+  "certificate_holder": "Meridian Property Group LLC",
+  "additional_insured": ["Meridian Property Group LLC"],
+  "line_of_business": "general_liability",
+  "certificate_number": "CERT-2026-004471",
+  "issue_date": "2026-04-05",
+  "insurers": [
+    {"letter": "A", "name": "Sentinel Insurance Company", "naic_code": "11000"},
+    {"letter": "B", "name": "Northbridge Casualty", "naic_code": null}
+  ],
+  "coverages": [
+    {"coverage_type": "Commercial General Liability", "insurer_letter": "A", "policy_number": "GL-4419920-00", "effective_date": "2026-04-01", "expiration_date": "2027-04-01", "limits": {"each_occurrence": 1000000.00, "general_aggregate": 2000000.00}},
+    {"coverage_type": "Automobile Liability", "insurer_letter": "B", "policy_number": "CA-7781204-00", "effective_date": "2026-04-01", "expiration_date": "2027-04-01", "limits": {"combined_single_limit": 1000000.00}}
+  ]
+}

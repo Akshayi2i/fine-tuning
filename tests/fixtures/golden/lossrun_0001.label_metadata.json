@@ -1,0 +1,17 @@
+{
+  "source_id": "lossrun_0001",
+  "doc_type": "lossrun",
+  "reviewer_id": "fixture",
+  "review_date": "2026-09-03",
+  "draft_backend": "none_synthetic_fixture",
+  "double_annotated": false,
+  "review_requirement": "full",
+  "field_provenance": {
+    "carrier": "Carrier",
+    "insured_name": "Insured",
+    "policy_number": "Policy Number",
+    "valuation_date": "Valued As Of",
+    "total_claims_reported": "Total Claims"
+  },
+  "$comment": "LIST-FIELD + NULL fixture. Three claim rows exercise list recall; total_claims_reported=3 is the document-stated count the row-completeness cross-check compares against (arch 5), so dropping a row is detectable here. effective_date and expiration_date are legitimately absent and must be null, not hallucinated. valuation_date appears as 'Valued As Of' - a genuine alias, and one whose confusables (effective_date, loss_date) are all dates, so type-compatibility alone will not separate them."
+}

@@ -1,0 +1,115 @@
+# SPEC 15 — Pilot Validation Protocol (De-Risking Before Full Annotation)
+
+> Read `SPEC_00_MASTER_CONTEXT.md` first. Dependencies: SPEC_01–SPEC_14 built.
+>
+> **This spec is executed, not imported.** It is an operational runbook, not a library — nothing else in the repo depends on it. It exists because architecture v1 added §16, which has no home in the module specs.
+>
+> **Architecture refs:** `finetuning-architecture-v1.md` §16 (**pilot validation protocol**), §16a/§16b/§16c, §8 (pilot split ratios), §4c (day-zero bootstrap), §15 (metrics).
+
+## Goal
+
+Before committing to full corpus annotation, run three sequential experiments that de-risk the architecture in order of increasing investment. Each answers a different question, and each is cheap relative to the one after it.
+
+**Run these in order. Do not skip to 16c.**
+
+## Deliverables
+
+### 1. `pilot/zero_shot_baseline.py` — Experiment A (Week 1, no annotation cost)
+
+Run the **base, untuned** `Qwen3-VL-8B-Instruct` against **10 real documents per document type**, using the SPEC_01 prompt template with the Fideon SPEC_00 schema injected. Compute field-level F1 against ground-truth annotations.
+
+**Implement this as a thin wrapper over the existing extraction command**, not as a parallel path:
+
+```bash
+python -m orchestration.run extract --model base --input pilot/baseline_docs/ \
+       --ground-truth pilot/baseline_golden/
+```
+
+SPEC_13's `--model base` and SPEC_02's `resolve_model_version("base")` exist precisely so the baseline, day-zero pre-annotation (SPEC_04), and this experiment all run the same code. A separate implementation here would measure something subtly different from what production runs.
+
+This tells you how much the base model extracts for free and — more usefully — **where it fails**: schema adherence, list-row recall, LoB detection, or OCR arbitration.
+
+**Outcome thresholds and what each means:**
+
+| Zero-shot field F1 | Interpretation | Decision |
+|---|---|---|
+| **> 0.70** | Strong base-model prior; fine-tuning expected to reach production quality | Proceed to pilot corpus |
+| **0.40 – 0.70** | Fine-tuning will materially improve; specific failure modes identified | Proceed, **with targeted corpus coverage for the weak areas** |
+| **< 0.40** | Base model likely insufficient as framed | **Review prompt design, schema complexity, and document difficulty *before* committing annotation investment** |
+
+- Output: `pilot/reports/zero_shot_baseline.json` — per-doc-type F1, per-metric breakdown (schema validity, list recall, LoB accuracy, OCR arbitration), and the failure-mode distribution.
+- Uses SPEC_07 inference core and SPEC_08 metrics — the same code the production gate uses, so the numbers are comparable later.
+
+### 2. `pilot/smoke_test.py` — Experiment B (Weeks 1–2, 5 annotated documents)
+
+Annotate exactly **5 documents per document type**. Train to **intentional overfit**: no train/val split, 5 epochs, learning rate at the upper end of the sweep range.
+
+**This proves the code pipeline is correct — not that the architecture generalises.** It is a sanity check, not a proof of concept.
+
+Confirm all of:
+- Training loss reaches **below 0.05 within 2 epochs**.
+- The model reproduces the 5 training examples with **field F1 > 0.95 on the training set**.
+- End-to-end, without error: the ms-swift training loop, the data collator, LoRA adapter loading, adapter save and push to Azure Blob, vLLM multi-adapter hot-swap, and run manifest generation.
+
+**Why 5 documents and not 1:** a single source document generates only three modality variants (three training examples), which isn't enough to exercise the full data collator pipeline. Five documents per type covers multi-page, OCR-failure, and image-only edge cases.
+
+- Output: `pilot/reports/smoke_test.json` — loss curve, train-set F1, and a pass/fail per pipeline component.
+- **A failure here is a code bug, not an architecture problem.** Fix it before spending annotation budget.
+
+### 3. Experiment C — Pilot Training Run (Weeks 2–6, 25–30 documents per type)
+
+Annotate 25–30 documents per document type per SPEC_04, using the **pilot split ratios (~70/18/12)** from SPEC_05. Train Foundation and per-type adapters. Evaluate on the pilot test split.
+
+This is the **minimum experiment that tests the architecture's generalisation claim**: whether the Foundation captures cross-type behavior, whether per-type adapters specialise correctly, whether modality-dropout arbitration functions, whether row-completeness detection fires on unseen documents, and whether confidence calibration is meaningful with held-out data.
+
+**Pilot success criteria — directional targets, not production thresholds:**
+
+| Metric | Pilot threshold |
+|---|---|
+| Field F1 (non-list fields) | > 0.80 |
+| List-field recall | > 0.75 |
+| JSON schema validity | 100% |
+| Image-only field F1 | Within 15% of OCR-plus-image F1 |
+| Row-completeness detection accuracy | > 80% of documents with missing rows flagged |
+| LoB detection accuracy | > 0.85 |
+| **Alias generalization** | Field accuracy on a **held-out surface label** within 15% of accuracy on that field's dominant label |
+| **Confusable misattribution rate** | < 5% |
+
+**A failed criterion signals a specific architectural issue to diagnose — not a reason to abandon the architecture.** Diagnose the failure-mode distribution, expand corpus coverage for the failing case, and re-run the pilot. Map each failure to its likely cause:
+
+| Failed criterion | First place to look |
+|---|---|
+| Field F1 low | Prompt/schema design; corpus coverage for that doc type; per-type adapter LR/epochs (a targeted retrain, not the deferred sweep) |
+| List-field recall low | Loss Run corpus row-length variety; row-completeness signal (SPEC_09); consider list-specific prompt rules |
+| Schema validity < 100% | Prompt rules (no fences, null-handling); JSON structural discipline in the Foundation corpus |
+| Image-only F1 gap > 15% | **The ViT escalation gate (SPEC_06 `vit_gate`)** — but only if errors are perception-type, not schema/reasoning |
+| Row-completeness misses | Cross-check sources in SPEC_09: is MinerU's table row count reaching the signal? |
+| LoB accuracy low | **LoB corpus coverage (SPEC_05 `corpus_manifest`)** — check the ≥20%-per-value target before blaming the model |
+| Alias generalization gap > 15% | **`alias_coverage` in the corpus manifest** — the held-out label is probably under-represented. Also check the field's semantic gloss: a vague `description` gives the model nothing to generalise from |
+| Confusable misattribution ≥ 5% | **`confusable_example_count`** — near zero means the corpus taught the mapping but never the boundary. Also check the gloss carries an explicit exclusion clause (SPEC_01) |
+
+**Alias generalization is measured by deliberate hold-out.** Pick one surface label per confusable-prone field (say, *Applicant* for `insured_name`), keep every document using it out of `train`, and place them in the pilot test split. If the model scores well on them it has learned the semantic mapping rather than memorising label strings — which is the whole claim of the canonical-field design (master §1.4) and the one thing no plumbing test can prove.
+
+- Output: `pilot/reports/pilot_run.json` + a `pilot/pilot_report.py` summary that puts all three experiments side by side.
+
+### 4. `pilot/pilot_report.py`
+- Aggregates the three experiment reports into one human-readable go/no-go document: baseline → smoke → pilot, each with its thresholds, actuals, and pass/fail.
+- States explicitly which criteria failed and the diagnosis path from the table above.
+- **Every pilot training run still writes a normal `RunManifest`** (SPEC_02) — pilot runs are registry entries, not untracked experiments.
+- **This is the gate the deferred work waits on.** The hyperparameter sweep (SPEC_06 `sweep.py`, arch §11a) runs *after* this protocol passes and *before* production-scale training — sweeping on 25–30 docs/type measures noise, not signal.
+
+## Constraints
+- Run the experiments **in order**; each gates the next.
+- The pilot is not an exemption from the PII rules — but de-identification is currently **blocked** (SPEC_05 §1), so pilot data is protected by tenancy and access control only, and that must be acknowledged before real documents are used.
+- Pilot eval numbers are **directional**. At 3–4 test documents per type, no single metric is trustworthy on its own; the batch's real job is proving the pipeline works end to end before scaling annotation to 1000+/type.
+- Re-baseline properly once at real scale — do not carry pilot thresholds forward as production gates.
+- Pilot documents inherit the **unresolved de-identification question** (SPEC_05 §1). Until it is resolved, pilot corpora are built without de-identification and that limitation is stated, not assumed away.
+
+## Acceptance checklist
+- [ ] `zero_shot_baseline` runs the base model over 10 docs/type and emits per-type F1 plus a failure-mode distribution.
+- [ ] The baseline decision table produces the correct proceed/review recommendation on seeded scores.
+- [ ] `smoke_test` trains to overfit on 5 docs/type and reports loss < 0.05 by epoch 2 and train F1 > 0.95.
+- [ ] The smoke test exercises and reports pass/fail for every listed pipeline component, including Blob push and vLLM hot-swap.
+- [ ] Pilot run evaluates against all six pilot criteria and names any that fail with its diagnosis path.
+- [ ] Every pilot training run produces a `RunManifest`.
+- [ ] `pilot_report` renders the three experiments as one go/no-go summary.

@@ -1,0 +1,42 @@
+# Base model and quantization (arch 9, 11).
+# Read by training (SPEC_06), inference core (SPEC_07) and serving (SPEC_11).
+
+model:
+  # Pin the revision. A floating revision means two training runs can silently
+  # use different weights, which makes a regression impossible to attribute.
+  model_id: "Qwen/Qwen3-VL-8B-Instruct"
+  revision: "PIN_ME"                    # TODO Phase 0: set to a concrete commit SHA
+  trust_remote_code: true
+
+# QLoRA: the base is held in 4-bit and never updated; only the LoRA adapters
+# train, in bf16. This is behavior/format adaptation on a model that already has
+# strong document pretraining, not new-knowledge injection (arch 9).
+quantization:
+  load_in_4bit: true
+  bnb_4bit_quant_type: "nf4"            # designed for how NN weights distribute
+  bnb_4bit_use_double_quant: true       # also compresses the quantization constants
+  bnb_4bit_compute_dtype: "bfloat16"
+
+attention:
+  # Inputs run to thousands of image tokens plus OCR text. Standard attention
+  # memory grows with the square of sequence length; this makes it affordable.
+  attn_implementation: "flash_attention_2"
+
+vision:
+  # THE single biggest cost/latency lever: image token count is a direct function
+  # of page resolution. This value MUST be identical here, in corpus prep, and in
+  # production inference - a mismatch means serving a distribution the model
+  # never trained on. configs/inference/vllm_serving.yaml must match (asserted).
+  max_image_long_side_px: 1792          # valid range 1536-2048 (arch 11)
+
+  # Frozen by default. Unfreezing is an escalation through the arch 3 gate, and
+  # even then it is LoRA-on-ViT, never a full fine-tune: full FT risks degrading
+  # the pretrained OCR ability that the image-only pathway depends on.
+  train_vit: false
+
+sequence:
+  # Set from the 95th-percentile token count measured across image + OCR + JSON
+  # on the REAL corpus. Do not guess: too low silently truncates long Loss Runs
+  # (dropping claim rows the model is then trained to omit); too high wastes
+  # memory that could go to batch size.
+  max_seq_len: 8192                     # TODO Phase 10: re-measure on real data

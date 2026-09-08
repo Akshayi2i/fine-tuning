@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://fideon.local/schemas/common_fields.json",
+  "title": "Shared canonical field definitions",
+  "description": "Fields appearing in more than one document schema are defined ONCE here and $ref'd. Defining them per-schema lets two definitions of the same canonical field drift apart, and no test catches it because each schema still validates on its own. See SPEC_01 and arch 0c.",
+  "$comment": "DESCRIPTIONS ARE PROMPT TEXT. They are injected into the system prompt at corpus-build and inference time, so editing one forces a corpus rebuild and a new training cycle (arch 7). Write them as definitions with exclusions, never as lists of surface labels. FIRST DRAFT - requires insurance SME review before the first real corpus build.",
+  "$defs": {
+    "insured_name": {
+      "type": ["string", "null"],
+      "description": "The party purchasing the insurance policy - the person or organisation whose risk is covered. Not the certificate holder, not the producer or agency, not an additional insured, not the carrier."
+    },
+    "insured_address": {
+      "type": ["string", "null"],
+      "description": "The mailing or business address of the party purchasing the policy. Not the certificate holder's address and not the producer's address."
+    },
+    "policy_number": {
+      "type": ["string", "null"],
+      "description": "The identifier assigned to the bound policy by the carrier. Not a quote number, binder number, submission number, or claim number. Preserve the carrier's formatting including any prefix or hyphens."
+    },
+    "effective_date": {
+      "type": ["string", "null"],
+      "description": "The date coverage begins, as YYYY-MM-DD. Not the date the document was issued, printed, or signed."
+    },
+    "expiration_date": {
+      "type": ["string", "null"],
+      "description": "The date coverage ends, as YYYY-MM-DD. Not a cancellation date and not a renewal date."
+    },
+    "carrier": {
+      "type": ["string", "null"],
+      "description": "The insurance company bearing the risk and issuing the policy. Not the producer or agency that placed it, not the insured, and not the certificate holder."
+    },
+    "producer": {
+      "type": ["string", "null"],
+      "description": "The broker or agency that placed the policy. Not the carrier that issued it and not the insured who bought it."
+    },
+    "certificate_holder": {
+      "type": ["string", "null"],
+      "description": "The party to whom a certificate of insurance is issued as evidence that coverage exists. A third party with an interest in the coverage, not the party who purchased it."
+    },
+    "additional_insured": {
+      "type": ["array", "null"],
+      "items": {"type": "string"},
+      "description": "Parties extended coverage under the named insured's policy. Distinct from the named insured, who is the party that purchased it."
+    },
+    "total_premium": {
+      "type": ["number", "null"],
+      "description": "The total premium for the policy term, as a number without currency symbols or thousands separators. Not a per-coverage premium, deposit, instalment, or surcharge."
+    }
+  }
+}

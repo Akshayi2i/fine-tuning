@@ -1,0 +1,17 @@
+# Phase 3 - LoRA rank. SECONDARY: not run by default, only if F1 plateaus after
+# phases 1 and 2. Rank is the least likely of the three to be the bottleneck.
+phase: rank
+depends_on: phase2_epochs
+run_by_default: false
+metric: {name: "field_f1", goal: "maximize"}
+budget_runs: 3
+# Both adapter types, like every other phase. Sweeping rank for the Foundation
+# only meant `--adapter-type per_type` raised "defines no grid" at phase 3 —
+# after phases 1 and 2 had already spent six runs.
+#
+# The per-type grid brackets the default 16 rather than reusing the
+# Foundation's: a rank-16 adapter carries one document type on top of an
+# already-adapted base, so 128 there is capacity nothing will use.
+grid:
+  foundation: {lora_rank: [32, 64, 128]}
+  per_type:   {lora_rank: [8, 16, 32]}

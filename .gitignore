@@ -1,0 +1,31 @@
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Secrets - never commit
+.env
+
+# The repo NEVER stores weights, corpora, or documents. Everything data- or
+# artifact-related is pulled from and pushed to Azure Blob at runtime via
+# artifact_registry/, which is what keeps pod startup fast and decouples
+# corpus/model versioning from code versioning (arch 19).
+*.pdf
+!tests/fixtures/**/*.pdf
+*.safetensors
+*.gguf
+*.bin
+*.ckpt
+
+testing/results/
+testing/metrics/
+testing/ocr_cache/
+testing/test_data/
+calibration/calibration_store/
+pilot/reports/

@@ -1,0 +1,17 @@
+{
+  "source_id": "acord_0001",
+  "doc_type": "acord",
+  "acord_form": "25",
+  "reviewer_id": "fixture",
+  "review_date": "2026-09-03",
+  "draft_backend": "none_synthetic_fixture",
+  "double_annotated": false,
+  "review_requirement": "full",
+  "field_provenance": {
+    "insured_name": "INSURED",
+    "producer": "PRODUCER",
+    "certificate_holder": "CERTIFICATE HOLDER",
+    "issue_date": "DATE"
+  },
+  "$comment": "FOUR-WAY DISCRIMINATION fixture. Four organisation names on one page - Rivera (insured), Hanover (producer), Sentinel (insurer A), Meridian (certificate holder) - each resolving to a DIFFERENT canonical key. This is the single most instructive shape of training example for the confusable problem, because it teaches all four boundaries at once. Note 'Insured' is lexically closest to insured_name while 'Applicant' in policy_0001 is lexically far but semantically identical: the lexical-closeness trap in miniature."
+}

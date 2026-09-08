@@ -1,0 +1,416 @@
+"""The evaluation driver (SPEC_08 §3, arch §8, §15).
+
+Runs a model version over the **frozen golden eval set** through the SPEC_07
+inference core, computes every metric, and writes
+``eval-reports/v{n}/{doc_type}/report.json`` plus a top-level summary — broken
+down per doc type *and* per modality mode.
+
+Four subsets are scored explicitly on top of the full set: ``image_only``,
+``scanned``, ``noisy_ocr`` and ``long_policy``. An aggregate hides exactly the
+regressions that matter — image-only accuracy can fall ten points while the
+overall number moves two, because image-only is a third of the corpus.
+
+**The eval set is frozen and versioned separately**, human double-verified, and
+held constant across corpus versions so model versions compare like with like.
+:func:`assert_eval_set_disjoint` enforces the part of that which code can:
+**no eval ``source_id`` may appear in any corpus split.** Train on your eval set
+and every number in the registry becomes a measurement of memorisation, with no
+symptom anywhere — the loss curve looks fine and the gate passes.
+
+Per-document **error records** are kept, not just aggregates, because
+``vit_gate`` (SPEC_06) needs the perception-vs-reasoning split and failure-mode
+analysis needs real material.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import logging
+from collections.abc import Iterable, Sequence
+from dataclasses import dataclass, field
+from datetime import UTC, datetime
+from typing import Any
+
+from artifact_registry import paths
+from artifact_registry.blob_client import BlobClient
+from common.constants import ACTIVE_DOC_TYPES
+
+log = logging.getLogger(__name__)
+
+#: Eval subsets scored separately from the full set (SPEC_08 §3).
+EVAL_SUBSETS: tuple[str, ...] = ("image_only", "scanned", "noisy_ocr", "long_policy")
+
+
+class EvalError(RuntimeError):
+    """Raised when an evaluation cannot be trusted or cannot be run."""
+
+
+class EvalSetLeakage(EvalError):
+    """Raised when an eval document also appears in a corpus split.
+
+    Separate from :class:`EvalError` because it invalidates results that already
+    exist rather than blocking a run: every metric computed against a leaked eval
+    set has to be discarded, not re-run.
+    """
+
+
+# --------------------------------------------------------------------------
+# The freeze guarantee
+# --------------------------------------------------------------------------
+
+
+def corpus_source_ids(
+    client: BlobClient, corpus_version: str, tenant_id: str | None = None
+) -> set[str]:
+    """Every ``source_id`` in any split of a corpus version."""
+    found: set[str] = set()
+    prefix = paths.corpus_dir(corpus_version, tenant_id)
+    for key in client.list(prefix):
+        if not key.endswith(".jsonl"):
+            continue
+        for line in client.read_text(key).splitlines():
+            if not line.strip():
+                continue
+            try:
+                found.add(json.loads(line)["source_id"])
+            except (ValueError, KeyError):
+                continue
+    return found
+
+
+def eval_set_source_ids(client: BlobClient) -> set[str]:
+    """Every ``source_id`` in the frozen golden eval set."""
+    prefix = paths.golden_eval_set_dir()
+    return {
+        key[len(prefix):].strip("/").split("/")[0]
+        for key in client.list(prefix)
+        if key.endswith("golden.json")
+    }
+
+
+def assert_eval_set_disjoint(
+    client: BlobClient, corpus_version: str, tenant_id: str | None = None
+) -> None:
+    """Refuse to evaluate against a corpus the eval set overlaps.
+
+    This is the assertion that makes "never train on the eval set" a fact rather
+    than an intention. Without it the failure is completely silent: training
+    succeeds, the loss curve looks healthy, every metric improves, the gate
+    passes, and the numbers describe memorisation.
+    """
+    overlap = eval_set_source_ids(client) & corpus_source_ids(client, corpus_version, tenant_id)
+    if overlap:
+        raise EvalSetLeakage(
+            f"{len(overlap)} document(s) are in BOTH the frozen golden eval set and corpus "
+            f"{corpus_version}: {sorted(overlap)[:10]}. Every metric measured against this eval "
+            "set is a measurement of memorisation, and nothing else in the pipeline would show it "
+            "— the loss curve looks healthy and the gate passes. Remove them from the corpus (the "
+            "eval set is the thing held constant across versions, so it is the corpus that "
+            "changes) and rebuild (arch §8)."
+        )
+    log.info("eval set is disjoint from corpus %s", corpus_version)
+
+
+# --------------------------------------------------------------------------
+# Reports
+# --------------------------------------------------------------------------
+
+
+@dataclass
+class SubsetReport:
+    """Metrics for one doc type × one subset."""
+
+    doc_type: str
+    subset: str
+    documents: int = 0
+    metrics: dict[str, Any] = field(default_factory=dict)
+    error_records: list[dict[str, Any]] = field(default_factory=list)
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "doc_type": self.doc_type,
+            "subset": self.subset,
+            "documents": self.documents,
+            **{k: (round(v, 4) if isinstance(v, float) else v) for k, v in self.metrics.items()},
+            "error_records": self.error_records,
+        }
+
+
+@dataclass
+class EvalReport:
+    """One model version's evaluation, per doc type and per subset."""
+
+    model_version: str
+    corpus_version: str = ""
+    subsets: list[SubsetReport] = field(default_factory=list)
+    generated_at: str = field(default_factory=lambda: datetime.now(UTC).isoformat())
+    #: Filled in on a later pass: classifier accuracy needs the SPEC_11
+    #: classifier, and eval must stay runnable before serving is built.
+    classifier_scored: bool = False
+
+    def for_doc_type(self, doc_type: str) -> list[SubsetReport]:
+        return [s for s in self.subsets if s.doc_type == doc_type]
+
+    def full_set(self) -> list[SubsetReport]:
+        return [s for s in self.subsets if s.subset == "full"]
+
+    def gate_metrics(self) -> dict[str, Any]:
+        """The flat metric dict the promotion gate reads.
+
+        Document-weighted across doc types, so a type with three eval documents
+        does not carry the same weight as one with thirty.
+        """
+        totals: dict[str, float] = {}
+        weights: dict[str, int] = {}
+        for report in self.full_set():
+            for name, value in report.metrics.items():
+                if isinstance(value, (int, float)) and not isinstance(value, bool):
+                    totals[name] = totals.get(name, 0.0) + float(value) * report.documents
+                    weights[name] = weights.get(name, 0) + report.documents
+
+        metrics = {
+            name: totals[name] / weights[name]
+            for name in totals
+            if weights.get(name)
+        }
+
+        # Subset accuracies are gating metrics in their own right (arch §15):
+        # an aggregate that averages them away is how an image-only regression
+        # ships behind a two-point overall move.
+        for subset, gate_name in (
+            ("image_only", "image_only_accuracy"),
+            ("scanned", "scanned_accuracy"),
+            ("noisy_ocr", "ocr_arbitration_accuracy"),
+        ):
+            scores: list[tuple[float, int]] = [
+                (value, s.documents)
+                for s in self.subsets
+                if s.subset == subset
+                and isinstance(value := s.metrics.get("field_normalized_match"), float)
+            ]
+            total_docs = sum(n for _v, n in scores)
+            if total_docs:
+                metrics[gate_name] = sum(v * n for v, n in scores) / total_docs
+
+        if not self.classifier_scored:
+            # Deliberately absent rather than zero: the gate treats a missing
+            # metric as "not passed", which is the right answer for one nobody
+            # measured. A zero would read as a measured catastrophe.
+            metrics.pop("doc_type_classifier_accuracy", None)
+        return metrics
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "model_version": self.model_version,
+            "corpus_version": self.corpus_version,
+            "generated_at": self.generated_at,
+            "classifier_scored": self.classifier_scored,
+            "subsets_scored": sorted({s.subset for s in self.subsets}),
+            "by_doc_type": {
+                doc_type: [s.as_dict() for s in self.for_doc_type(doc_type)]
+                for doc_type in sorted({s.doc_type for s in self.subsets})
+            },
+            "gate_metrics": {
+                k: round(v, 4) if isinstance(v, float) else v
+                for k, v in sorted(self.gate_metrics().items())
+            },
+        }
+
+
+# --------------------------------------------------------------------------
+# Scoring
+# --------------------------------------------------------------------------
+
+
+def subset_of(document: dict[str, Any]) -> list[str]:
+    """Which eval subsets a document belongs to. A document can be in several."""
+    subsets = ["full"]
+    if document.get("modality_mode") == "image_only":
+        subsets.append("image_only")
+    if document.get("modality_mode") == "noisy_ocr_image":
+        subsets.append("noisy_ocr")
+    if document.get("is_scanned"):
+        subsets.append("scanned")
+    if document.get("doc_type") == "policy" and int(document.get("page_count", 1)) > 5:
+        subsets.append("long_policy")
+    return subsets
+
+
+def score_subset(
+    doc_type: str,
+    subset: str,
+    scored: Sequence[tuple[dict[str, Any], dict[str, Any], dict[str, Any]]],
+) -> SubsetReport:
+    """Score one doc type × subset from ``(expected, got, metadata)`` triples."""
+    from evaluation.metrics.coverage_metrics import score_lob, score_schema_validity
+    from evaluation.metrics.field_accuracy import score_all_list_fields, score_fields
+    from training.vit_gate import classify_error
+
+    report = SubsetReport(doc_type=doc_type, subset=subset, documents=len(scored))
+    if not scored:
+        return report
+
+    accuracies, exacts, recalls, f1s = [], [], [], []
+    for expected, got, metadata in scored:
+        accuracy = score_fields(expected, got)
+        accuracies.append(accuracy.normalized_match)
+        exacts.append(accuracy.exact_match)
+
+        for result in accuracy.failures():
+            report.error_records.append({
+                "source_id": metadata.get("source_id", ""),
+                "field_path": result.field_path,
+                "expected": result.expected,
+                "got": result.got,
+                "error_class": classify_error(result.expected, result.got, all_expected=expected),
+                "modality_mode": metadata.get("modality_mode", "ocr_plus_image"),
+                "is_scanned": bool(metadata.get("is_scanned")),
+            })
+
+        for list_report in score_all_list_fields(expected, got).values():
+            recalls.append(list_report.recall)
+            f1s.append(list_report.f1)
+
+    lob = score_lob([(e, g) for e, g, _m in scored])
+
+    # An ACORD document with no recorded form has no selectable schema. Counting
+    # it as invalid keeps the run going and does not flatter the result; letting
+    # the SchemaError escape would discard every other document's score too.
+    validatable, unselectable = [], []
+    for _e, got, meta in scored:
+        form = meta.get("acord_form")
+        if doc_type == "acord" and not form:
+            unselectable.append(meta.get("source_id", ""))
+        else:
+            validatable.append((meta.get("source_id", ""), got, doc_type, form))
+
+    validity = score_schema_validity(validatable)
+    validity_total = validity.total + len(unselectable)
+    validity_rate = validity.valid / validity_total if validity_total else 0.0
+    if unselectable:
+        log.warning(
+            "%d ACORD eval document(s) record no acord_form, so no schema could be selected and "
+            "they are counted invalid: %s. That is a defect in the frozen eval set — the form is "
+            "what selects the schema (arch §4b).",
+            len(unselectable), sorted(unselectable)[:10],
+        )
+
+    report.metrics = {
+        "field_normalized_match": sum(accuracies) / len(accuracies),
+        "field_exact_match": sum(exacts) / len(exacts),
+        "list_field_recall": sum(recalls) / len(recalls) if recalls else None,
+        # The name the gate (GATING_METRICS) and RunManifest both use. Emitting
+        # `list_field_f1` meant the gate never received it: an F1 collapse did
+        # not block, and once any promoted manifest carried the real name every
+        # later candidate would be blocked forever as "not measured".
+        "field_f1_list_fields": sum(f1s) / len(f1s) if f1s else None,
+        "schema_validity_rate": validity_rate,
+        "lob_detection_accuracy": lob.overall,
+        "lob_accuracy_by_value": lob.accuracy_by_value(),
+    }
+    report.metrics = {k: v for k, v in report.metrics.items() if v is not None}
+    return report
+
+
+def build_report(
+    model_version: str,
+    documents: Sequence[tuple[dict[str, Any], dict[str, Any], dict[str, Any]]],
+    *,
+    corpus_version: str = "",
+    classifier_scored: bool = False,
+) -> EvalReport:
+    """Score every doc type × subset from one flat list of results.
+
+    Args:
+        documents: ``(expected, got, metadata)`` triples. ``metadata`` carries
+            ``doc_type``, ``modality_mode``, ``is_scanned``, ``page_count`` and
+            ``source_id`` — the fields :func:`subset_of` reads.
+    """
+    report = EvalReport(
+        model_version=model_version,
+        corpus_version=corpus_version,
+        classifier_scored=classifier_scored,
+    )
+
+    buckets: dict[tuple[str, str], list[Any]] = {}
+    for expected, got, metadata in documents:
+        doc_type = metadata.get("doc_type", "unknown")
+        for subset in subset_of(metadata):
+            buckets.setdefault((doc_type, subset), []).append((expected, got, metadata))
+
+    for (doc_type, subset), rows in sorted(buckets.items()):
+        report.subsets.append(score_subset(doc_type, subset, rows))
+
+    missing = set(EVAL_SUBSETS) - {s.subset for s in report.subsets}
+    if missing:
+        # Reported rather than raised: an eval set with no scanned documents is
+        # a coverage gap in the eval set, and pretending it scored 100% would be
+        # far worse than saying it was not measured.
+        log.warning(
+            "eval set contains no %s document(s), so those subset metrics are absent. The "
+            "promotion gate treats an absent metric as not-passed, which is correct — but the "
+            "real fix is adding those documents to the frozen eval set (arch §8).",
+            sorted(missing),
+        )
+    return report
+
+
+def write_report(report: EvalReport, client: BlobClient) -> list[str]:
+    """Write per-doc-type reports plus the top-level summary."""
+    written = []
+    for doc_type in sorted({s.doc_type for s in report.subsets}):
+        key = paths.eval_report(report.model_version, doc_type)
+        client.write_json(key, {
+            "model_version": report.model_version,
+            "doc_type": doc_type,
+            "subsets": [s.as_dict() for s in report.for_doc_type(doc_type)],
+        })
+        written.append(key)
+
+    summary_key = paths.eval_report(report.model_version)
+    client.write_json(summary_key, report.as_dict())
+    written.append(summary_key)
+    return written
+
+
+def render(report: EvalReport) -> str:
+    lines = [f"eval {report.model_version} (corpus {report.corpus_version or 'unrecorded'})"]
+    for subset in report.subsets:
+        accuracy = subset.metrics.get("field_normalized_match")
+        lines.append(
+            f"  {subset.doc_type:8} {subset.subset:12} n={subset.documents:3} "
+            + (f"field={accuracy:.3f}" if isinstance(accuracy, float) else "field=n/a")
+        )
+    if not report.classifier_scored:
+        lines.append("  doc_type_classifier_accuracy: not scored this pass (SPEC_11 classifier)")
+    return "\n".join(lines)
+
+
+def main(argv: Iterable[str] | None = None) -> int:  # pragma: no cover - thin CLI
+    parser = argparse.ArgumentParser(description="Evaluate a model version on the frozen eval set")
+    parser.add_argument("--model", required=True)
+    parser.add_argument("--corpus-version", dest="corpus_version", required=True)
+    parser.add_argument("--doc-types", nargs="+", default=list(ACTIVE_DOC_TYPES),
+                        choices=list(ACTIVE_DOC_TYPES))
+    parser.add_argument("--tenant", default=None)
+    args = parser.parse_args(list(argv) if argv is not None else None)
+
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
+    client = BlobClient()
+
+    # Runs before anything is evaluated: a leaked eval set makes every number
+    # below meaningless, so it is not worth computing them first.
+    assert_eval_set_disjoint(client, args.corpus_version, args.tenant)
+
+    raise SystemExit(
+        f"Wire the inference loop here: load_model({args.model!r}) and extract each frozen eval "
+        "document through serving.pipeline (never a bespoke inference path — SPEC_08 constraint), "
+        "then pass the (expected, got, metadata) triples to build_report(). The leakage assertion "
+        "above already ran, and the scoring, subset breakdown and gate-metric assembly are "
+        "complete; only the model backend is outstanding (Phase 0)."
+    )
+
+
+if __name__ == "__main__":  # pragma: no cover
+    raise SystemExit(main())

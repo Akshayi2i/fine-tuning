@@ -1,0 +1,19 @@
+{
+  "insured_name": "Rivera Fabrication LLC",
+  "insured_address": "1420 Foundry Road, Toledo OH 43604",
+  "producer": "Hanover Risk Partners",
+  "carrier": null,
+  "effective_date": "2026-04-01",
+  "expiration_date": "2027-04-01",
+  "line_of_business": "general_liability",
+  "business_type": "LLC",
+  "sic_code": "3441",
+  "naics_code": "332312",
+  "years_in_business": 14,
+  "annual_revenue": 8600000.00,
+  "premises": [
+    {"location_number": "1", "address": "1420 Foundry Road, Toledo OH 43604", "occupancy": "Metal fabrication shop", "interest": "Owner"},
+    {"location_number": "2", "address": "88 Dockside Way, Toledo OH 43605", "occupancy": "Warehouse", "interest": "Tenant"}
+  ],
+  "coverages_requested": ["Commercial General Liability", "Commercial Property"]
+}

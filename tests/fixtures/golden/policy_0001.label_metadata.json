@@ -1,0 +1,19 @@
+{
+  "source_id": "policy_0001",
+  "doc_type": "policy",
+  "reviewer_id": "fixture",
+  "review_date": "2026-09-03",
+  "draft_backend": "none_synthetic_fixture",
+  "double_annotated": false,
+  "agreement_score": null,
+  "review_requirement": "full",
+  "field_provenance": {
+    "insured_name": "Applicant",
+    "policy_number": "Policy No.",
+    "effective_date": "Effective",
+    "expiration_date": "Expiration",
+    "producer": "Producer",
+    "total_premium": "Total Premium"
+  },
+  "$comment": "CONFUSABLE CO-OCCURRENCE fixture. Certificate Holder (Meridian) and Producer (Hanover) sit on the same page as the insured (Rivera). insured_name resolves to Rivera and NOT to either - this is the boundary the model must learn, not just the mapping (arch 0c). Note insured_name was found under 'Applicant', the hardest of the alias variants: it is a role-based contextual equivalence, not a lexical synonym."
+}

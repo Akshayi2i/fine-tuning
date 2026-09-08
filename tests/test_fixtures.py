@@ -1,0 +1,173 @@
+"""Fixture contract — the fixtures must exercise what later phases will test against.
+
+Fixtures are pulled forward from SPEC_14 to Phase 1 because there is no labeled
+corpus during the build: they are the *only* way to verify anything until real
+data arrives. That makes their coverage a contract, not an incidental detail — a
+fixture set that quietly stops covering confusables would let Phase 5 and Phase 7
+pass while testing nothing.
+"""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+import pytest
+
+from common import aliases, ids, schemas
+from common.lob import compute_coverage, validate_lob
+
+FIXTURES = Path(__file__).resolve().parent / "fixtures"
+GOLDEN_DIR = FIXTURES / "golden"
+OCR_DIR = FIXTURES / "ocr"
+
+
+def _golden_files() -> list[Path]:
+    return sorted(GOLDEN_DIR.glob("*.golden.json"))
+
+
+def _meta_for(golden: Path) -> dict:
+    meta = golden.with_name(golden.name.replace(".golden.json", ".label_metadata.json"))
+    return json.loads(meta.read_text(encoding="utf-8"))
+
+
+def _load(golden: Path) -> tuple[dict, dict, str, str | None]:
+    label = json.loads(golden.read_text(encoding="utf-8"))
+    meta = _meta_for(golden)
+    return label, meta, meta["doc_type"], meta.get("acord_form")
+
+
+ALL_GOLDEN = _golden_files()
+
+
+def test_fixtures_exist():
+    assert ALL_GOLDEN, "no fixtures — every later phase has nothing to verify against"
+
+
+@pytest.mark.parametrize("golden", ALL_GOLDEN, ids=lambda p: p.stem)
+def test_golden_label_validates_against_its_schema(golden):
+    """SPEC_04 rejects a label that does not validate; fixtures must pass that bar."""
+    label, _meta, doc_type, acord_form = _load(golden)
+    schemas.validate(label, doc_type, acord_form)
+
+
+@pytest.mark.parametrize("golden", ALL_GOLDEN, ids=lambda p: p.stem)
+def test_golden_label_carries_line_of_business(golden):
+    """Present in every golden label, for every type, even when null (arch §0b)."""
+    label, *_ = _load(golden)
+    assert "line_of_business" in label
+    validate_lob(label["line_of_business"])
+
+
+@pytest.mark.parametrize("golden", ALL_GOLDEN, ids=lambda p: p.stem)
+def test_source_id_is_well_formed_and_matches_filename(golden):
+    _label, meta, doc_type, _form = _load(golden)
+    parsed = ids.parse_source_id(meta["source_id"])
+    assert parsed.doc_type == doc_type
+    assert golden.name.startswith(meta["source_id"])
+
+
+@pytest.mark.parametrize("golden", ALL_GOLDEN, ids=lambda p: p.stem)
+def test_field_provenance_never_names_a_confusable(golden):
+    """The highest-value annotation check in the system (SPEC_04).
+
+    A label claiming ``insured_name`` was found under "Certificate Holder" is the
+    exact mistake that teaches the model to conflate distinct parties — and it
+    would train perfectly happily.
+    """
+    _label, meta, doc_type, _form = _load(golden)
+    for field, surface_label in (meta.get("field_provenance") or {}).items():
+        assert not aliases.is_confusable(doc_type, field, surface_label), (
+            f"{golden.stem}: {field!r} is recorded as found under {surface_label!r}, "
+            f"which is a registered CONFUSABLE for that field"
+        )
+
+
+@pytest.mark.parametrize("golden", ALL_GOLDEN, ids=lambda p: p.stem)
+def test_every_provenance_field_exists_in_the_label(golden):
+    label, meta, *_ = _load(golden)
+    for field in (meta.get("field_provenance") or {}):
+        assert field in label, f"{golden.stem}: provenance names {field!r}, absent from the label"
+
+
+# --------------------------------------------------------------------------
+# Coverage the later phases depend on
+# --------------------------------------------------------------------------
+
+def test_fixtures_cover_all_active_doc_types():
+    covered = {_meta_for(g)["doc_type"] for g in ALL_GOLDEN}
+    assert covered == {"policy", "lossrun", "acord"}
+
+
+def test_same_canonical_field_appears_under_two_surface_labels():
+    """Without this, ``alias_accuracy`` has nothing to slice (SPEC_08).
+
+    One label per field would let the model memorise label strings and still
+    score perfectly, which is precisely the outcome the canonical-mapping design
+    claims to avoid.
+    """
+    by_field: dict[tuple[str, str], set[str]] = {}
+    for golden in ALL_GOLDEN:
+        _label, meta, doc_type, _form = _load(golden)
+        for field, surface in (meta.get("field_provenance") or {}).items():
+            by_field.setdefault((doc_type, field), set()).add(surface)
+
+    multi = {k: v for k, v in by_field.items() if len(v) > 1}
+    assert multi, "no canonical field appears under two different surface labels"
+    assert ("policy", "insured_name") in multi, (
+        "insured_name is the worked example throughout the specs — it must carry alias variety"
+    )
+
+
+def test_a_confusable_co_occurrence_fixture_exists():
+    """Required corpus edge case (SPEC_05).
+
+    Documents where a field and its confusables appear together are what teach
+    the *boundary*. Without one, the corpus teaches the mapping and the model
+    happily returns the certificate holder as the insured.
+    """
+    found = []
+    for golden in ALL_GOLDEN:
+        label, _meta, doc_type, _form = _load(golden)
+        for field in ("insured_name",):
+            if label.get(field) is None:
+                continue
+            for confusable_label in aliases.confusables_for(doc_type, field):
+                canonical = aliases.canonical_for(doc_type, confusable_label)
+                if canonical and canonical != field and label.get(canonical) is not None:
+                    found.append((golden.stem, field, canonical))
+    assert found, "no fixture places a canonical field beside one of its confusables"
+
+
+def test_fixtures_include_a_legitimately_absent_field():
+    """Null-handling is a required edge case — absent must mean null, not invented."""
+    assert any(
+        any(v is None for v in json.loads(g.read_text(encoding="utf-8")).values())
+        for g in ALL_GOLDEN
+    ), "no fixture exercises a legitimately absent field"
+
+
+def test_fixtures_include_a_variable_length_list_field():
+    lossrun = [g for g in ALL_GOLDEN if _meta_for(g)["doc_type"] == "lossrun"]
+    assert lossrun, "no lossrun fixture — the list-field case is untested"
+    label = json.loads(lossrun[0].read_text(encoding="utf-8"))
+    assert len(label["claims"]) >= 2
+    assert label["total_claims_reported"] == len(label["claims"]), (
+        "the document-stated count must match the rows, or the row-completeness "
+        "cross-check has no correct baseline to test against"
+    )
+
+
+def test_fixtures_cover_more_than_one_lob_value():
+    values = [json.loads(g.read_text(encoding="utf-8"))["line_of_business"] for g in ALL_GOLDEN]
+    coverage = compute_coverage(values)
+    assert len([v for v, c in coverage.counts.items() if c]) >= 2, (
+        "a single LoB value across all fixtures makes per-value LoB accuracy untestable"
+    )
+
+
+@pytest.mark.parametrize("golden", ALL_GOLDEN, ids=lambda p: p.stem)
+def test_ocr_fixture_exists_for_each_golden(golden):
+    """``derive_aliases`` anchors golden values in OCR text — it needs both halves."""
+    source_id = _meta_for(golden)["source_id"]
+    assert list(OCR_DIR.glob(f"{source_id}_page_*.md")), f"no OCR fixture for {source_id}"

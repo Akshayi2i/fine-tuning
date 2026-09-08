@@ -1,0 +1,70 @@
+{#-
+  ACORD-specific extraction block. Included by system_prompt_template.jinja.
+
+  ACORD is the two-level type (arch 4b): one adapter, but a distinct schema per
+  form. The form-specific section below is selected by the same `acord_form`
+  that selected the schema, so a prompt describing one form can never be served
+  with another form's schema.
+
+  Roles and structure only - never a printed label. `output_shape` is derived
+  from the schema at render time and therefore cannot drift from it.
+-#}
+# This document type: ACORD {{ acord_form }}
+
+A standard form is a fixed pre-printed layout with blanks filled in. Only the filled blanks are data; the surrounding text is identical on every copy of the form and carries nothing extractable.
+
+## What you are given
+One or more pages of a single completed form:
+
+1. A masthead and a form identifier with an edition date, usually small and in a corner or footer.
+2. Fixed areas, each reserved for one role, separated by ruled boxes rather than by headings.
+3. One or more grids whose rows are filled in only where they apply.
+4. Marks - boxes ticked, crossed or left empty - which carry meaning of their own.
+5. Boilerplate: disclaimers, signature blocks and instructions, the same on every copy.
+
+## Where the values are
+- Each role's value comes from the area reserved for it. The area, not the reading order, determines which role a value fills.
+- Grid rows supply the repeating structures.
+- The form identifier confirms which form this is; it is not itself an extracted field.
+
+## How to work through it
+1. Confirm the form from its identifier.
+2. Take each fixed area in turn and read the value written in it, using the image to confirm which area you are in.
+3. Walk the grid rows in document order, emitting one entry per filled row.
+4. Read the marks where a field depends on them.
+5. Leave every unfilled blank as null.
+
+## Rules for this document type
+- A blank left empty on a pre-printed form is a genuine absence. Output null. Do not infer what belongs there from the field's printed caption or from the rest of the form.
+- A mark and the absence of a mark are different statements. An unmarked box is not a value.
+- Values written across a ruled boundary belong to the area they were written **in**, not the one they extend into.
+- A grid row counts as a row when it carries an identifier or a figure, even when its marks are absent.
+- Where the form provides a continuation sheet or an attached remarks area, values there belong to the row or area they reference, not to the form as a whole.
+{% if acord_form == '25' -%}
+- This form evidences that coverage exists, for the benefit of a party outside the contract. It confers no rights and grants no coverage.
+- The party covered, the party that placed the business, the parties bearing risk, the party the form was issued to, and any party added to the coverage are **five distinct roles**, each with its own area. Do not fill one from another, and do not merge two because they name the same organisation.
+- The risk-bearing parties are listed against single letters. Those letters are how the grid rows refer back to them: keep each letter with the party it labels, and extract a letter on a row only where one is actually shown.
+- Each grid row is one coverage. Extract every row carrying an identifier or a figure, including rows whose marks are absent.
+- A row's limits are several separate figures under their own captions. Keep them distinct rather than reducing them to one.
+{%- elif acord_form == '125' -%}
+- This form applies for coverage: it submits the applicant's details for underwriting. Nothing on it is in force, so every figure is proposed rather than agreed.
+- The party applying and the party submitting the application on its behalf are different roles.
+- Any period shown is the cover requested, not cover that exists.
+- Business classification codes belong to separate systems. Extract each into its own field and never convert or infer one from another.
+- The locations listing and the requested-coverage listing are two different structures. A location is not a coverage.
+- Figures describing the applicant's business are annual and refer to the applicant as a whole, not to any one location.
+{%- elif acord_form == '140' -%}
+- This form schedules property: the locations, the structures on them, and what each is insured for. It is a section of a larger application and repeats only enough identification to attach itself to one.
+- Locations and structures are **nested, not parallel**: several structures can sit at one location, and a structure's figures belong to that structure alone.
+- Each entry carries the numbering that ties it to its location and to its position within it. Extract that numbering as shown rather than renumbering the entries yourself.
+- Never sum a location's structures into one figure, and never split a location-level figure across its structures.
+- Construction, occupancy and protection details describe one structure and are not carried across to its neighbours, even where the form leaves them blank because they repeat.
+{%- endif %}
+
+## Output for this document type
+```
+{
+{{ output_shape }}
+}
+```
+Emit exactly these keys. Every array is present, `[]` when the form shows no rows, and never omitted. The schema below is the authority on types and permitted values.

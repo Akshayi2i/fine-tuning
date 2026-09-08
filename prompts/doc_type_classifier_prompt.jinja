@@ -1,0 +1,55 @@
+{#-
+  Zero-shot document-type classifier prompt (arch 4a Option C, 4b).
+
+  Classification is load-bearing, not preprocessing: a wrong answer loads the
+  wrong adapter AND the wrong prompt AND the wrong schema, and the extraction
+  fails regardless of model quality. It is two-level - type, then ACORD form -
+  because the form determines which schema is selected even though all ACORD
+  forms share one adapter.
+
+  The cues below describe what each document type IS - its purpose and the
+  evidence that distinguishes it - rather than listing headings to match. A
+  heading list would fail on the first unseen layout, and layout variety is the
+  normal case across carriers.
+
+  Confidence is not decoration. Below the routing threshold the document goes to
+  Foundation-only extraction plus human review instead of to a guessed adapter
+  (SPEC_11), so a calibrated low score is worth more than a confident wrong one.
+
+  Runs against the base model on day zero (arch 4c) and against the promoted
+  Foundation once one exists.
+-#}
+Identify what kind of insurance document this is.
+
+Choose exactly one type:
+
+- `acord` - a standard industry form. It is a fixed pre-printed layout with a form identifier and edition date, usually small, in a corner or footer. The blanks are filled in; the surrounding text is the same on every copy of that form.
+- `policy` - a document describing coverage that has been issued and is in force: the terms, the parties, the period, the limits, the premium. It states what is covered, not what has happened.
+- `lossrun` - a claims history report. Its substance is a list of individual losses, each with a date and one or more amounts. It states what has happened, not what is covered.
+
+How to decide:
+
+- Judge by what the document is for, not by which words appear on it. Any of these types can carry the same party names, policy identifiers and dates.
+- A row-per-loss listing is the strongest signal for `lossrun`, even when a page of policy-like header information precedes it.
+- Coverage terms, limits and a premium, with no per-loss listing, indicate `policy`.
+- A pre-printed form identifier with fill-in blanks indicates `acord`, even when the content also describes coverage.
+- Decide from the whole document, not the first page alone.
+
+If and only if the type is `acord`, also report the form number, read from the form identifier printed on the document:
+
+- `25` - a certificate evidencing coverage to an outside party; it confers no rights and grants no coverage.
+- `125` - an application for coverage, submitting the applicant's details for underwriting.
+- `140` - a property section, scheduling locations, buildings and their values.
+
+Report the form number only when you can read it on the document. If the document is an ACORD form whose number you cannot read, report `acord` with a null form number and a low confidence - no schema can be selected without the number, so a guessed one is worse than none.
+
+Return only this JSON object, with no explanation and no markdown fences:
+{"doc_type": "acord" | "policy" | "lossrun", "acord_form": "25" | "125" | "140" | null, "confidence": 0.0}
+
+Set `confidence` to your genuine certainty, between 0 and 1:
+
+- above 0.9 only when the evidence is unambiguous;
+- around 0.5 when the document could reasonably be two of these types;
+- below 0.3 when you are largely guessing, including when the document is none of the three.
+
+A low score routes the document to human review rather than to a wrong adapter, so an honest low score costs one review and a confident wrong one costs a failed extraction.

@@ -1,0 +1,24 @@
+{
+  "$comment": "SEED registry - see policy.aliases.json. One registry covers all ACORD forms because they share one adapter, though each form has its own schema (arch 4b).",
+  "$doc_type": "acord",
+  "insured_name": {
+    "aliases": ["Insured", "Named Insured", "Applicant", "Name of Applicant", "Applicant Name", "Insured Name", "First Named Insured"],
+    "confusables": ["Certificate Holder", "Producer", "Agency", "Additional Insured", "Insurer A", "Insurer B", "Loss Payee", "Mortgagee"]
+  },
+  "certificate_holder": {
+    "aliases": ["Certificate Holder", "Cert Holder", "Holder"],
+    "confusables": ["Named Insured", "Insured", "Applicant", "Producer", "Additional Insured"]
+  },
+  "producer": {
+    "aliases": ["Producer", "Agency", "Broker", "Agent", "Producer Name"],
+    "confusables": ["Insured", "Named Insured", "Certificate Holder", "Insurer A"]
+  },
+  "certificate_number": {
+    "aliases": ["Certificate Number", "Certificate No.", "Cert No.", "Certificate #"],
+    "confusables": ["Policy Number", "Revision Number", "Quote Number"]
+  },
+  "issue_date": {
+    "aliases": ["Date", "Date Issued", "Issue Date", "Certificate Date"],
+    "confusables": ["Effective Date", "Expiration Date", "Policy Eff Date"]
+  }
+}

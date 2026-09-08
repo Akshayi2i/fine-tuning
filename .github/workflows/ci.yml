@@ -1,0 +1,93 @@
+name: CI
+
+# CPU-only and fast, by design. Nothing here needs a GPU or a live Azure account:
+# heavy dependencies stay in optional extras, the Blob layer runs against an
+# in-memory backend, and every GPU-bound step is exercised through its own
+# interface rather than by running it. A CI that needed a pod would not run on
+# every push, and a check that does not run is not a check.
+
+on:
+  push:
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[data,eval,dev]"
+
+      - name: Lint
+        run: ruff check .
+
+      - name: Types
+        # The whole tree, not a subset: a package excluded from type checking is
+        # a package where a signature change breaks a caller silently.
+        run: mypy common artifact_registry registry_utils data_pipeline inference_core training evaluation calibration serving postprocessing testing orchestration pilot
+
+      - name: Generated prompt artefacts are current
+        # testing/prompts/*.prompt.txt are rendered from common.prompts. A stale
+        # file means the checked-in prompt and the served prompt have diverged,
+        # which degrades a fine-tuned model with no other symptom.
+        run: python -m testing.render_prompts --check
+
+      - name: Tests
+        # GPU and live-Azure tests are marked and excluded; everything else runs.
+        run: |
+          pytest -q -m "not gpu and not azure" \
+            --cov=common --cov=training --cov=data_pipeline --cov=inference_core \
+            --cov=evaluation --cov=calibration --cov=registry_utils --cov=orchestration \
+            --cov-report=term-missing
+
+      - name: Coverage gate on the correctness-critical modules
+        # These are the modules whose failures are silent: broken label masking
+        # does not show in a loss curve, a leaked split inflates every number,
+        # and a prompt that drifts between corpus build and inference degrades
+        # accuracy with no other symptom. Coverage elsewhere is ordinary hygiene;
+        # here it is the difference between a guard and a hope.
+        run: |
+          pytest -q -m "not gpu and not azure" \
+            --cov=training.data_collator \
+            --cov=data_pipeline.dataset_builder.split_train_val_test \
+            --cov=inference_core.input_builder \
+            --cov=inference_core.span_map \
+            --cov=common.prompts \
+            --cov=common.normalize \
+            --cov=evaluation.gating \
+            --cov=calibration.apply_calibration \
+            --cov=registry_utils.models \
+            --cov-fail-under=85
+
+  secrets-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: No real document data in fixtures
+        # Fixtures are synthetic. A real policy number or SSN reaching the repo
+        # is a disclosure that survives in git history even after deletion.
+        run: |
+          set -e
+          if grep -rInE '[0-9]{3}-[0-9]{2}-[0-9]{4}' tests/fixtures/ schemas/examples/ 2>/dev/null; then
+            echo "::error::an SSN-shaped string is present in fixtures"
+            exit 1
+          fi
+          if grep -rInE '(AccountKey=|SharedAccessSignature|BEGIN [A-Z ]*PRIVATE KEY)' . \
+             --exclude-dir=.git --exclude-dir=.github 2>/dev/null; then
+            echo "::error::a credential-shaped string is present in the repo"
+            exit 1
+          fi
+          echo "fixtures clean"

@@ -1,0 +1,68 @@
+# Serving and inference config (SPEC_07, SPEC_11).
+# Read by the inference core, the serving endpoint, and the testing harness -
+# so all three generate identically. That is what makes test == prod true.
+
+vision:
+  # MUST equal configs/base_model.yaml vision.max_image_long_side_px.
+  # A mismatch means serving the model a distribution it never trained on;
+  # common.config.assert_resolution_parity() enforces it rather than trusting
+  # two files to stay in step by hand.
+  max_image_long_side_px: 1792
+
+sequence:
+  max_seq_len: 8192            # keep in step with base_model.yaml
+
+generation:
+  # Greedy by default: extraction is not a creative task, and a sampled output
+  # would make the same document extract differently on two runs, which breaks
+  # both reproducibility and the confidence calibration fitted on it.
+  temperature: 0.0
+  top_p: 1.0
+  max_new_tokens: 4096         # long Loss Runs need room for every claim row
+  seed: 42
+
+  # Mandatory. Per-token logprobs are the entire basis of per-field confidence
+  # (arch 5). A backend that cannot return them is not a valid serving backend.
+  logprobs: true
+  top_logprobs: 1
+
+serving:
+  backend: "vllm"              # vllm | hf | gguf
+  served_model_tag: null       # resolved from the registry at deploy time
+  # Foundation + one per-type LoRA, swapped per request from the classifier
+  # result, without reloading the base model.
+  enable_lora: true
+  max_loras: 4
+  max_lora_rank: 64            # must be >= the Foundation rank
+  gpu_memory_utilization: 0.90
+
+routing:
+  # Below this, do NOT guess an adapter. Fall back to Foundation-only extraction
+  # with a generic prompt and flag for human routing review: a wrong-adapter
+  # extraction is worse than a slightly-generic one (arch 4a).
+  classifier_confidence_threshold: 0.70
+  fallback: "foundation_only"
+
+  # Adapter paths are resolved through the registry, never hardcoded here.
+  adapter_map:
+    acord: null
+    policy: null
+    lossrun: null
+
+confidence:
+  # Fields below this calibrated confidence route to human review (arch 5).
+  # Tunable - a starting point, not a settled threshold.
+  review_threshold: 0.70
+  # Default span aggregation: minimum token probability is most sensitive to the
+  # weakest link, which is what you want when flagging risky fields.
+  aggregation: "min"           # min | mean | geomean
+
+long_documents:
+  # Above this page count, select the pages carrying the schema's fields rather
+  # than sending the whole document (arch 7). Primarily a Policy concern: a
+  # 50-page policy at full resolution would blow the context window and spend
+  # most of it on pages with nothing extractable.
+  page_threshold: 5
+  # When the same field appears on several pages, the declarations page wins for
+  # policy-level fields.
+  conflict_resolution: "declarations_page_wins"

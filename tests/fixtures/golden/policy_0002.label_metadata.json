@@ -1,0 +1,18 @@
+{
+  "source_id": "policy_0002",
+  "doc_type": "policy",
+  "reviewer_id": "fixture",
+  "review_date": "2026-09-03",
+  "draft_backend": "none_synthetic_fixture",
+  "double_annotated": false,
+  "agreement_score": null,
+  "review_requirement": "full",
+  "field_provenance": {
+    "insured_name": "Named Insured",
+    "policy_number": "Policy Number",
+    "carrier": "Insurer",
+    "producer": "Agency",
+    "total_premium": "Total Policy Premium"
+  },
+  "$comment": "ALIAS VARIETY fixture, paired with policy_0001. The SAME canonical field insured_name appears here under 'Named Insured' and there under 'Applicant'. Without two surface labels for one field there is nothing for alias_accuracy to slice, so this pair is what makes per-alias diagnosis testable at all. Also carries a different LoB value from policy_0001, so LoB coverage has more than one class."
+}

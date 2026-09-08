@@ -1,0 +1,11 @@
+# Phase 2 - epochs, with the Phase 1 winner fixed.
+# Metric switches to field-level F1: validation loss can fall while field
+# extraction gets worse, and F1 is what the promotion gate actually reads.
+phase: epochs
+depends_on: phase1_lr
+metric: {name: "field_f1", goal: "maximize"}
+early_stopping_patience: 2
+budget_runs_per_adapter_type: 3
+grid:
+  foundation: {num_train_epochs: [2, 3, 4]}
+  per_type:   {num_train_epochs: [3, 4, 5]}

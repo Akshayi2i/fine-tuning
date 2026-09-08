@@ -1,0 +1,53 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://fideon.local/schemas/policy_doc.schema.json",
+  "title": "Policy Document",
+  "version": "1.0.0",
+  "description": "Canonical extraction target for a Policy document (Fideon SPEC_00 PolicyCheckDocument, doc_type 'policy'). Policy documents are the type most likely to carry several organisation names on one page - insured, carrier, producer, certificate holder - so the exclusion clauses in the shared field definitions are load-bearing here (arch 0c).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["insured_name", "policy_number", "effective_date", "line_of_business"],
+  "properties": {
+    "insured_name": {"$ref": "common_fields.json#/$defs/insured_name"},
+    "insured_address": {"$ref": "common_fields.json#/$defs/insured_address"},
+    "policy_number": {"$ref": "common_fields.json#/$defs/policy_number"},
+    "effective_date": {"$ref": "common_fields.json#/$defs/effective_date"},
+    "expiration_date": {"$ref": "common_fields.json#/$defs/expiration_date"},
+    "carrier": {"$ref": "common_fields.json#/$defs/carrier"},
+    "producer": {"$ref": "common_fields.json#/$defs/producer"},
+    "total_premium": {"$ref": "common_fields.json#/$defs/total_premium"},
+    "line_of_business": {"$ref": "lob.enum.json#/$defs/line_of_business"},
+    "coverage_schedule": {
+      "type": "array",
+      "description": "The coverages listed on the policy, one entry per coverage. Usually found on the declarations page or a schedule page.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["coverage_name"],
+        "properties": {
+          "coverage_name": {
+            "type": ["string", "null"],
+            "description": "The name of the coverage as the document states it, for example General Liability or Hired Auto."
+          },
+          "limit": {
+            "type": ["number", "null"],
+            "description": "The limit of liability for this coverage, as a number without currency symbols or separators. Not the deductible and not the premium."
+          },
+          "deductible": {
+            "type": ["number", "null"],
+            "description": "The deductible or retention for this coverage, as a number. Not the limit."
+          },
+          "premium": {
+            "type": ["number", "null"],
+            "description": "The premium attributable to this coverage alone. Not the policy total premium."
+          }
+        }
+      }
+    },
+    "endorsements": {
+      "type": ["array", "null"],
+      "description": "Endorsement forms attached to the policy, by form number or title as listed.",
+      "items": {"type": "string"}
+    }
+  }
+}

@@ -1,0 +1,24 @@
+{
+  "$comment": "SEED registry - see policy.aliases.json. Replace via derive_aliases once labeled data exists.",
+  "$doc_type": "lossrun",
+  "carrier": {
+    "aliases": ["Carrier", "Insurer", "Insurance Company", "Company"],
+    "confusables": ["Named Insured", "Insured", "Producer", "Third Party Administrator", "TPA"]
+  },
+  "policy_number": {
+    "aliases": ["Policy Number", "Policy No.", "Policy #"],
+    "confusables": ["Claim Number", "Claim No.", "File Number", "Certificate Number"]
+  },
+  "insured_name": {
+    "aliases": ["Insured", "Named Insured", "Insured Name", "Account Name", "Client"],
+    "confusables": ["Carrier", "Claimant", "Claimant Name", "Producer", "Adjuster"]
+  },
+  "valuation_date": {
+    "aliases": ["Valuation Date", "Valued As Of", "As Of Date", "Evaluation Date", "Valued Through"],
+    "confusables": ["Effective Date", "Loss Date", "Date Printed", "Report Date", "Expiration Date"]
+  },
+  "total_claims_reported": {
+    "aliases": ["Total Claims", "Number of Claims", "Claim Count", "Total Number of Claims"],
+    "confusables": ["Total Incurred", "Total Paid", "Open Claims"]
+  }
+}

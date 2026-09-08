@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://fideon.local/schemas/lob.enum.json",
+  "title": "Line of Business enum",
+  "description": "The single definition of the LOB enum. Every document schema $refs this; it is never redeclared. Mirrors the Fideon SPEC_00 LOB enum (arch 0b).",
+  "$defs": {
+    "line_of_business": {
+      "type": ["string", "null"],
+      "enum": ["workers_comp", "general_liability", "commercial_auto", "property", "umbrella", null],
+      "description": "The coverage line this document concerns. Infer it from the coverage described, the policy number prefix, or the form used. Output null when the document does not determine it - do not guess from the carrier or the insured's industry."
+    }
+  }
+}

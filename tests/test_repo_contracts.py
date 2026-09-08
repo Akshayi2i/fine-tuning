@@ -1,0 +1,523 @@
+"""Repo-level contracts (SPEC_01 §§11-14, SPEC_03, SPEC_12).
+
+The checks nothing else covers because they are about the repository rather than
+a module: the config files carrying every parameter the architecture specifies,
+``.env.example`` naming every variable the code reads, and the provenance record
+that ties an extraction result back to the run that produced it.
+
+The env-var check is here because its absence already cost something: the
+``ALLOW_EXTERNAL_PREANNOTATION`` guard was documented in ``.env.example`` and
+read by no module, so the compliance refusal it describes did not exist. A
+documented variable nobody reads and a read variable nobody documents are the
+same class of bug in opposite directions, and both are caught below.
+"""
+
+from __future__ import annotations
+
+import re
+from pathlib import Path
+
+import pytest
+
+from common.config import load_yaml
+
+ROOT = Path(__file__).resolve().parent.parent
+
+CODE_PACKAGES = (
+    "common", "artifact_registry", "registry_utils", "data_pipeline", "inference_core",
+    "training", "evaluation", "calibration", "serving", "postprocessing", "testing",
+    "orchestration", "pilot",
+)
+
+
+# --------------------------------------------------------------------------
+# The repo tree (SPEC_01 §1, master §5)
+# --------------------------------------------------------------------------
+
+
+REQUIRED_DIRS = (
+    "common", "configs", "configs/training", "configs/sweeps", "configs/inference",
+    "configs/deepspeed", "schemas", "schemas/examples", "schemas/aliases", "prompts",
+    "artifact_registry", "registry_utils", "data_pipeline", "data_pipeline/ingestion",
+    "data_pipeline/ocr", "data_pipeline/labeling", "data_pipeline/dataset_builder",
+    "training", "training/callbacks", "inference_core", "evaluation", "evaluation/metrics",
+    "calibration", "postprocessing", "serving", "testing", "testing/prompts",
+    "orchestration", "orchestration/config", "pilot", "tests", "tests/fixtures",
+)
+
+
+@pytest.mark.parametrize("relative", REQUIRED_DIRS)
+def test_the_repo_tree_matches_the_master_layout(relative: str):
+    assert (ROOT / relative).is_dir(), f"{relative}/ is missing from the tree (master §5)"
+
+
+def test_every_code_package_is_importable_as_a_package():
+    """A directory without ``__init__.py`` imports by accident under one runner
+    and fails under another."""
+    for package in CODE_PACKAGES:
+        assert (ROOT / package / "__init__.py").exists(), f"{package} has no __init__.py"
+
+
+def test_every_package_is_declared_for_packaging():
+    """A package missing from pyproject installs as nothing on a pod, and the
+    failure surfaces as an ImportError halfway through a training run."""
+    import tomllib
+
+    declared = set(tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+                   ["tool"]["setuptools"]["packages"])
+    missing = [p for p in CODE_PACKAGES if p not in declared]
+    assert not missing, f"packages not declared in pyproject: {missing}"
+
+
+# --------------------------------------------------------------------------
+# .env.example completeness (SPEC_01 §14)
+# --------------------------------------------------------------------------
+
+
+#: Variables consumed by third-party libraries rather than by this code. They
+#: belong in the template even though no module names them.
+LIBRARY_OWNED_VARS = frozenset({
+    "HF_TOKEN", "HF_MODEL_REVISION", "WANDB_API_KEY", "MLFLOW_TRACKING_URI",
+    "RUNPOD_ENDPOINT_ID",
+})
+
+
+def env_vars_in_code() -> set[str]:
+    """Every environment-variable name the code names.
+
+    Matches the quoted name anywhere in a module rather than only inside an
+    ``env(...)`` call, because a name is just as much "read" when it is bound to
+    a module constant first — which is exactly how the external-pre-annotation
+    guard is written, and a call-site-only scan would report it as unread.
+    """
+    pattern = re.compile(r'["\']([A-Z][A-Z0-9]*(?:_[A-Z0-9]+){1,})["\']')
+    found: set[str] = set()
+    for package in CODE_PACKAGES:
+        for path in (ROOT / package).rglob("*.py"):
+            if "__pycache__" in path.parts:
+                continue
+            found.update(pattern.findall(path.read_text(encoding="utf-8")))
+    return found
+
+
+def env_vars_in_template() -> set[str]:
+    text = (ROOT / ".env.example").read_text(encoding="utf-8")
+    return set(re.findall(r"^([A-Z][A-Z0-9_]{2,})=", text, re.M))
+
+
+def test_every_env_var_the_code_reads_is_documented():
+    """An undocumented variable is one nobody sets, and the default it falls
+    back to is rarely the one anybody intended."""
+    read_at_a_call_site = re.compile(
+        r'(?:env|os\.environ\.get|os\.getenv)\(\s*["\']([A-Z][A-Z0-9_]{2,})["\']'
+        r'|os\.environ\[\s*["\']([A-Z][A-Z0-9_]{2,})["\']'
+    )
+    called: set[str] = set()
+    for package in CODE_PACKAGES:
+        for path in (ROOT / package).rglob("*.py"):
+            if "__pycache__" in path.parts:
+                continue
+            for a, b in read_at_a_call_site.findall(path.read_text(encoding="utf-8")):
+                called.add(a or b)
+
+    undocumented = called - env_vars_in_template()
+    assert not undocumented, (
+        f"read by the code but absent from .env.example: {sorted(undocumented)}"
+    )
+
+
+def test_every_documented_env_var_is_read_by_something():
+    """The mirror-image bug, and the one that actually bit: a documented guard
+    that no module reads is a guard that does not exist."""
+    orphaned = env_vars_in_template() - env_vars_in_code() - LIBRARY_OWNED_VARS
+    assert not orphaned, (
+        f"documented in .env.example but read by no module: {sorted(orphaned)}. Either wire it or "
+        "remove it — a variable that only exists in the template describes behaviour the code "
+        "does not have."
+    )
+
+
+def test_no_secret_value_is_committed_in_the_template():
+    text = (ROOT / ".env.example").read_text(encoding="utf-8")
+    assert "AccountKey=..." in text or "AccountKey=" in text
+    for line in text.splitlines():
+        if line.startswith(("RUNPOD_API_KEY", "HF_TOKEN", "WANDB_API_KEY")):
+            assert line.split("=", 1)[1].strip() == "", f"{line!r} carries a value"
+
+
+# --------------------------------------------------------------------------
+# Training config completeness (SPEC_01 §11, arch §11 full tables)
+# --------------------------------------------------------------------------
+
+
+#: Every parameter arch §11's full specification tables name, by config section.
+#: The summary table gives the shape; these are what the entrypoints assemble,
+#: and a config missing one silently takes a library default instead.
+REQUIRED_TRAINING_PARAMS: dict[str, tuple[str, ...]] = {
+    "optimization": (
+        "learning_rate", "lr_scheduler_type", "warmup_ratio", "num_train_epochs",
+        "optim", "adam_beta1", "adam_beta2", "adam_epsilon", "weight_decay", "max_grad_norm",
+    ),
+    "batch": (
+        "per_device_train_batch_size", "gradient_accumulation_steps", "effective_batch_size",
+    ),
+    "lora": ("rank", "alpha", "dropout", "target_modules", "bias"),
+}
+
+TRAINING_CONFIGS = ("foundation", "acord_adapter", "policy_adapter", "lossrun_adapter")
+
+
+@pytest.mark.parametrize("name", TRAINING_CONFIGS)
+def test_training_config_carries_every_specified_parameter(name: str):
+    config = load_yaml(ROOT / "configs" / "training" / f"{name}.yaml")
+    for section, params in REQUIRED_TRAINING_PARAMS.items():
+        assert section in config, f"{name}.yaml has no {section} section"
+        missing = [p for p in params if p not in config[section]]
+        assert not missing, (
+            f"{name}.yaml {section} is missing {missing}. An absent parameter takes a library "
+            "default rather than the specified value, and the manifest then records a config that "
+            "is not the one that ran (arch §11)."
+        )
+
+
+@pytest.mark.parametrize("name", TRAINING_CONFIGS)
+def test_learning_rate_is_inside_the_specified_range(name: str):
+    """Foundation 1e-4..2e-4; per-type 5e-5..1e-4, lower because it builds on a
+    stable base."""
+    config = load_yaml(ROOT / "configs" / "training" / f"{name}.yaml")
+    lr = float(config["optimization"]["learning_rate"])
+    low, high = (1e-4, 2e-4) if name == "foundation" else (5e-5, 1e-4)
+    assert low <= lr <= high, f"{name}.yaml learning_rate {lr} is outside {low}..{high} (arch §11)"
+
+
+@pytest.mark.parametrize("name", TRAINING_CONFIGS)
+def test_epochs_are_inside_the_specified_range(name: str):
+    config = load_yaml(ROOT / "configs" / "training" / f"{name}.yaml")
+    epochs = int(config["optimization"]["num_train_epochs"])
+    low, high = (2, 3) if name == "foundation" else (3, 5)
+    assert low <= epochs <= high, f"{name}.yaml epochs {epochs} is outside {low}..{high}"
+
+
+@pytest.mark.parametrize("name", TRAINING_CONFIGS)
+def test_effective_batch_is_inside_the_specified_range(name: str):
+    config = load_yaml(ROOT / "configs" / "training" / f"{name}.yaml")
+    size = int(config["batch"]["effective_batch_size"])
+    low, high = (32, 64) if name == "foundation" else (16, 32)
+    assert low <= size <= high, f"{name}.yaml effective_batch_size {size} is outside {low}..{high}"
+
+
+@pytest.mark.parametrize("name", TRAINING_CONFIGS)
+def test_the_qlora_base_quantization_is_identical_everywhere(name: str):
+    """4-bit NF4, double quantization, bf16 compute. A config that quietly
+    differs trains a different model from the one the manifest describes."""
+    config = load_yaml(ROOT / "configs" / "training" / f"{name}.yaml")
+    assert config["batch"]["gradient_checkpointing"] is True
+    # The config expresses arch §11's "mixed precision: bf16" as a bf16 flag,
+    # which is what the trainer flag actually is.
+    assert config["batch"]["bf16"] is True
+
+
+# --------------------------------------------------------------------------
+# Sweep configs (SPEC_01 §12) — authored this cycle, executed later
+# --------------------------------------------------------------------------
+
+
+SWEEP_PHASES = (
+    ("phase1_lr", "lr", "learning_rate"),
+    ("phase2_epochs", "epochs", "num_train_epochs"),
+    ("phase3_rank", "rank", "lora_rank"),
+)
+
+
+@pytest.mark.parametrize(("filename", "phase", "swept"), SWEEP_PHASES)
+def test_each_sweep_phase_defines_its_grid_metric_and_budget(filename, phase, swept):
+    config = load_yaml(ROOT / "configs" / "sweeps" / f"{filename}.yaml")
+
+    assert config["phase"] == phase
+    assert config["metric"]["name"] and config["metric"]["goal"] in ("minimize", "maximize")
+    assert any(k.startswith("budget") for k in config), f"{filename} declares no budget"
+
+    grid = config["grid"]
+    assert "foundation" in grid, f"{filename} sweeps nothing for the Foundation"
+    assert swept in grid["foundation"], f"{filename} does not vary {swept}"
+    assert len(grid["foundation"][swept]) >= 2, "a one-candidate grid is not a sweep"
+
+
+def test_the_phases_are_ordered_by_dependency():
+    """Learning rate first — highest impact, and every later phase is
+    conditioned on its winner."""
+    phase1 = load_yaml(ROOT / "configs" / "sweeps" / "phase1_lr.yaml")
+    phase2 = load_yaml(ROOT / "configs" / "sweeps" / "phase2_epochs.yaml")
+    phase3 = load_yaml(ROOT / "configs" / "sweeps" / "phase3_rank.yaml")
+
+    assert "depends_on" not in phase1
+    assert phase2["depends_on"] == "phase1_lr"
+    assert phase3["depends_on"] == "phase2_epochs"
+
+
+def test_the_epoch_phase_optimises_f1_not_loss():
+    """Validation loss can fall while field extraction gets worse, and F1 is
+    what the promotion gate reads."""
+    config = load_yaml(ROOT / "configs" / "sweeps" / "phase2_epochs.yaml")
+    assert config["metric"]["name"] == "field_f1"
+    assert config["metric"]["goal"] == "maximize"
+
+
+def test_the_rank_phase_is_not_run_by_default():
+    """Rank is the least likely of the three to be the bottleneck; it runs only
+    if F1 plateaus after phases 1 and 2."""
+    config = load_yaml(ROOT / "configs" / "sweeps" / "phase3_rank.yaml")
+    assert config["run_by_default"] is False
+
+
+def test_the_sweep_exists_but_is_not_wired_into_any_command():
+    """Built, and deliberately not part of `finetune` or `all`.
+
+    Running it is an operator decision taken after the pilot, not a stage that
+    fires because a pipeline reached it — 9-12 training runs is not something a
+    build should start on its own.
+    """
+    from orchestration import pipeline_dag, settings
+
+    assert (ROOT / "training" / "sweep.py").exists()
+    assert settings.pipeline_config()["deferred"]["sweep"] is False
+    assert not any("sweep" in stage.name for stage in pipeline_dag.STAGES)
+
+
+def test_the_sweep_refuses_to_run_at_pilot_volume():
+    """The deferral reason, now enforced in code rather than in a doc: a sweep at
+    25-30 documents per type measures which documents landed in a 3-4 document
+    test split, and promotes that as a hyperparameter finding."""
+    import pytest
+
+    from training.sweep import SweepError, assert_enough_data
+
+    with pytest.raises(SweepError, match="below the"):
+        assert_enough_data({"policy": 28})
+
+
+def test_quantization_thresholds_gate_package_when_metrics_exist():
+    """SPEC_13 §4 — the gate sits between quantize and push. It applies only when
+    per-format metrics were measured; scoring each GGUF needs a GPU, and a gate
+    that invented numbers to have something to judge would be worse than one
+    that says it has none."""
+    import inspect
+
+    from orchestration import pipeline_dag
+
+    source = inspect.getsource(pipeline_dag.stage_quantize)
+    assert "assert_servable" in source
+    assert "quant_threshold_results" in source
+
+
+# --------------------------------------------------------------------------
+# GPU-vs-CPU OCR benchmark (SPEC_03 §7)
+# --------------------------------------------------------------------------
+
+
+def test_the_benchmark_times_the_gpu_and_makes_no_cpu_comparison(monkeypatch):
+    """OCR is GPU-only, so there is no second device to compare against. What
+    used to be a speed/cost measurement is now a constraint: MinerU's CPU path
+    produces different markdown, so a corpus spanning both devices is built from
+    two distributions (arch §8a)."""
+    from data_pipeline.ocr import mineru_version, run_mineru
+
+    monkeypatch.setattr(mineru_version, "cuda_available", lambda: (True, "L40S"))
+
+    class _Engine:
+        def __init__(self, device):
+            assert device == "cuda", "the benchmark asked for a device other than cuda"
+
+        def process(self, pdf_bytes, *, device, max_long_side_px):
+            assert device == "cuda"
+            return [run_mineru.PageOutput(page_number=n, markdown="x", image_bytes=b"i")
+                    for n in (1, 2)]
+
+    result = run_mineru.benchmark_gpu(b"%PDF", _Engine, max_long_side_px=1792)
+
+    assert result["device"] == "cuda"
+    assert result["pages"] == 2
+    assert "seconds_per_page" in result
+    assert "cpu" not in result and "speedup" not in result
+
+
+def test_the_ocr_path_refuses_to_run_without_a_gpu(monkeypatch):
+    """A silent CPU fallback would finish the job and write markdown from a
+    different distribution than the corpus was built on, with no error anywhere.
+    Failing is the only way that becomes visible."""
+    import pytest as _pytest
+
+    from data_pipeline.ocr import mineru_version
+
+    monkeypatch.setattr(mineru_version, "cuda_available", lambda: (False, None))
+    with _pytest.raises(mineru_version.MinerUVersionError, match="GPU-only"):
+        mineru_version.resolve_device(None)
+
+
+# --------------------------------------------------------------------------
+# Extraction provenance (SPEC_12 §9)
+# --------------------------------------------------------------------------
+
+
+def test_a_result_traces_back_to_the_model_that_produced_it(tmp_path):
+    """An output JSON with no recorded model version is a number nobody can
+    attribute to a training run."""
+    import json
+
+    from serving.pipeline import ExtractionResult
+    from testing.run_extraction import append_registry, write_outputs
+
+    result = ExtractionResult(
+        source_id="policy_0001", doc_type="policy", model_version="v2",
+        mode="ocr_plus_image", schema_valid=True, overall_confidence=0.91,
+        extraction={"insured_name": "Rivera Fabrication LLC"},
+    )
+    results_path, metrics_path = write_outputs(result, {"document": "policy_0001"}, root=tmp_path)
+    append_registry(result, results_path, metrics_path, root=tmp_path, quant_format="q5_k_m")
+
+    registry = json.loads((tmp_path / "extraction_registry.json").read_text(encoding="utf-8"))
+    row = registry["extractions"][0]
+    assert row["model_version"] == "v2"       # -> resolves to a run_manifest
+    assert row["quant_format"] == "q5_k_m"
+    assert row["document"] == "policy_0001"
+    assert row["extracted_at"]
+    assert (tmp_path / row["result_path"]).exists()
+    assert (tmp_path / row["metrics_path"]).exists()
+
+
+def test_results_are_organised_by_model_version_in_the_path(tmp_path):
+    """`results/{version}/` — the version is visible in the path itself, so a
+    file cannot be mistaken for another model's output."""
+    from serving.pipeline import ExtractionResult
+    from testing.run_extraction import write_outputs
+
+    for version in ("base", "v2"):
+        result = ExtractionResult(
+            source_id="policy_0001", doc_type="policy", model_version=version,
+            mode="ocr_plus_image", schema_valid=True, overall_confidence=0.5,
+        )
+        results_path, _metrics = write_outputs(result, {}, root=tmp_path)
+        assert results_path.parent.name == version
+
+    assert (tmp_path / "results" / "base" / "policy_0001.json").exists()
+    assert (tmp_path / "results" / "v2" / "policy_0001.json").exists()
+
+
+def test_appending_twice_accumulates_rather_than_overwrites(tmp_path):
+    """A registry that keeps only the last extraction is not a registry."""
+    import json
+
+    from serving.pipeline import ExtractionResult
+    from testing.run_extraction import append_registry, write_outputs
+
+    for source_id in ("policy_0001", "policy_0002"):
+        result = ExtractionResult(
+            source_id=source_id, doc_type="policy", model_version="v2",
+            mode="ocr_plus_image", schema_valid=True, overall_confidence=0.5,
+        )
+        paths_ = write_outputs(result, {}, root=tmp_path)
+        append_registry(result, *paths_, root=tmp_path)
+
+    registry = json.loads((tmp_path / "extraction_registry.json").read_text(encoding="utf-8"))
+    assert [r["document"] for r in registry["extractions"]] == ["policy_0001", "policy_0002"]
+
+
+# --------------------------------------------------------------------------
+# Reference prompt files (SPEC_12 §2)
+# --------------------------------------------------------------------------
+
+
+def test_prompt_files_match_the_renderer():
+    """The requirement the spec states as a test rather than a discipline.
+
+    Two hand-kept copies of a prompt diverge by one character eventually, and
+    prompt drift between corpus build and inference degrades a fine-tuned model
+    while showing up in no training metric.
+    """
+    from testing.render_prompts import drifted
+
+    problems = drifted()
+    assert not problems, (
+        "reference prompts no longer match common.prompts: "
+        + "; ".join(problems)
+        + ". Regenerate with `python -m testing.render_prompts --write` — never hand-edit them."
+    )
+
+
+def test_a_hand_edited_prompt_file_is_caught(tmp_path):
+    """Without this the drift check could be comparing nothing."""
+    from testing.render_prompts import drifted, prompt_path, write_all
+
+    write_all(tmp_path)
+    assert not drifted(tmp_path)
+
+    victim = prompt_path("policy", "ocr_plus_image", None, tmp_path)
+    victim.write_text(victim.read_text(encoding="utf-8") + " ", encoding="utf-8")
+    assert any("policy.prompt.txt" in p for p in drifted(tmp_path))
+
+
+def test_a_missing_prompt_file_is_drift_not_a_pass(tmp_path):
+    from testing.render_prompts import drifted, prompt_path, write_all
+
+    write_all(tmp_path)
+    prompt_path("lossrun", "image_only", None, tmp_path).unlink()
+    assert any("missing" in p for p in drifted(tmp_path))
+
+
+def test_a_stale_prompt_file_is_reported_and_removed(tmp_path):
+    """A leftover from a renamed target is a reference nothing regenerates, and
+    the drift check would otherwise never look at it."""
+    from testing.render_prompts import drifted, write_all
+
+    write_all(tmp_path)
+    orphan = tmp_path / "acord.prompt.txt"       # the old per-type name
+    orphan.write_text("stale", encoding="utf-8")
+    assert any("stale" in p for p in drifted(tmp_path))
+
+    write_all(tmp_path)
+    assert not orphan.exists()
+    assert not drifted(tmp_path)
+
+
+def test_each_acord_form_gets_its_own_reference():
+    """25, 125 and 140 have different schemas, so one acord file pinned to a
+    single form would misrepresent the other two."""
+    from common.constants import ACORD_FORMS
+    from testing.render_prompts import PROMPTS_DIR
+
+    for form in ACORD_FORMS:
+        assert (PROMPTS_DIR / f"acord_{form}.prompt.txt").exists()
+    assert not (PROMPTS_DIR / "acord.prompt.txt").exists()
+
+
+def test_the_banner_is_not_part_of_the_compared_prompt():
+    """The provenance header must not leak into what the model would see."""
+    from testing.render_prompts import PROMPTS_DIR, body_of, render
+
+    text = (PROMPTS_DIR / "policy.prompt.txt").read_text(encoding="utf-8")
+    assert text.startswith("# GENERATED")
+    body = body_of(text)
+    assert not body.startswith("#")
+    assert body == render("policy", "ocr_plus_image")
+
+
+def test_the_prompt_files_carry_no_alias_strings():
+    """The same negative requirement as the rendered prompt: mapping surface
+    labels to canonical keys is the model's job, and a prompt that lists them
+    caps the system at a hand-written list."""
+    from common import aliases
+    from testing.render_prompts import PROMPTS_DIR
+
+    for path in sorted(PROMPTS_DIR.glob("*.prompt.txt")):
+        text = path.read_text(encoding="utf-8")
+        for doc_type in ("policy", "lossrun", "acord"):
+            for field_path, entry in aliases.load_registry(doc_type).items():
+                for alias in entry.aliases:
+                    # A one-word alias collides with ordinary prose ("Date",
+                    # "Insured"); multi-word aliases are unambiguous. Same rule
+                    # as test_prompt_carries_descriptions_but_no_alias_strings.
+                    if " " not in alias:
+                        continue
+                    assert alias not in text, (
+                        f"{path.name} contains the alias {alias!r} for {field_path}"
+                    )

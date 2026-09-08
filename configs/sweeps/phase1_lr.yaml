@@ -1,0 +1,9 @@
+# Phase 1 - learning rate. Run FIRST: highest impact, and every later phase is
+# conditioned on the winner. Hold everything else fixed.
+phase: lr
+metric: {name: "eval_loss", goal: "minimize"}
+epochs_per_candidate: 1
+budget_runs_per_adapter_type: 3
+grid:
+  foundation: {learning_rate: [5.0e-5, 1.0e-4, 2.0e-4]}
+  per_type:   {learning_rate: [2.0e-5, 5.0e-5, 1.0e-4]}
