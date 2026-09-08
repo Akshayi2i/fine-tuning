@@ -112,7 +112,11 @@ Runs: **quantize → push adapters + merged model + quantized model(s) to Azure 
 - `--keep-staging` retains the volume copy (default: clear it after a verified push, so the volume doesn't fill).
 - Quantization threshold validation (SPEC_10 / arch §13b) is **deferred this cycle** — the serving path is merged fp16/bf16 via vLLM. When it ships it becomes a gate inside `package`, between quantize and push.
 
-**Flags:** `--version`, `--formats`, `--skip-quantize` (push adapters + merged only), `--keep-staging`, `--from-blob`, `--dtype`.
+**Flags:** `--version`, `--formats`, `--skip-quantize` (push adapters + merged only), `--keep-staging`, `--from-blob`, `--dtype`, **`--foundation-only`**, **`--doc-types`**, **`--tenant`**.
+
+The last three must match the `finetune` run that produced the version. `finetune` decides *which* models get built; `package` publishes their locations, so without them a standalone `package` fell back to `foundation_only=False` and all three doc types however finetune had actually run — writing three adapter prefixes and three merged-model prefixes into Blob for artifacts that were never built. An empty Blob prefix later reads as a published model. (Under `all` they come from the finetune flag set; adding them twice is an argparse conflict.)
+
+**`stage_push` publishes only runs that finished.** Manifests are selected by version *and status*: a run left at `training` or marked `failed` has no weights, and flipping it to `published` advertises a Blob path that serving will fetch and find empty.
 
 ## 5. `extract` — command 3 (arch §17)
 
@@ -204,6 +208,9 @@ The 11 stages (arch §13) as reusable, individually addressable stage functions 
 - [ ] A completion check covers **every** target it claims to, not just the first: a quantize run that failed halfway must not read as complete on resume.
 - [ ] The staging volume is cleared only after at least one manifest was actually published.
 - [ ] A pod launched without the staging volume attached is refused.
+- [ ] **Cross-type regression evidence carries both sides.** `StageContext` exposes `cross_type_evidence` as `{doc_type: {"current": {...}, "candidate": {...}}}` — the shape `promotion_gate` reads — and it is passed through verbatim. It is a **separate field** from `revalidation_evidence`, which holds per-doc-type booleans for the arch §12 cascade; reusing one field for both produced an entry with no `"current"` key, which the gate correctly rejected as empty. A continued Foundation could then not pass by any input: supply metrics and it read as empty evidence, supply the booleans and it read as no evidence at all.
+- [ ] **A deterministic failure is not retried.** The retry policy exists for transient faults — a throttled Blob read, a pod that dropped. `PipelineError` and `PathError` mean the stage cannot run at all with these inputs (below the day-zero label floor, missing `--input`, a malformed `--out-version`), so a second attempt re-lists everything and fails with the identical message after a pointless backoff. They stop the run immediately, like a gate block.
+- [ ] **A dry-run `rollback-endpoint` does not move the endpoint.** Popping the deployment history before checking `dry_run` meant a preview permanently rewrote the recorded live version: `health_check` reported the previous version while the current one was still serving, and the next real rollback refused with "nothing to roll back to".
 - [ ] A pod leaves no persistent process after completion.
 - [ ] `deploy-endpoint --model vN` updates the serving endpoint; `rollback-endpoint` restores the previous promoted version.
 - [ ] *(deferred)* Quantization thresholds gate `package`; the sweep sequence runs Phase 1 → 2 and promotes the winning config.

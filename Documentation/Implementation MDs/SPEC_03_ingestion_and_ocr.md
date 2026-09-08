@@ -14,7 +14,7 @@ This is the front of both the training-data pipeline and (reused) the inference 
 
 ### 1. `data_pipeline/ingestion/pull_raw_pdfs.py`
 For each PDF from a local folder or source location:
-- Assign/validate a `source_id` (`{doc_type}_{index}`; doc_type either provided or deferred — allow an `--unclassified` bucket resolved later by the classifier).
+- Assign/validate a `source_id` (`{doc_type}_{index}`; doc_type either provided or deferred — allow an `--unclassified` bucket resolved later by the classifier). **`build_source_id` and `paths.raw_pdf` must accept it**, not only the guard in `ingest_directory` — accepting it in one place and rejecting it in the others made every document fail one at a time into `failed`, so a broken mode read as bad input.
 - Compute a **SHA-256 checksum** and **dedup** (arch §18a): if the checksum was already ingested, skip and log. Insurance documents — Loss Runs and renewal policies especially — are frequently re-submitted with only minor changes; de-duping prevents redundant labeling effort and corpus bloat.
 - Write `raw-documents/{tenant_id}/{doc_type}/{source_id}/original.pdf` — **immutable, exactly as received, never overwritten**. A corrected version of a document is ingested as a **new `source_id`**, so historical training runs remain reproducible against the exact bytes they trained on.
 - Write `metadata.json`: ingestion timestamp, `tenant_id`, source system, checksum, page count, **digital-vs-scanned flag** (detect via presence of an embedded text layer — this flag feeds the scanned-PDF eval subset in SPEC_08 and the ViT gate in SPEC_06), PII flags placeholder, retention class.
@@ -90,3 +90,6 @@ Consequences, all enforced in code:
 - [ ] Re-running OCR on already-processed docs is a no-op; **changing the MinerU version forces reprocessing**.
 - [ ] `assert_version_matches` raises on a seeded version mismatch with a remediation message.
 - [ ] `render_only` produces images with no OCR dependency.
+- [ ] Running `render_only` over an **already-OCR'd** document re-renders its images but **preserves the OCR metadata** — `table_row_counts` survives and the document is not relabelled `render_only`. Overwriting it silently switched off the SPEC_09 detected-row cross-check while the `page_*.md` files still sat there.
+- [ ] `find_unprocessed` applies the same render-only test `process_document` does. Counting a render-only `ocr_meta.json` as done filtered the document out of `--all-unprocessed`, so it was never OCR'd and the CLI reported nothing to do.
+- [ ] The `_reprocessed` marker is added to the **returned** metadata only, never written to Blob — persisting it made the skip path read it straight back, so `process_batch` reported every skipped document as processed.

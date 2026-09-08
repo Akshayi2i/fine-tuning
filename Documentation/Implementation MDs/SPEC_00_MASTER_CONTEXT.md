@@ -204,9 +204,13 @@ azure-blob://insurance-extraction/
   registry/adapters/{doc_type}/{run_id}/run_manifest.json
   registry/registry_index.json
   calibration/{version}/{doc_type}.json
-  eval-reports/v{n}/
+  eval-reports/v{n}/summary.json                                     # EvalReport.as_dict()
+  eval-reports/v{n}/{doc_type}/report.json
+  eval-reports/v{n}/gate_decision.json                              # the gate's verdict, NOT the report
   golden-eval-set/                                                   # frozen, versioned separately
 ```
+
+**`gate_decision.json` is a separate key on purpose.** The promotion gate writes its verdict — pass/fail, per-metric deltas, failed gates — and the scored `EvalReport` writes `summary.json`. Sharing one key meant the gate overwrote the report it had just read, taking `by_doc_type` and every per-document error record with it; `vit_gate` then saw zero image-only and zero scanned documents and returned `insufficient_data` for ever. Two writers, two keys.
 
 **Tenant partitioning rule (arch §8b, §18):** everything holding tenant document data is prefixed by `tenant_id`. Shared artifacts containing no tenant data (`base-models/`, `adapters/`, `registry/`) stay un-prefixed.
 

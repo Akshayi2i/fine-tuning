@@ -35,10 +35,13 @@ Provide a clean, typed interface for all Azure Blob reads/writes, and implement 
   - `push_eval_report(...)`, `push_golden_eval_set` / `pull_golden_eval_set`
 - CLI so a RunPod pod can `python -m artifact_registry.pull_from_blob --corpus v3 --dest ./data`.
 
+**Reading the index is not optional.** `_index` raises `RegistryQueryError` when the index blob exists but cannot be read. It must never degrade to an empty list: an empty registry and an unreadable one are different facts, and conflating them makes a throttled or 403'd Azure call look like a first-ever run — `latest_promoted` returns `None`, the promotion gate sets `is_first_version` and has nothing to regress against, and a candidate whose accuracy collapsed is promoted. The same swallow silently cleared the arch §12 Foundation cascade block.
+
 ### 4. `registry_utils/models.py`
 Pydantic model `RunManifest` capturing the arch §12 manifest **plus the v1 additions**:
 
-- `run_id`, `run_type` (`foundation` | `per_type_adapter`), `doc_type` (nullable), `tenant_id` (nullable, defaulted), `status` (`trained|evaluated|promoted|archived|failed`), `created_at`.
+- `run_id`, `run_type` (`foundation` | `per_type_adapter`), `doc_type` (nullable), `tenant_id` (nullable, defaulted), `status` (`training|trained|evaluated|promoted|archived|failed`), `created_at`.
+  - **`training` exists because the manifest is written *before* ms-swift is launched** — the run_id has to be reserved and the configuration captured even for a run that dies. Without it the pre-launch manifest defaulted to `trained`, so a pod that OOM'd at step 40 left a registry entry asserting a trained adapter over a staging path holding nothing, and `package` published Blob locations for weights that were never written. `training.train_foundation.launch_and_record` flips it to `trained` when ms-swift returns and to `failed` when it does not; **`stage_push` publishes only `trained`, `evaluated` or `promoted` runs.**
 - **`is_sweep_run`** (bool) + `sweep_id` / `sweep_phase` — reserved fields so sweep runs are first-class registry entries when sweeps are run (arch §11a; deferred past the SPEC_15 pilot).
 - `dependencies`:
   - `base_model` (`qwen3-vl-8b-instruct@<hf_revision_pin>`)

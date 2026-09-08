@@ -91,4 +91,5 @@ The primary serving path is **vLLM on the merged fp16/bf16 model** (arch §13a),
 - [ ] `quant_thresholds` returns pass/fail correctly **at each format's exact boundary** — a format landing precisely on its allowance passes, and floating-point recomputation must not block it.
 - [ ] `validate_quant` reports the delta vs fp16 per format, writes `quant_threshold_results` into the RunManifest, and refuses an over-threshold format **with no override path**.
 - [ ] A format that was not measured does not pass, and validation without the fp16 reference is refused outright.
+- [ ] **`assert_servable` refuses a serving format that produced no verdict at all.** `validate_quant` only returns a result for formats it was given metrics for, so a format nobody scored appears in neither `servable_formats` nor `blocked_formats`. Checking `blocked_formats` alone let it sail through to push with zero measurements — the precise inverse of the rule this module exists to enforce.
 - [ ] The gate sits inside `package`, between quantize and push.

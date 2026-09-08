@@ -80,4 +80,11 @@ A test suite + CI that verifies the correctness-critical pieces without GPUs or 
 - [ ] `test_staging_contract` fails if `finetune` can complete without writing a manifest to Blob.
 - [ ] `test_alias_registry` fails when any schema field is missing a `description`, or when an alias string leaks into a rendered prompt.
 - [ ] `test_no_runtime_aliases` fails the moment a serving or inference module imports `common.aliases`.
+- [ ] `tests/test_module_seams.py` passes — **the seam suite**.
 - [ ] `ruff` + `mypy` clean.
+
+**Seam tests: run both sides, never hand-write one of them.** A full-tree review found 34 defects while the suite was entirely green, and every one lived at a boundary between two modules that had each been tested against a hand-written fixture rather than against what its neighbour actually produces. Three tests passed *because* they encoded the bug they were meant to guard: one asserted a review flag string nothing emits, one asserted a dry run moves the endpoint, one asserted a dry-run pipeline can publish.
+
+A unit test proves a module is self-consistent. Only a test that runs both sides proves they agree. The suite covers: every `GATING_METRICS` name is one `score_subset` emits (the defect that made the promotion gate unpassable); the review-queue consumer recognises the flags `list_completeness` emits; every `vllm_serving.yaml` threshold reaches a parameter `extract` accepts; both trainers honour their YAML over helper defaults; the double-annotation sample is not a subset of `train`; and the gate's verdict key differs from the eval report's.
+
+**Fix a pair, test the pair.** The trainer tests are parameterised over *both* trainers because the same class of bug — the validation-split leak, then the argument-ordering override — was twice fixed in one of two and reported as fixed in both.

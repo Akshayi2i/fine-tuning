@@ -213,9 +213,13 @@ azure-blob://insurance-extraction/
   registry/adapters/{doc_type}/{run_id}/run_manifest.json
   registry/registry_index.json
   calibration/{version}/{doc_type}.json
-  eval-reports/v{n}/
+  eval-reports/v{n}/summary.json                                     # EvalReport.as_dict()
+  eval-reports/v{n}/{doc_type}/report.json
+  eval-reports/v{n}/gate_decision.json                              # the gate's verdict, NOT the report
   golden-eval-set/                                                   # frozen, versioned separately
 ```
+
+**`gate_decision.json` is a separate key on purpose.** The promotion gate writes its verdict — pass/fail, per-metric deltas, failed gates — and the scored `EvalReport` writes `summary.json`. Sharing one key meant the gate overwrote the report it had just read, taking `by_doc_type` and every per-document error record with it; `vit_gate` then saw zero image-only and zero scanned documents and returned `insufficient_data` for ever. Two writers, two keys.
 
 **Tenant partitioning rule (arch §8b, §18):** everything holding tenant document data is prefixed by `tenant_id`. Shared artifacts containing no tenant data (`base-models/`, `adapters/`, `registry/`) stay un-prefixed.
 
@@ -481,7 +485,6 @@ RunPod pods are ephemeral (arch §14), so persistence between commands 1 and 2 c
 5. **SPEC_15 is executed, not built** — run it after SPEC_14 as the pilot validation protocol before committing to full corpus annotation.
 6. This master file is the context; when a spec says "per master context", it means this file.
 
-
 ---
 
 # SPEC_01_scaffold_configs_schemas_prompts
@@ -618,7 +621,7 @@ Each schema must be loadable by `jsonschema` and validate a correct example. Inc
 - `common/lob.py` *(new)* — the LOB enum, validation, `null` handling, and a per-value coverage counter used by SPEC_05 and SPEC_08.
 - `common/normalize.py` *(moved here from SPEC_08)* — per-field-type normalizers so comparison reflects correctness rather than formatting: dates (`01/01/2026` == `2026-01-01`), currency (`$1,200.00` == `1200.0`), entity names (`Acme Mfg LLC` ≈ `ACME MANUFACTURING LLC`), policy/claim number separators. **Built here rather than in SPEC_08 because three specs need it and the earliest is SPEC_04**: alias derivation (SPEC_04), the promotion gate (SPEC_08), and the testing routine (SPEC_12). Pure and dependency-free. One definition of "matches" shared by all three — divergence silently changes what "correct" means between them.
 - `common/aliases.py` *(new)* — loads `schemas/aliases/{doc_type}.aliases.json`; `aliases_for(doc_type, field)`, `confusables_for(doc_type, field)`, `canonical_for(doc_type, surface_label)` (reverse lookup, **for labeling and eval only**), `is_confusable(doc_type, field, label)`. Mirrors the `common/lob.py` pattern. Its module docstring must state that no serving or inference path may import it.
-- `common/constants.py` — `ACTIVE_DOC_TYPES = ["acord", "policy", "lossrun"]`, the **`doc_type` → Fideon SPEC_00 canonical model mapping table (master §1.2)**, ACORD form list, modality modes + mix ratios, resolution cap default, split-ratio table by volume, confidence review threshold.
+- `common/constants.py` — `ACTIVE_DOC_TYPES = ["acord", "policy", "lossrun"]`, **`UNCLASSIFIED = "unclassified"`** (the holding bucket for documents whose type is not yet known — it lives here, not in `data_pipeline`, because `common/ids.py` and `artifact_registry/paths.py` both have to honour it and both sit below `data_pipeline`), the **`doc_type` → Fideon SPEC_00 canonical model mapping table (master §1.2)**, ACORD form list, modality modes + mix ratios, resolution cap default, split-ratio table by volume, confidence review threshold.
 
 ## Constraints
 - No business logic yet — scaffold + static assets + tiny shared helpers.
@@ -643,7 +646,6 @@ Each schema must be loadable by `jsonschema` and validate a correct example. Inc
 - [ ] `configs/inference/vllm_serving.yaml` resolution cap equals `configs/base_model.yaml` — assert this in a test.
 - [ ] `.env.example` lists every env var used anywhere in the design.
 - [ ] `ruff` and `mypy` pass on `common/`.
-
 
 ---
 
@@ -686,10 +688,13 @@ Provide a clean, typed interface for all Azure Blob reads/writes, and implement 
   - `push_eval_report(...)`, `push_golden_eval_set` / `pull_golden_eval_set`
 - CLI so a RunPod pod can `python -m artifact_registry.pull_from_blob --corpus v3 --dest ./data`.
 
+**Reading the index is not optional.** `_index` raises `RegistryQueryError` when the index blob exists but cannot be read. It must never degrade to an empty list: an empty registry and an unreadable one are different facts, and conflating them makes a throttled or 403'd Azure call look like a first-ever run — `latest_promoted` returns `None`, the promotion gate sets `is_first_version` and has nothing to regress against, and a candidate whose accuracy collapsed is promoted. The same swallow silently cleared the arch §12 Foundation cascade block.
+
 ### 4. `registry_utils/models.py`
 Pydantic model `RunManifest` capturing the arch §12 manifest **plus the v1 additions**:
 
-- `run_id`, `run_type` (`foundation` | `per_type_adapter`), `doc_type` (nullable), `tenant_id` (nullable, defaulted), `status` (`trained|evaluated|promoted|archived|failed`), `created_at`.
+- `run_id`, `run_type` (`foundation` | `per_type_adapter`), `doc_type` (nullable), `tenant_id` (nullable, defaulted), `status` (`training|trained|evaluated|promoted|archived|failed`), `created_at`.
+  - **`training` exists because the manifest is written *before* ms-swift is launched** — the run_id has to be reserved and the configuration captured even for a run that dies. Without it the pre-launch manifest defaulted to `trained`, so a pod that OOM'd at step 40 left a registry entry asserting a trained adapter over a staging path holding nothing, and `package` published Blob locations for weights that were never written. `training.train_foundation.launch_and_record` flips it to `trained` when ms-swift returns and to `failed` when it does not; **`stage_push` publishes only `trained`, `evaluated` or `promoted` runs.**
 - **`is_sweep_run`** (bool) + `sweep_id` / `sweep_phase` — reserved fields so sweep runs are first-class registry entries when sweeps are run (arch §11a; deferred past the SPEC_15 pilot).
 - `dependencies`:
   - `base_model` (`qwen3-vl-8b-instruct@<hf_revision_pin>`)
@@ -763,7 +768,6 @@ CLI + functions:
 - [ ] `diff_manifests` surfaces a changed `corpus_version` / `mineru_version` / hyperparameter.
 - [ ] Unit tests mock the Blob client (no live Azure needed for CI).
 
-
 ---
 
 # SPEC_03_ingestion_and_ocr
@@ -784,7 +788,7 @@ This is the front of both the training-data pipeline and (reused) the inference 
 
 ### 1. `data_pipeline/ingestion/pull_raw_pdfs.py`
 For each PDF from a local folder or source location:
-- Assign/validate a `source_id` (`{doc_type}_{index}`; doc_type either provided or deferred — allow an `--unclassified` bucket resolved later by the classifier).
+- Assign/validate a `source_id` (`{doc_type}_{index}`; doc_type either provided or deferred — allow an `--unclassified` bucket resolved later by the classifier). **`build_source_id` and `paths.raw_pdf` must accept it**, not only the guard in `ingest_directory` — accepting it in one place and rejecting it in the others made every document fail one at a time into `failed`, so a broken mode read as bad input.
 - Compute a **SHA-256 checksum** and **dedup** (arch §18a): if the checksum was already ingested, skip and log. Insurance documents — Loss Runs and renewal policies especially — are frequently re-submitted with only minor changes; de-duping prevents redundant labeling effort and corpus bloat.
 - Write `raw-documents/{tenant_id}/{doc_type}/{source_id}/original.pdf` — **immutable, exactly as received, never overwritten**. A corrected version of a document is ingested as a **new `source_id`**, so historical training runs remain reproducible against the exact bytes they trained on.
 - Write `metadata.json`: ingestion timestamp, `tenant_id`, source system, checksum, page count, **digital-vs-scanned flag** (detect via presence of an embedded text layer — this flag feeds the scanned-PDF eval subset in SPEC_08 and the ViT gate in SPEC_06), PII flags placeholder, retention class.
@@ -860,7 +864,9 @@ Consequences, all enforced in code:
 - [ ] Re-running OCR on already-processed docs is a no-op; **changing the MinerU version forces reprocessing**.
 - [ ] `assert_version_matches` raises on a seeded version mismatch with a remediation message.
 - [ ] `render_only` produces images with no OCR dependency.
-
+- [ ] Running `render_only` over an **already-OCR'd** document re-renders its images but **preserves the OCR metadata** — `table_row_counts` survives and the document is not relabelled `render_only`. Overwriting it silently switched off the SPEC_09 detected-row cross-check while the `page_*.md` files still sat there.
+- [ ] `find_unprocessed` applies the same render-only test `process_document` does. Counting a render-only `ocr_meta.json` as done filtered the document out of `--all-unprocessed`, so it was never OCR'd and the CLI reported nothing to do.
+- [ ] The `_reprocessed` marker is added to the **returned** metadata only, never written to Blob — persisting it made the skip path read it straight back, so `process_batch` reported every skipped document as processed.
 
 ---
 
@@ -1034,7 +1040,6 @@ Once a model version exists (arch §7 step 6, §13 step 11):
 - [ ] `label_metadata.json` captures full provenance including draft backend and the review requirement in force.
 - [ ] `active_learning` orders a queue by ascending confidence, surfaces row-completeness flags, and refuses to run while `review_requirement` is `"full"`.
 
-
 ---
 
 # SPEC_05_dataset_builder
@@ -1157,7 +1162,6 @@ Writes `manifest.json` per corpus version — this is what training and eval rea
 - [ ] `manifest.json` counts match actual JSONL row counts, and record `mineru_version`, `schema_version`, `prompt_template_version`, tenant list, de-id status, and edge-case coverage.
 - [ ] Rebuild with the same seed produces byte-identical output.
 
-
 ---
 
 # SPEC_06_training
@@ -1200,13 +1204,16 @@ Entrypoint that:
 - Launches **ms-swift** SFT (which runs TRL `SFTTrainer` underneath) with DeepSpeed (ZeRO-2 default, ZeRO-3 when VRAM-constrained).
 - Trains across **ALL doc types + ALL 3 modality regimes** — the mixed corpus is what makes the Foundation learn shared behavior (insurance terminology, table/checkbox reading, OCR-vs-image arbitration, JSON structural discipline).
 - Saves the adapter to the **RunPod staging volume** at `/runpod-volume/staging/adapters/foundation/v{n}/` (master §12a). It is pushed to Blob later by `package` (SPEC_13 command 2), or immediately when `finetune --push-adapters` is set.
-- Writes a `RunManifest` (SPEC_02) with full config, data stats, LoB coverage, seed, git commit, corpus version, MinerU version, schema/prompt template versions.
+- Writes a `RunManifest` (SPEC_02) with full config, data stats, LoB coverage, seed, git commit, corpus version, MinerU version, schema/prompt template versions — at status **`training`**, because nothing has run yet. `launch_and_record` then flips it to `trained` when ms-swift returns, or **`failed`** when it raises, so the registry never claims weights a crashed run never wrote.
+- Every value in the YAML's `evaluation:` block reaches ms-swift: `metric_for_best_model`, **`greater_is_better`** and `load_best_model_at_end` are passed into `swift_early_stopping_args`, not hardcoded beside it. `greater_is_better` was a literal `True` while all four YAMLs carried the key, so a config selecting on `eval_loss` would have restored the checkpoint with the **highest** loss — and that worst-of-run adapter is what gets staged, evaluated and offered to the gate. Where the helper is unpacked matters as much as what it returns: it goes **first**, so explicit keys win.
 
 Flags: `--corpus vN`, `--out-version vN`, `--deepspeed zero2|zero3`, `--train-vit` (default false — the gated exception), `--from-base|--continue-from vN`, `--sweep-id`, `--sweep-phase`.
 
 **Versioning rule (arch §12) — enforced in code, not just documented:**
 - **Major corpus expansion** → retrain **from the original HF base model** on the full accumulated corpus. Continued training on top of an existing LoRA compounds drift across cycles; starting fresh is slower per-cycle but far more reproducible and debuggable.
 - **Minor incremental patch** → continuing from the current Foundation checkpoint is acceptable, **but promotion requires a regression check against the frozen golden eval set for the *other* document types** (SPEC_08). `--continue-from` sets a manifest flag that the gate reads and refuses to promote without that regression evidence.
+- **`--continue-from` takes a checkpoint DIRECTORY, never a registry run-id.** It reaches ms-swift as `resume_from_checkpoint`, which reads a path on disk; a run-id looks close enough to be passed by mistake and fails silently in the worst way — ms-swift finds no checkpoint, trains from base, and the manifest records a `continued_from` lineage that never happened, which the gate then reads as evidence. `assert_checkpoint_path` refuses the run-id shape, **including dotted versions (`foundation-v2.1`) and the `{doc_type}-adapter-v{n}` form `train_adapter` generates** — a guard that only matched undotted single-lineage ids missed every id this codebase actually produces.
+- The Foundation is attached to a per-type run with ms-swift's **`adapters`** argument, **not `resume_from_checkpoint`**. Resume means *continue this run*: it restores optimizer state and the completed `global_step`, so a fresh 3-epoch adapter run resumes at the end of the Foundation's schedule and trains zero steps — and tries to load rank-64 weights into a rank-16 config on the way.
 
 ### 2. `training/train_adapter.py`
 Per-doc-type (and per-tenant) adapter entrypoint:
@@ -1322,7 +1329,6 @@ a recorded config, and two rendering rules are load-bearing:
 - [ ] A candidate that produced no score is **excluded from ranking**, not defaulted: a crashed run must not win a minimise-loss phase.
 - [ ] The sweep **refuses to run** below production volume, and phase 3 is off by default.
 
-
 ---
 
 # SPEC_07_inference_core
@@ -1391,7 +1397,6 @@ A clean, low-level inference engine: given a resolved model version + a prepared
 - [ ] `map_field_spans(...)` correctly maps a scalar field, a `null` field, and a `claims[i].amount` list-row field on a sample generation; an unmappable field is reported, not dropped.
 - [ ] Module imports without pulling in calibration/serving/eval/testing.
 
-
 ---
 
 # SPEC_08_evaluation
@@ -1437,12 +1442,12 @@ One definition of "matches", applied **consistently in the promotion gate, the t
 | `classifier_accuracy.py` | Doc-type + ACORD-form classification accuracy | Whether the right adapter/prompt/schema is even selected — **a classifier at 92% caps the whole system at 92%** (arch §4a) |
 | `lob_accuracy.py` *(new)* | **`line_of_business` detection accuracy, overall and per LoB value** | The VLM is the fallback LoB detector when L1/L2 miss (arch §0b) |
 | `alias_accuracy.py` *(new)* | Field accuracy **sliced by the observed surface label** | Whether the canonical mapping generalises across phrasings, or only works on the dominant one (master §1.4) |
-| `confusable_misattribution.py` *(new)* | Rate at which a **confusable entity's value is returned as the canonical field** | The failure that produces confident, well-formed, wrong extractions — a certificate holder returned as `insured_name` |
+| `confusable.py` *(new)* | Rate at which a **confusable entity's value is returned as the canonical field** | The failure that produces confident, well-formed, wrong extractions — a certificate holder returned as `insured_name` |
 | `latency.py` | Latency / token cost per document | Production feasibility, not just accuracy |
 
 **`alias_accuracy.py` specifics (master §1.4).** Joins predictions to each eval document's `field_provenance` (SPEC_04) and reports accuracy per canonical field × surface label. This turns an unhelpful aggregate into an actionable one: *0.94 on "Named Insured", 0.61 on "Applicant"* tells you the mapping is not generalising and names the documents to go collect. **Reported, not gating** — rare aliases have too little support for a stable gate, and gating on them would block promotion on noise.
 
-**`confusable_misattribution.py` specifics.** For each canonical field, check whether the returned value matches the document's value for one of that field's registered **confusables** instead. Requires the eval golden labels to carry the confusable entities' values, so the frozen eval set must include the confusable co-occurrence documents from SPEC_05. **This is a gating metric.** Ordinary field accuracy already penalises a wrong value — but misattribution is worth isolating because it is systematic rather than random: it means the model has collapsed two distinct entities, it will keep doing so, and the output is fluent and confident enough to pass every structural check.
+**`confusable.py` specifics.** For each canonical field, check whether the returned value matches the document's value for one of that field's registered **confusables** instead. Requires the eval golden labels to carry the confusable entities' values, so the frozen eval set must include the confusable co-occurrence documents from SPEC_05. **This is a gating metric.** Ordinary field accuracy already penalises a wrong value — but misattribution is worth isolating because it is systematic rather than random: it means the model has collapsed two distinct entities, it will keep doing so, and the output is fluent and confident enough to pass every structural check.
 
 **`lob_accuracy.py` specifics (arch §15):** LoB accuracy is reported as **its own metric, measured per LoB value**, and is **never averaged into overall field accuracy** — a class that is rare in the corpus must not hide inside a healthy-looking aggregate. It is a gating metric.
 
@@ -1453,6 +1458,8 @@ One definition of "matches", applied **consistently in the promotion gate, the t
 - Runs the eval subsets explicitly: `image_only`, `scanned`, `noisy_ocr`, `long_policy`, plus the full set.
 - Records per-document error records (field, expected, got, error class) so `vit_gate` and failure-mode analysis have real material rather than aggregates.
 - **The golden eval set is frozen and versioned separately, human-double-verified, and held constant across corpus versions** so model versions compare apples-to-apples over time (arch §8). Never train on it — assert no eval `source_id` appears in any corpus split.
+- **Every gating metric must be emitted by `score_subset`.** `gating.GATING_METRICS` is checked with `require_all_measured=True`, so a metric the scorer never computes blocks *every* candidate, permanently, and the gate has no override by design. This is not hypothetical: `ece_confidence` and `confusable_misattribution_rate` were both gating metrics that `run_eval` never produced — `score_misattribution` had zero production callers and ECE had none at all — which made the gate unpassable under any input. The names must match exactly too: `list_field_recall` and `lob_detection_accuracy` are the gate's spellings, and emitting `list_recall` or `lob_accuracy` instead means the metric silently never arrives. **A test asserts the two sets agree** (`tests/test_module_seams.py`), because a hand-written metrics dict in a unit test proves nothing about what the scorer emits.
+- ECE needs per-field confidences: `score_subset` reads them from each document's `metadata["field_confidence"]` and skips fields that carry none, rather than assuming a value. An unmeasured field is not evidence in either direction.
 - Note: classifier accuracy uses the classifier from SPEC_11 once it exists; until then `run_eval` scores extraction with the true doc_type supplied, and classifier metrics fill in on a later pass. This keeps eval runnable before serving is built.
 
 ### 4. `evaluation/gating.py`
@@ -1488,7 +1495,6 @@ One definition of "matches", applied **consistently in the promotion gate, the t
 - [ ] A `--continue-from` candidate without cross-type regression evidence is blocked.
 - [ ] No code path allows overriding a failed gate.
 - [ ] Promotion decision + per-metric deltas written to the RunManifest.
-
 
 ---
 
@@ -1558,7 +1564,13 @@ Implement **two independent cross-checks**, either of which flags the list:
 1. **Document-stated count** — a `total claims: N` style field extracted from the document.
 2. **Structure-derived count** — the number of table rows MinerU detected on the relevant pages (recorded in `ocr_meta.json` by SPEC_03).
 
-When the model's row count disagrees with either, **flag the whole list for review regardless of per-value confidence**. Optionally calibrate a separate `row_completeness_confidence` against ground-truth row counts on the validation set.
+When the model's row count disagrees with either, **flag the whole list for review regardless of per-value confidence**.
+
+**The flag format is a contract, so it is a constant.** Flags are `f"{field}{ROW_MISMATCH_SUFFIX}"` — `"claims:row_count_mismatch"` — and `is_row_completeness_flag()` is the only supported way to recognise one. Both are exported from this module and imported by `data_pipeline.labeling.active_learning`, which has to recognise them to honour the "row completeness outranks every confidence score" rule. The consumer previously matched hand-written prefixes (`list:`, `rows:`, `completeness:`) that this module has never emitted, so the override was dead code and an incomplete Loss Run with high per-value confidence was routed to a spot check.
+
+**A stated count is read however the model spelled it.** `8`, `8.0` and `"8"` are the same assertion; accepting only `int` turned the whole stated-count cross-check off whenever the model emitted a JSON string.
+
+**A flagged list is never fully confident.** `row_completeness_confidence` is scored against whichever signal disagrees *most*, not the first one available — preferring the stated count meant a list flagged solely by the structural check (document says 6, model returns 6, OCR saw 9) shipped confidence `1.0` on a list this function had just flagged. Optionally calibrate a separate `row_completeness_confidence` against ground-truth row counts on the validation set.
 
 This matters most for **Loss Runs**, where a missed claim row is both easy to make and expensive to miss.
 
@@ -1579,7 +1591,6 @@ This matters most for **Loss Runs**, where a missed claim row is both easy to ma
 - [ ] A flagged list is routed to review even when every per-value confidence is high.
 - [ ] Calibrated confidence is available with **no ground truth** — the inference-time case that makes production review routing possible.
 - [ ] Fitting on data overlapping the training split fails the assertion.
-
 
 ---
 
@@ -1678,8 +1689,8 @@ The primary serving path is **vLLM on the merged fp16/bf16 model** (arch §13a),
 - [ ] `quant_thresholds` returns pass/fail correctly **at each format's exact boundary** — a format landing precisely on its allowance passes, and floating-point recomputation must not block it.
 - [ ] `validate_quant` reports the delta vs fp16 per format, writes `quant_threshold_results` into the RunManifest, and refuses an over-threshold format **with no override path**.
 - [ ] A format that was not measured does not pass, and validation without the fp16 reference is refused outright.
+- [ ] **`assert_servable` refuses a serving format that produced no verdict at all.** `validate_quant` only returns a result for formats it was given metrics for, so a format nobody scored appears in neither `servable_formats` nor `blocked_formats`. Checking `blocked_formats` alone let it sail through to push with zero measurements — the precise inverse of the rule this module exists to enforce.
 - [ ] The gate sits inside `package`, between quantize and push.
-
 
 ---
 
@@ -1727,7 +1738,10 @@ confidence calibration
 - Pulls the promoted artifact from Blob on cold start (SPEC_02); version configurable.
 - Uses SPEC_07 `model_runner` / `input_builder` for generation so output matches eval and testing exactly.
 - **Asserts the serving MinerU version matches the training corpus pin** (SPEC_03 `assert_version_matches`) — a mismatch is distribution shift and a regression trigger (arch §8a), not a warning to ignore.
-- **No plaintext PII in logs**; do not persist raw request/response bodies (master §8).
+- **Every tuneable in `configs/inference/vllm_serving.yaml` must have a reader.** `serving_thresholds()` lifts `routing.classifier_confidence_threshold`, `confidence.review_threshold` and `long_documents.page_threshold` out of the config and passes them into `extract`. They were declared in that file and read by no code, so an operator could raise `review_threshold`, redeploy, and change nothing at all — the hardcoded defaults inside `extract` won silently every time. A test asserts each key the helper emits is a parameter `extract` accepts.
+- **Calibration is selected after classification, not before.** The handler hands the whole `{doc_type: params}` map to `extract`, which picks the entry once the classifier has said what the document is. Resolving it in the handler from the caller-supplied `doc_type` meant a lookup on `""` for every request that did not name its own type — which is every classification-driven request, the endpoint's entire purpose — and the request was refused before extraction ran. `assert_calibration_present` accepts the map and checks it is non-empty; an empty one is still no calibration.
+- **The adapter map holds adapters that exist.** `resolve_model_version(..., doc_type=…)` constructs `type_adapter` unconditionally — it is a path, not evidence anything was trained — so `build_adapter_map` confirms the directory holds an `adapter_config.json` before mapping a doc type to it. Trusting the path mapped all three types on a `--foundation-only` build, and vLLM was then handed a `LoRARequest` for a directory that does not exist, failing every request instead of serving Foundation-only with a `routing:no_adapter_available` flag.
+- **No plaintext PII in logs**; do not persist raw request/response bodies (master §8). The payload log call sits **inside** the handler's `try`: `safe_log_payload` iterates the payload, so an `input` that is not a JSON object raised straight out of the handler and RunPod returned an opaque platform error — the exact failure the structured-error contract exists to prevent.
 
 ### 2. `serving/doc_type_classifier.py`
 **This is load-bearing, not preprocessing (arch §4a).** If classification is wrong, you load the wrong adapter *and* the wrong prompt *and* the wrong schema, and the extraction fails no matter how good the model is.
@@ -1796,7 +1810,6 @@ Per request: (OCR if provided) → classify → route adapter/prompt/schema → 
 - [ ] MinerU version mismatch against the corpus pin fails loudly.
 - [ ] No PII in logs; no raw bodies persisted.
 - [ ] `serving/pipeline.py` is the single path reused by SPEC_12.
-
 
 ---
 
@@ -1962,7 +1975,6 @@ Combined with the `results/{version}/` layout, anyone can see at a glance that `
 - [ ] `testing/prompts/*.prompt.txt` render identically to `common.prompts` for the same inputs (asserted, not assumed).
 - [ ] **Output equals the serving pipeline's output on the same input** (parity test).
 
-
 ---
 
 # SPEC_13_orchestration
@@ -2081,7 +2093,11 @@ Runs: **quantize → push adapters + merged model + quantized model(s) to Azure 
 - `--keep-staging` retains the volume copy (default: clear it after a verified push, so the volume doesn't fill).
 - Quantization threshold validation (SPEC_10 / arch §13b) is **deferred this cycle** — the serving path is merged fp16/bf16 via vLLM. When it ships it becomes a gate inside `package`, between quantize and push.
 
-**Flags:** `--version`, `--formats`, `--skip-quantize` (push adapters + merged only), `--keep-staging`, `--from-blob`, `--dtype`.
+**Flags:** `--version`, `--formats`, `--skip-quantize` (push adapters + merged only), `--keep-staging`, `--from-blob`, `--dtype`, **`--foundation-only`**, **`--doc-types`**, **`--tenant`**.
+
+The last three must match the `finetune` run that produced the version. `finetune` decides *which* models get built; `package` publishes their locations, so without them a standalone `package` fell back to `foundation_only=False` and all three doc types however finetune had actually run — writing three adapter prefixes and three merged-model prefixes into Blob for artifacts that were never built. An empty Blob prefix later reads as a published model. (Under `all` they come from the finetune flag set; adding them twice is an argparse conflict.)
+
+**`stage_push` publishes only runs that finished.** Manifests are selected by version *and status*: a run left at `training` or marked `failed` has no weights, and flipping it to `published` advertises a Blob path that serving will fetch and find empty.
 
 ## 5. `extract` — command 3 (arch §17)
 
@@ -2173,11 +2189,13 @@ The 11 stages (arch §13) as reusable, individually addressable stage functions 
 - [ ] A completion check covers **every** target it claims to, not just the first: a quantize run that failed halfway must not read as complete on resume.
 - [ ] The staging volume is cleared only after at least one manifest was actually published.
 - [ ] A pod launched without the staging volume attached is refused.
+- [ ] **Cross-type regression evidence carries both sides.** `StageContext` exposes `cross_type_evidence` as `{doc_type: {"current": {...}, "candidate": {...}}}` — the shape `promotion_gate` reads — and it is passed through verbatim. It is a **separate field** from `revalidation_evidence`, which holds per-doc-type booleans for the arch §12 cascade; reusing one field for both produced an entry with no `"current"` key, which the gate correctly rejected as empty. A continued Foundation could then not pass by any input: supply metrics and it read as empty evidence, supply the booleans and it read as no evidence at all.
+- [ ] **A deterministic failure is not retried.** The retry policy exists for transient faults — a throttled Blob read, a pod that dropped. `PipelineError` and `PathError` mean the stage cannot run at all with these inputs (below the day-zero label floor, missing `--input`, a malformed `--out-version`), so a second attempt re-lists everything and fails with the identical message after a pointless backoff. They stop the run immediately, like a gate block.
+- [ ] **A dry-run `rollback-endpoint` does not move the endpoint.** Popping the deployment history before checking `dry_run` meant a preview permanently rewrote the recorded live version: `health_check` reported the previous version while the current one was still serving, and the next real rollback refused with "nothing to roll back to".
 - [ ] A pod leaves no persistent process after completion.
 - [ ] `deploy-endpoint --model vN` updates the serving endpoint; `rollback-endpoint` restores the previous promoted version.
 - [ ] *(deferred)* Quantization thresholds gate `package`; the sweep sequence runs Phase 1 → 2 and promotes the winning config.
 - [ ] A Foundation version bump produces the dependent-adapter re-validation work list and blocks promotion until it passes.
-
 
 ---
 
@@ -2265,8 +2283,14 @@ A test suite + CI that verifies the correctness-critical pieces without GPUs or 
 - [ ] `test_staging_contract` fails if `finetune` can complete without writing a manifest to Blob.
 - [ ] `test_alias_registry` fails when any schema field is missing a `description`, or when an alias string leaks into a rendered prompt.
 - [ ] `test_no_runtime_aliases` fails the moment a serving or inference module imports `common.aliases`.
+- [ ] `tests/test_module_seams.py` passes — **the seam suite**.
 - [ ] `ruff` + `mypy` clean.
 
+**Seam tests: run both sides, never hand-write one of them.** A full-tree review found 34 defects while the suite was entirely green, and every one lived at a boundary between two modules that had each been tested against a hand-written fixture rather than against what its neighbour actually produces. Three tests passed *because* they encoded the bug they were meant to guard: one asserted a review flag string nothing emits, one asserted a dry run moves the endpoint, one asserted a dry-run pipeline can publish.
+
+A unit test proves a module is self-consistent. Only a test that runs both sides proves they agree. The suite covers: every `GATING_METRICS` name is one `score_subset` emits (the defect that made the promotion gate unpassable); the review-queue consumer recognises the flags `list_completeness` emits; every `vllm_serving.yaml` threshold reaches a parameter `extract` accepts; both trainers honour their YAML over helper defaults; the double-annotation sample is not a subset of `train`; and the gate's verdict key differs from the eval report's.
+
+**Fix a pair, test the pair.** The trainer tests are parameterised over *both* trainers because the same class of bug — the validation-split leak, then the argument-ordering override — was twice fixed in one of two and reported as fixed in both.
 
 ---
 
@@ -2387,3 +2411,4 @@ This is the **minimum experiment that tests the architecture's generalisation cl
 - [ ] Pilot run evaluates against all six pilot criteria and names any that fail with its diagnosis path.
 - [ ] Every pilot training run produces a `RunManifest`.
 - [ ] `pilot_report` renders the three experiments as one go/no-go summary.
+

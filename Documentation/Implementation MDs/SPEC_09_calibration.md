@@ -62,7 +62,13 @@ Implement **two independent cross-checks**, either of which flags the list:
 1. **Document-stated count** — a `total claims: N` style field extracted from the document.
 2. **Structure-derived count** — the number of table rows MinerU detected on the relevant pages (recorded in `ocr_meta.json` by SPEC_03).
 
-When the model's row count disagrees with either, **flag the whole list for review regardless of per-value confidence**. Optionally calibrate a separate `row_completeness_confidence` against ground-truth row counts on the validation set.
+When the model's row count disagrees with either, **flag the whole list for review regardless of per-value confidence**.
+
+**The flag format is a contract, so it is a constant.** Flags are `f"{field}{ROW_MISMATCH_SUFFIX}"` — `"claims:row_count_mismatch"` — and `is_row_completeness_flag()` is the only supported way to recognise one. Both are exported from this module and imported by `data_pipeline.labeling.active_learning`, which has to recognise them to honour the "row completeness outranks every confidence score" rule. The consumer previously matched hand-written prefixes (`list:`, `rows:`, `completeness:`) that this module has never emitted, so the override was dead code and an incomplete Loss Run with high per-value confidence was routed to a spot check.
+
+**A stated count is read however the model spelled it.** `8`, `8.0` and `"8"` are the same assertion; accepting only `int` turned the whole stated-count cross-check off whenever the model emitted a JSON string.
+
+**A flagged list is never fully confident.** `row_completeness_confidence` is scored against whichever signal disagrees *most*, not the first one available — preferring the stated count meant a list flagged solely by the structural check (document says 6, model returns 6, OCR saw 9) shipped confidence `1.0` on a list this function had just flagged. Optionally calibrate a separate `row_completeness_confidence` against ground-truth row counts on the validation set.
 
 This matters most for **Loss Runs**, where a missed claim row is both easy to make and expensive to miss.
 

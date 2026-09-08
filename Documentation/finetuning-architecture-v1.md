@@ -822,7 +822,10 @@ This directly answers your question: **yes**, keep a registry entry for every si
       "run_id": "lossrun-adapter-v2.1",
       "run_type": "per_type_adapter",
       "doc_type": "loss_run",
-      "status": "promoted",                        // trained | evaluated | promoted | archived | failed
+      "status": "promoted",                        // training | trained | evaluated | promoted | archived | failed
+                                                   // `training` = manifest written, ms-swift not yet returned.
+                                                   // A crashed run ends at `failed`, never `trained`, so the
+                                                   // registry cannot advertise weights nobody wrote.
       "created_at": "2026-02-14T09:20:00Z",
       "dependencies": {
         "base_model": "qwen3-vl-8b-instruct@<hf_revision_pin>",
@@ -1014,7 +1017,10 @@ Pods are ephemeral, so persistence between `finetune` and `package` (§13c) come
       adapters/foundation/v{n}/
       adapters/{doc_type}/v{n}/
       merged-models/{doc_type|unified}/v{n}/
-      eval-reports/v{n}/
+      eval-reports/v{n}/summary.json            # the scored EvalReport
+      eval-reports/v{n}/{doc_type}/report.json
+      eval-reports/v{n}/gate_decision.json      # the gate's verdict — a separate key,
+                                                # so it cannot overwrite the report it read
 
 The layout deliberately mirrors the Blob layout (§18) so `package` copies rather than translates. It exists because the merged model is ~16 GB and quantization also runs on RunPod — pushing it to Azure at the end of command 1 and pulling it back at the start of command 2 is a 32 GB round trip for nothing.
 
@@ -1259,7 +1265,10 @@ Combined with the `results/{version}/` folder layout you specified, anyone can s
       merged-models/{doc_type|"unified"}/v{n}/            # fp16/bf16
       quantized-models/{doc_type|"unified"}/v{n}/gguf/{fp16|bf16|q8_0|q6_k|q5_k_m|q4_k_m}/
       registry/                                           # training run manifests (see §12)
-      eval-reports/v{n}/
+      eval-reports/v{n}/summary.json            # the scored EvalReport
+      eval-reports/v{n}/{doc_type}/report.json
+      eval-reports/v{n}/gate_decision.json      # the gate's verdict — a separate key,
+                                                # so it cannot overwrite the report it read
       golden-eval-set/                                     # frozen, versioned separately, rarely changes
 
 **Staging vs. Blob:** during a cycle, adapters and the merged model live first on the RunPod **staging volume** (§14) and reach the Blob paths above only when `package` (§13c) runs. The run manifest is written to Blob either way — a staged run is still a recorded run.
