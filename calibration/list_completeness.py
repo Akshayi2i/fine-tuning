@@ -30,6 +30,22 @@ from typing import Any
 
 log = logging.getLogger(__name__)
 
+#: Suffix on every row-completeness review flag, as ``"{field}:row_count_mismatch"``.
+#:
+#: Exported because `data_pipeline.labeling.active_learning` has to recognise
+#: these flags to honour the "row completeness outranks every confidence score"
+#: rule. It previously matched the prefixes "list:", "rows:" and "completeness:",
+#: none of which this module has ever emitted, so the override was dead code and
+#: an incomplete Loss Run with high per-value confidence was routed to a spot
+#: check instead of full review. One constant, imported by both sides, is what
+#: keeps a producer and its consumer from drifting apart in silence.
+ROW_MISMATCH_SUFFIX = ":row_count_mismatch"
+
+
+def is_row_completeness_flag(flag: str) -> bool:
+    """Whether a review flag came from the row-completeness cross-check."""
+    return flag.endswith(ROW_MISMATCH_SUFFIX)
+
 #: A structure-derived count can legitimately differ by a row or two — a
 #: continuation header, a totals row MinerU counted as data. Beyond this, the
 #: disagreement is real.
@@ -73,6 +89,26 @@ class CompletenessSignal:
         }
 
 
+def _as_count(value: object) -> int | None:
+    """A document-stated row count, however the model spelled it.
+
+    ``8``, ``8.0`` and ``"8"`` are the same assertion. Accepting only ``int``
+    meant a perfectly good stated count arriving as a JSON string turned the
+    cross-check off without a word.
+    """
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value) if value.is_integer() else None
+    if isinstance(value, str):
+        text = value.strip().replace(",", "")
+        if text.isdigit():
+            return int(text)
+    return None
+
+
 def check_completeness(
     field_name: str,
     extracted_rows: int,
@@ -114,9 +150,16 @@ def check_completeness(
         # claims against four hallucinated rows fell through to the extracted
         # count itself and reported confidence 1.0 — the pure-hallucination case
         # scoring highest, in a value that ships in the output contract.
-        reference = next(
-            (c for c in (signal.stated_count, signal.detected_rows) if c is not None),
-            max(extracted_rows, 1),
+        # The WORST disagreement, not the first available count. Preferring
+        # stated_count meant a list flagged only by the structural check — the
+        # document stating 6, the model returning 6, OCR having seen 9 — took
+        # stated_count as its reference, found it equal to the extracted count,
+        # and shipped row_completeness_confidence 1.0 on a list the very same
+        # function had just flagged as incomplete.
+        candidates = [c for c in (signal.stated_count, signal.detected_rows) if c is not None]
+        reference = (
+            max(candidates, key=lambda c: abs(c - extracted_rows))
+            if candidates else max(extracted_rows, 1)
         )
         if reference == extracted_rows:
             signal.confidence = 1.0
@@ -203,7 +246,12 @@ def check_document(
             name, len(value),
             # The stated count names one list (SPEC_09 stated_count_field), so it
             # applies only to that one.
-            stated_count=stated if isinstance(stated, int) and name == stated_list_field(doc_type) else None,
+            # `_as_count`, not isinstance(int): the model emits JSON, and a
+            # stated count arriving as the string "8" silently disabled the
+            # whole stated-count cross-check for that document.
+            stated_count=(
+                _as_count(stated) if name == stated_list_field(doc_type) else None
+            ),
             detected_rows=comparable,
         )
     return signals
@@ -219,5 +267,5 @@ def merge_review_flags(
     incomplete.
     """
     flags = list(existing_flags)
-    flags.extend(f"{name}:row_count_mismatch" for name, s in sorted(signals.items()) if s.flagged)
+    flags.extend(f"{name}{ROW_MISMATCH_SUFFIX}" for name, s in sorted(signals.items()) if s.flagged)
     return sorted(set(flags))

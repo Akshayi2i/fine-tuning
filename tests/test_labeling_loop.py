@@ -16,6 +16,7 @@ import pytest
 
 from artifact_registry import paths
 from artifact_registry.blob_client import BlobClient, InMemoryBackend
+from calibration.list_completeness import ROW_MISMATCH_SUFFIX
 from data_pipeline.labeling import active_learning, pre_annotate
 from data_pipeline.labeling.active_learning import (
     SPOT_CHECK_THRESHOLD,
@@ -211,9 +212,34 @@ def test_row_completeness_outranks_every_confidence_score():
     queue = build_queue([
         _Result("low", overall_confidence=0.20, fields=_fields(insured_name=0.20)),
         _Result("incomplete", overall_confidence=0.99, fields=_fields(insured_name=0.99),
-                review_flags=["list:claims_row_count_mismatch"]),
+                # The flag string the pipeline ACTUALLY emits, taken from the
+                # module that emits it. This test used to hand-write
+                # "list:claims_row_count_mismatch" — a string nothing in the
+                # codebase produces — so it passed while the override it guards
+                # was dead code for every real document.
+                review_flags=[f"claims{ROW_MISMATCH_SUFFIX}"]),
     ])
     assert queue.items[0].source_id == "incomplete"
+    assert queue.items[0].routing == "full_review"
+
+
+def test_the_queue_reads_the_flags_list_completeness_actually_emits():
+    """A seam test. Both sides of this contract were written independently and
+    disagreed in silence: the emitter used '{field}:row_count_mismatch', the
+    consumer matched the prefixes 'list:'/'rows:'/'completeness:'. Asserting the
+    real emitted string is what keeps them from drifting apart again."""
+    from calibration.list_completeness import check_completeness, merge_review_flags
+
+    signal = check_completeness("claims", 6, stated_count=8)
+    assert signal.flagged, "a 6-of-8 list should be flagged"
+    emitted = merge_review_flags({"claims": signal}, [])
+    assert emitted, "list_completeness emitted no flag for a flagged list"
+
+    queue = build_queue([
+        _Result("incomplete", overall_confidence=0.99,
+                fields=_fields(insured_name=0.99), review_flags=emitted),
+    ])
+    assert queue.items[0].completeness_flags == sorted(emitted)
     assert queue.items[0].routing == "full_review"
 
 

@@ -30,7 +30,9 @@ request for debugging has exported all of it (master §8).
 from __future__ import annotations
 
 import logging
+from collections.abc import Mapping
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 from artifact_registry.blob_client import BlobClient
@@ -125,20 +127,43 @@ def calibration_for(state: EndpointState, doc_type: str | None) -> Any:
 
 
 def assert_calibration_present(calibration: Any, model_version: str, doc_type: str) -> None:
-    """Refuse to serve uncalibrated confidence.
+    """Refuse to serve without calibration parameters.
 
-    Raw logprob-derived confidence is systematically overconfident. Returning it
-    unlabelled would give review routing a number that looks like a probability,
-    and the routing threshold would then be tuned against a scale that shifts
-    with every model version.
+    Raw logprob confidence is systematically overconfident, and the review
+    routing built on it would send the wrong documents to humans. A mapping is
+    accepted whole — which entry applies is decided after classification, inside
+    `extract` — but an empty one is no calibration at all.
     """
+    if isinstance(calibration, Mapping):
+        if not calibration:
+            raise ServingError(
+                f"no calibration parameters loaded for {model_version}. Fit them against the "
+                "frozen golden eval set and push them before serving (SPEC_09)."
+            )
+        return
     if calibration is None:
         raise ServingError(
-            f"no calibration parameters for {model_version}/{doc_type}. Raw confidence is "
-            "systematically overconfident, and serving it as if calibrated would make every "
-            "downstream review threshold meaningless (SPEC_09). Fit calibration on the validation "
-            "split for this version before serving it."
+            f"no calibration parameters for {model_version}/{doc_type}. Raw logprob confidence is "
+            "systematically overconfident, so serving it would route the wrong documents to "
+            "review (SPEC_09)."
         )
+
+
+def _adapter_exists(adapter_path: str, client: BlobClient) -> bool:
+    """Whether an adapter directory actually holds weights.
+
+    A staging path lives on the pod's volume and a published one in Blob, so
+    both are checked: the marker file PEFT always writes is what distinguishes a
+    real adapter from a prefix nobody ever wrote to.
+    """
+    marker = f"{adapter_path.rstrip('/')}/adapter_config.json"
+    if adapter_path.startswith("/"):
+        return Path(marker).exists()
+    try:
+        return bool(client.exists(marker))
+    except Exception:  # noqa: BLE001 - an unreachable store is not a present adapter
+        log.warning("could not confirm %s exists; treating it as absent", adapter_path)
+        return False
 
 
 def build_adapter_map(model_version: str, client: BlobClient) -> dict[str, str]:
@@ -159,7 +184,13 @@ def build_adapter_map(model_version: str, client: BlobClient) -> dict[str, str]:
         except (RegistryQueryError, KeyError, FileNotFoundError):
             continue
         adapter = resolved.get("type_adapter")
-        if adapter:
+        # `type_adapter` is constructed unconditionally by resolve_model_version
+        # whenever a doc_type is passed — it is a path, not evidence that
+        # anything was trained. Trusting it mapped all three types on a
+        # --foundation-only build, so vLLM was handed a LoRARequest for a
+        # directory that does not exist and EVERY request failed, instead of
+        # serving Foundation-only with a routing flag as documented above.
+        if adapter and _adapter_exists(adapter, client):
             adapter_map[doc_type] = adapter
 
     if not adapter_map:
@@ -282,6 +313,30 @@ def build_request(payload: dict[str, Any]) -> ExtractionRequest:
     )
 
 
+def serving_thresholds() -> dict[str, Any]:
+    """The tuneable thresholds, from configs/inference/vllm_serving.yaml.
+
+    Each key was present in that file and read by no code, so an operator could
+    edit it, redeploy, and see no change. Only keys `extract` accepts are
+    returned, so an unknown one in the YAML is ignored rather than crashing a
+    cold start.
+    """
+    config = serving_config()
+    routing = config.get("routing") or {}
+    confidence = config.get("confidence") or {}
+    long_documents = config.get("long_documents") or {}
+
+    tuning: dict[str, Any] = {}
+    for key, value in (
+        ("classifier_threshold", routing.get("classifier_confidence_threshold")),
+        ("review_threshold", confidence.get("review_threshold")),
+        ("page_threshold", long_documents.get("page_threshold")),
+    ):
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            tuning[key] = value
+    return tuning
+
+
 def handler(event: dict[str, Any], state: EndpointState) -> dict[str, Any]:
     """The RunPod Serverless entrypoint. One request in, the output contract out.
 
@@ -290,23 +345,40 @@ def handler(event: dict[str, Any], state: EndpointState) -> dict[str, Any]:
     caller learns nothing about which of its inputs was wrong.
     """
     payload = event.get("input") or {}
-    log.info("request %s", safe_log_payload(payload))
-
-    if not state.ready:
-        return {"error": "endpoint is not warm", "retryable": True}
 
     try:
+        # Inside the try. `safe_log_payload` iterates the payload, so an `input`
+        # that is not a JSON object — a bare string, a list, a number — raised
+        # AttributeError straight out of the handler, and RunPod returned an
+        # opaque platform error saying nothing about which input was wrong. That
+        # is the exact failure this handler exists to prevent.
+        log.info("request %s", safe_log_payload(payload))
+
+        if not state.ready:
+            return {"error": "endpoint is not warm", "retryable": True}
+
         request = build_request(payload)
-        calibration = calibration_for(state, request.known_doc_type)
+        # The whole calibration map is handed to `extract`, which resolves the
+        # right one once the classifier has said what the document is.
+        # Resolving here from `request.known_doc_type` meant `.get("")` for
+        # every request that did not name its own doc_type — which is every
+        # classification-driven request, the endpoint's entire purpose — and
+        # `assert_calibration_present` then refused it before extraction ran.
         assert_calibration_present(
-            calibration, state.model_version, request.known_doc_type or "unknown"
+            state.calibration, state.model_version, request.known_doc_type or "any"
         )
+        # The thresholds come from configs/inference/vllm_serving.yaml. They
+        # were declared there and read by nothing, so raising review_threshold
+        # and redeploying changed no behaviour at all — the hardcoded defaults
+        # inside `extract` won every time, silently.
+        tuning = serving_thresholds()
         result: ExtractionResult = extract(
             request,
             state.model,
             state.classifier,
-            calibration,
+            state.calibration,
             adapter_map=state.adapter_map,
+            **tuning,
         )
     except ServingError as exc:
         # The message names what was wrong with the request; it never echoes the

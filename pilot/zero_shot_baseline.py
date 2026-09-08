@@ -130,7 +130,13 @@ class BaselineReport:
             score * self.documents_by_doc_type.get(doc_type, 0)
             for doc_type, score in self.by_doc_type.items()
         )
-        total = sum(self.documents_by_doc_type.values())
+        # Divided by every document PRESENTED, not just the scored ones. A
+        # document the pipeline refused contributes zero — it was measured and
+        # it failed. Averaging over successes alone made 8 failures out of 10
+        # read as field F1 1.0, band `strong_prior`, proceed=True, on a base
+        # model that returned nothing usable for most of the corpus.
+        scored_total = sum(self.documents_by_doc_type.values())
+        total = max(scored_total, self.documents)
         return weighted / total if total else 0.0
 
     @property

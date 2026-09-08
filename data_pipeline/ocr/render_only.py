@@ -87,9 +87,17 @@ def render_document(
     env = current_environment(device, strict=device == "cuda")
     meta_key = paths.ocr_meta(doc_type, source_id, tenant_id)
 
-    if not force and client.exists(meta_key):
+    was_ocred = False
+    existing: dict[str, Any] = {}
+    if client.exists(meta_key):
         existing = client.read_json(meta_key)
-        if existing.get("resolution_cap_px") == cap and existing.get("render_only"):
+        # An OCR'd document lacks `render_only`, so its images are re-rendered
+        # rather than assumed present — but its metadata is preserved, not
+        # replaced. Overwriting it discarded table_row_counts and flipped the
+        # document to image_only, which silently stopped the row-completeness
+        # cross-check from flagging it while its page_*.md sat there unread.
+        was_ocred = not existing.get("render_only")
+        if not force and not was_ocred and existing.get("resolution_cap_px") == cap:
             log.info("skipping %s: already rendered at %dpx", source_id, cap)
             return existing
 
@@ -107,15 +115,26 @@ def render_document(
         "doc_type": doc_type,
         "tenant_id": paths._tenant(tenant_id),
         "page_count": len(images),
-        "render_only": True,          # no OCR text exists for this document
+        # False for a document that was OCR'd: its markdown still exists, so
+        # calling it image_only would be a lie the whole downstream pipeline
+        # acts on — pre_annotate would stop passing page_texts and
+        # list_completeness would lose its detected-row cross-check.
+        "render_only": not was_ocred,
         "mineru_version": env.mineru_version,
         "ocr_device": env.device,
         "preprocessing_date": datetime.now(UTC).isoformat(),
         "resolution_cap_px": cap,
         "source_checksum": raw_meta.get("checksum_sha256"),
-        "table_row_counts": {},       # unavailable without OCR
-        "failed_pages": [],
+        # Preserved. They cannot be recomputed without re-running OCR.
+        "table_row_counts": existing.get("table_row_counts", {}) if was_ocred else {},
+        "failed_pages": existing.get("failed_pages", []) if was_ocred else [],
     }
+    if was_ocred:
+        log.warning(
+            "%s was OCR'd; re-rendered its page images at %dpx and kept its OCR metadata. "
+            "It stays an ocr_plus_image document — rendering does not remove text that exists.",
+            source_id, cap,
+        )
     client.write_json(meta_key, meta)
     log.info("rendered %s: %d pages at %dpx (no OCR)", source_id, len(images), cap)
     return meta

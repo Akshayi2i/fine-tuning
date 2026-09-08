@@ -31,7 +31,7 @@ from typing import Any
 
 from artifact_registry import paths
 from artifact_registry.blob_client import BlobClient, ImmutableBlobError, for_ingestion
-from common.constants import ACTIVE_DOC_TYPES
+from common.constants import ACTIVE_DOC_TYPES, UNCLASSIFIED
 from common.ids import build_source_id, is_valid_source_id, parse_source_id
 
 log = logging.getLogger(__name__)
@@ -39,7 +39,10 @@ log = logging.getLogger(__name__)
 #: Bucket for documents whose type is not yet known. The classifier resolves
 #: them later; forcing a guess at ingest would bake a mistake into the source_id,
 #: which is the one identifier everything downstream joins on.
-UNCLASSIFIED = "unclassified"
+#: Re-exported for the CLI and callers; defined in common.constants so
+#: common/ids.py and artifact_registry/paths.py can honour it too — they
+#: sit below data_pipeline and cannot import from it.
+UNCLASSIFIED = UNCLASSIFIED
 
 CHUNK = 1 << 20
 

@@ -174,10 +174,6 @@ def process_document(
         )
 
     ocr_meta = {
-        # Distinguishes a real OCR pass from the stored meta returned on a skip,
-        # so process_batch can report "0 processed, 3 unchanged" instead of
-        # claiming work it did not do.
-        "_reprocessed": True,
         "source_id": source_id,
         "doc_type": doc_type,
         "tenant_id": paths._tenant(tenant_id),
@@ -192,6 +188,12 @@ def process_document(
         "failed_pages": [p.page_number for p in pages if p.ocr_failed],
     }
     client.write_json(meta_key, ocr_meta)
+    # The marker distinguishes a real OCR pass from the stored metadata returned
+    # on a skip, so it is added to the RETURNED copy only. Writing it into blob
+    # meant the skip path read it straight back and process_batch filed every
+    # skipped document under "processed" — a rerun that did no OCR at all still
+    # reported "N processed, 0 skipped".
+    ocr_meta = {**ocr_meta, "_reprocessed": True}
     log.info("processed %s: %d pages on %s at %dpx", source_id, len(pages), env.device, cap)
     return ocr_meta
 
@@ -235,11 +237,21 @@ def find_unprocessed(client: BlobClient, doc_type: str, tenant_id: str | None = 
         for key in client.list(f"raw-documents/{tenant}/{doc_type}/")
         if key.endswith("metadata.json")
     }
-    done = {
-        key.split("/")[3]
-        for key in client.list(f"processed/{tenant}/{doc_type}/")
-        if key.endswith("ocr_meta.json")
-    }
+    # A render-only ocr_meta.json lives at the same key but records no OCR at
+    # all. `process_document` already refuses to skip those; counting them as
+    # done here filtered them out of the work list, so `--all-unprocessed`
+    # printed "nothing to process" and no page_*.md was ever produced for a
+    # document that had only been rendered.
+    done = set()
+    for key in client.list(f"processed/{tenant}/{doc_type}/"):
+        if not key.endswith("ocr_meta.json"):
+            continue
+        try:
+            if client.read_json(key).get("render_only"):
+                continue
+        except Exception:  # noqa: BLE001 - unreadable metadata is not "done"
+            continue
+        done.add(key.split("/")[3])
     return sorted(ingested - done)
 
 

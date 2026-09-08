@@ -243,7 +243,12 @@ def score_subset(
     scored: Sequence[tuple[dict[str, Any], dict[str, Any], dict[str, Any]]],
 ) -> SubsetReport:
     """Score one doc type × subset from ``(expected, got, metadata)`` triples."""
-    from evaluation.metrics.coverage_metrics import score_lob, score_schema_validity
+    from evaluation.metrics.confusable import aggregate_misattribution, score_misattribution
+    from evaluation.metrics.coverage_metrics import (
+        expected_calibration_error,
+        score_lob,
+        score_schema_validity,
+    )
     from evaluation.metrics.field_accuracy import score_all_list_fields, score_fields
     from training.vit_gate import classify_error
 
@@ -252,10 +257,36 @@ def score_subset(
         return report
 
     accuracies, exacts, recalls, f1s = [], [], [], []
+    # Both of these are GATING_METRICS with require_all_measured=True, and
+    # neither was ever computed here — so the gate blocked every candidate that
+    # ever reached it, permanently, with no override. `score_misattribution` had
+    # zero production callers; ECE had none at all. Computing them is the fix:
+    # dropping them from the gate would have made it pass by no longer checking
+    # the two things this project exists to get right.
+    misattributions = []
+    confidences: list[float] = []
+    correctness: list[bool] = []
+
     for expected, got, metadata in scored:
         accuracy = score_fields(expected, got)
         accuracies.append(accuracy.normalized_match)
         exacts.append(accuracy.exact_match)
+
+        misattributions.append(
+            score_misattribution(
+                expected, got, doc_type, source_id=metadata.get("source_id", "")
+            )
+        )
+
+        # ECE pairs each field's stated confidence with whether it was right.
+        # Fields carrying no confidence are skipped rather than assumed correct
+        # or assumed zero — an unmeasured field is not evidence either way.
+        stated = metadata.get("field_confidence") or {}
+        for result in accuracy.results:
+            score = stated.get(result.field_path)
+            if isinstance(score, (int, float)) and not isinstance(score, bool):
+                confidences.append(float(score))
+                correctness.append(bool(result.correct))
 
         for result in accuracy.failures():
             report.error_records.append({
@@ -273,6 +304,7 @@ def score_subset(
             f1s.append(list_report.f1)
 
     lob = score_lob([(e, g) for e, g, _m in scored])
+    misattribution = aggregate_misattribution(misattributions)
 
     # An ACORD document with no recorded form has no selectable schema. Counting
     # it as invalid keeps the run going and does not flatter the result; letting
@@ -308,6 +340,16 @@ def score_subset(
         "schema_validity_rate": validity_rate,
         "lob_detection_accuracy": lob.overall,
         "lob_accuracy_by_value": lob.accuracy_by_value(),
+        # A gating metric in its own right (arch §15): returning the certificate
+        # holder's name for insured_name is the failure the canonical mapping
+        # exists to prevent, and it is invisible in an aggregate field score.
+        "confusable_misattribution_rate": misattribution.rate,
+        # Deliberately absent — not zero — when no field carried a confidence.
+        # Zero is the best possible ECE, so defaulting to it would report
+        # perfect calibration for a run where calibration was never measured.
+        "ece_confidence": (
+            expected_calibration_error(confidences, correctness) if confidences else None
+        ),
     }
     report.metrics = {k: v for k, v in report.metrics.items() if v is not None}
     return report

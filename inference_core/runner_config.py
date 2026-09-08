@@ -57,7 +57,12 @@ class RunnerConfig:
         """
         import hashlib
 
-        payload = f"{self.backend}|{self.temperature}|{self.top_p}|{self.max_new_tokens}|{self.seed}"
+        from common.config import resolution_cap_px
+
+        payload = (
+            f"{self.backend}|{self.temperature}|{self.top_p}|{self.max_new_tokens}"
+            f"|{self.seed}|{resolution_cap_px()}"
+        )
         return hashlib.sha256(payload.encode()).hexdigest()[:12]
 
 

@@ -32,7 +32,7 @@ import re
 from pathlib import PurePosixPath
 from typing import Final, Literal
 
-from common.constants import ACTIVE_DOC_TYPES
+from common.constants import ACTIVE_DOC_TYPES, UNCLASSIFIED
 
 AdapterKind = Literal["foundation", "doc_type"]
 
@@ -91,6 +91,11 @@ def _version(version: str) -> str:
 def _doc_type(doc_type: str, *, allow_unified: bool = False) -> str:
     dt = doc_type.strip().lower()
     if allow_unified and dt == UNIFIED:
+        return dt
+    # Raw documents may sit under `unclassified/` before their type is known;
+    # nothing downstream of ingestion ever asks for that prefix, so it is
+    # accepted here rather than blocking the documented holding bucket.
+    if dt == UNCLASSIFIED:
         return dt
     if dt not in ACTIVE_DOC_TYPES:
         allowed = list(ACTIVE_DOC_TYPES) + ([UNIFIED] if allow_unified else [])
@@ -250,6 +255,19 @@ def calibration_params(version: str, doc_type: str) -> str:
 def eval_report(version: str, doc_type: str | None = None) -> str:
     base = _join("eval-reports", _version(version))
     return _join(base, _doc_type(doc_type), "report.json") if doc_type else _join(base, "summary.json")
+
+
+def gate_decision(version: str) -> str:
+    """Where the promotion gate's own verdict is written.
+
+    Deliberately NOT ``eval_report(version)``. The gate used to write its thin
+    decision dict over ``eval-reports/{v}/summary.json`` — the key
+    ``EvalReport.as_dict()`` writes — destroying ``by_doc_type`` and every error
+    record. ``vit_gate.evaluate_from_report`` then read zero image-only and zero
+    scanned documents and returned ``insufficient_data`` for ever, so the ViT
+    escalation decision could never be made on real evidence again.
+    """
+    return _join("eval-reports", _version(version), "gate_decision.json")
 
 
 def golden_eval_set_dir() -> str:

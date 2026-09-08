@@ -232,12 +232,16 @@ def _infer_key_fields(rows: list[Any]) -> list[str]:
     """
     if not rows:
         return []
-    for candidate in ("claim_number", "policy_number", "coverage_type", "location_number"):
-        if candidate in rows[0]:
-            return [candidate]
+    # The non-dict guard comes FIRST. `candidate in rows[0]` was evaluated
+    # before it, so a list of scalars — the exact case `_row_key` was hardened
+    # for — raised TypeError from inside the scorer and took the whole eval run
+    # down with it.
     first = next((r for r in rows if isinstance(r, dict)), None)
     if first is None:
         return []
+    for candidate in ("claim_number", "policy_number", "coverage_type", "location_number"):
+        if candidate in first:
+            return [candidate]
     return sorted(k for k, v in first.items() if not isinstance(v, _CONTAINER_TYPES))
 
 

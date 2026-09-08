@@ -48,8 +48,16 @@ _ORG_ABBREV = {
     "bros": "brothers", "svcs": "services", "svc": "service", "sys": "systems",
     "tech": "technologies", "grp": "group", "ent": "enterprises",
     "constr": "construction", "dev": "development", "mgmt": "management",
-    "prop": "properties", "ins": "insurance", "&": "and",
+    "prop": "properties", "ins": "insurance",
+    # NOTE: "&" is handled in normalize_entity_name before punctuation is
+    # stripped. It cannot live here — by the time these tokens are consulted,
+    # _PUNCT has already removed it.
 }
+
+#: Two-digit years below this resolve into the 1900s under Python's `%y`
+#: pivot. Policy and loss-run dates are contemporary — a two-digit year is
+#: always this century or the next — so anything under it is moved forward.
+_CENTURY_PIVOT = 2000
 
 _DATE_FORMATS = (
     "%Y-%m-%d", "%m/%d/%Y", "%m/%d/%y", "%d/%m/%Y", "%m-%d-%Y", "%d-%m-%Y",
@@ -94,9 +102,13 @@ def normalize_date(value: Any) -> str | None:
             parsed = datetime.strptime(raw, fmt).date()
         except ValueError:
             continue
-        # Two-digit years: assume the 2000s, which is right for policy dates.
-        if parsed.year < 100:
-            parsed = parsed.replace(year=parsed.year + 2000)
+        # Two-digit years. `%y` already resolved 69 -> 1969 and 68 -> 2068 via
+        # Python's POSIX pivot, so `parsed.year < 100` never fired and the
+        # comment described something the code did not do. Insurance dates do
+        # not reach back to the 1960s, so anything before the pivot is pulled
+        # forward a century — `01/02/69` is 2069, not 1969.
+        if "%y" in fmt and parsed.year < _CENTURY_PIVOT:
+            parsed = parsed.replace(year=parsed.year + 100)
         return parsed.isoformat()
     return None
 
@@ -155,7 +167,11 @@ def normalize_entity_name(value: Any) -> str | None:
     """
     if value is None:
         return None
-    text = _PUNCT.sub(" ", _base(value))
+    # "&" is expanded first, because _PUNCT strips it: the mapping in
+    # _ORG_ABBREV could never fire, so `Smith & Jones Inc` did not match
+    # `Smith and Jones Inc` — a very common pair on these documents, and one
+    # that under-counted a gating metric every time it appeared.
+    text = _PUNCT.sub(" ", _base(value).replace("&", " and "))
     tokens = [_ORG_ABBREV.get(t, t) for t in text.split()]
     while tokens and tokens[-1] in _ORG_SUFFIXES:
         tokens.pop()

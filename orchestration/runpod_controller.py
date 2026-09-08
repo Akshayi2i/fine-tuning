@@ -409,11 +409,16 @@ class RunPodController:
                 "promoted version, so it needs a history; on a fresh process, read it from the "
                 "registry index rather than assuming one exists."
             )
-        self._endpoint_versions.pop()
-        target = self._endpoint_versions[-1]
+        # The history is read, not popped, until the rollback actually happens.
+        # Popping first meant a preview permanently rewrote the recorded live
+        # version: health_check then reported the old version while the new one
+        # was still serving, and a subsequent real rollback refused with
+        # "nothing to roll back to" — the same bug deploy_endpoint was fixed for.
+        target = self._endpoint_versions[-2]
         log.warning("rolling serving endpoint back to %s", target)
         if dry_run:
             return target
+        self._endpoint_versions.pop()
         raise NotImplementedError("wire the endpoint rollback alongside deploy_endpoint")
 
     def health_check(self) -> dict[str, Any]:

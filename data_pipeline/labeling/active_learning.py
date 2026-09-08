@@ -32,6 +32,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from artifact_registry.blob_client import BlobClient
+from calibration.list_completeness import is_row_completeness_flag
 from common.constants import ACTIVE_DOC_TYPES, DEFAULT_REVIEW_CONFIDENCE_THRESHOLD
 
 log = logging.getLogger(__name__)
@@ -173,9 +174,14 @@ def build_queue_item(
         if confidence is None or confidence < review_threshold:
             low.append((path, float(confidence or 0.0)))
 
+    # `is_row_completeness_flag`, not a hand-written prefix list. The prefixes
+    # this used to match ("list:", "rows:", "completeness:") are emitted by
+    # nothing, so the documented "row completeness outranks every confidence
+    # score" override never once fired: a Loss Run where MinerU counted 8 table
+    # rows and the model returned 6, every value at 0.99, was routed to a spot
+    # check and sorted to the BACK of the queue.
     completeness = [
-        flag for flag in (result.review_flags or [])
-        if flag.startswith(("list:", "rows:", "completeness:"))
+        flag for flag in (result.review_flags or []) if is_row_completeness_flag(flag)
     ]
 
     return QueueItem(

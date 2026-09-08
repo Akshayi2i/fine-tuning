@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import json
 import logging
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -201,11 +202,27 @@ def _generate_once(
     return extraction, spans, result.latency_ms
 
 
+def _calibration_for(
+    calibration: CalibrationParams | Mapping[str, CalibrationParams],
+    doc_type: str | None,
+) -> CalibrationParams:
+    """Pick this document's calibration once its type is known."""
+    if not isinstance(calibration, Mapping):
+        return calibration
+    if doc_type and doc_type in calibration:
+        return calibration[doc_type]
+    raise PipelineError(
+        f"no calibration parameters for doc_type {doc_type!r}; the endpoint holds calibration for "
+        f"{sorted(calibration)}. Confidence would otherwise be served raw, which is the one thing "
+        "apply_calibration exists to prevent (SPEC_09)."
+    )
+
+
 def extract(
     request: ExtractionRequest,
     model: LoadedModel,
     classifier: Classifier,
-    calibration: CalibrationParams,
+    calibration: CalibrationParams | Mapping[str, CalibrationParams],
     *,
     adapter_map: dict[str, Any] | None = None,
     classifier_threshold: float = 0.70,
@@ -225,6 +242,14 @@ def extract(
         confidence_threshold=classifier_threshold,
         adapter_map=adapter_map or {},
     )
+
+    # Calibration is per document type, and which type this is only becomes
+    # known once the classifier has run — so it is selected here, not by the
+    # caller. The endpoint used to resolve it from the caller-supplied
+    # `doc_type`, which is absent on every classification-driven request; the
+    # lookup fell through to `.get("")` and the request was refused before
+    # extraction ever ran.
+    calibration = _calibration_for(calibration, route_.doc_type)
 
     # --- page routing, for long documents only -----------------------------
     plan = plan_pages(request.page_texts, page_threshold=page_threshold) if request.page_texts else None

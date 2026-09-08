@@ -16,7 +16,7 @@ from __future__ import annotations
 import re
 from typing import NamedTuple
 
-from common.constants import ACTIVE_DOC_TYPES
+from common.constants import ACTIVE_DOC_TYPES, UNCLASSIFIED
 
 #: Width of the zero-padded index. Four digits carries 9,999 documents per type;
 #: the parser accepts more, so passing this is not a silent failure.
@@ -40,8 +40,16 @@ class ParsedSourceId(NamedTuple):
 def build_source_id(doc_type: str, index: int, *, width: int = INDEX_WIDTH) -> str:
     """``("acord", 1)`` -> ``"acord_0001"``."""
     doc_type = doc_type.lower().strip()
-    if doc_type not in ACTIVE_DOC_TYPES:
-        raise SourceIdError(f"unknown doc_type {doc_type!r}; active types: {ACTIVE_DOC_TYPES}")
+    # UNCLASSIFIED is a real bucket, not a typo. Documents whose type is not yet
+    # known park there rather than having a guess baked into the source_id —
+    # the key everything downstream joins on. Rejecting it here made the
+    # documented `--doc-type unclassified` mode fail one document at a time
+    # with a message that read like bad input.
+    if doc_type not in ACTIVE_DOC_TYPES and doc_type != UNCLASSIFIED:
+        raise SourceIdError(
+            f"unknown doc_type {doc_type!r}; active types: {ACTIVE_DOC_TYPES} "
+            f"(or {UNCLASSIFIED!r} while the type is still unknown)"
+        )
     if index < 0:
         raise SourceIdError(f"index must be non-negative, got {index}")
     return f"{doc_type}_{index:0{width}d}"

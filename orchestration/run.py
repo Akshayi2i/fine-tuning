@@ -151,6 +151,21 @@ def _add_package_flags(parser: argparse.ArgumentParser, *, version_required: boo
     parser.add_argument("--from-blob", dest="from_blob", action="store_true",
                         help="artifacts were pushed with --push-adapters; read them from Blob")
     parser.add_argument("--dtype", default=defaults().get("dtype", "fp16"), choices=["fp16", "bf16"])
+    if version_required:
+        # Standalone `package` only — under `all` these come from the finetune
+        # flags and adding them twice is an argparse conflict.
+        #
+        # `finetune` decides which models get built; `package` publishes their
+        # locations. Without these, a standalone `package` fell back to
+        # foundation_only=False and all three doc types however finetune had
+        # run, writing Blob prefixes for adapters and merged models that were
+        # never built — an empty prefix that later reads as a published model.
+        parser.add_argument("--foundation-only", dest="foundation_only", action="store_true",
+                            help="must match the finetune run that produced this version")
+        parser.add_argument("--doc-types", dest="doc_types", nargs="+",
+                            default=list(ACTIVE_DOC_TYPES),
+                            help="must match the finetune run that produced this version")
+        parser.add_argument("--tenant", default=None)
 
 
 def build_parser() -> argparse.ArgumentParser:

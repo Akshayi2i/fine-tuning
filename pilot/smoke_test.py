@@ -140,7 +140,11 @@ class SmokeReport:
     def failures(self) -> list[str]:
         reasons: list[str] = []
         if not self.loss_target_met:
-            best = min(self.loss_curve) if self.loss_curve else None
+            # Sliced to the window the message names. `min` over the whole curve
+            # printed a value from epoch 4 as 'best in that window' — evidence
+            # that contradicted the verdict it was supporting.
+            window = self.loss_curve[:LOSS_EPOCH_DEADLINE]
+            best = min(window) if window else None
             reasons.append(
                 f"training loss did not fall below {MAX_LOSS} within {LOSS_EPOCH_DEADLINE} epoch(s) "
                 f"(best in that window: {best}). The model cannot memorise five documents, so "

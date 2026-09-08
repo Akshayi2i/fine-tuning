@@ -149,13 +149,20 @@ def build_swift_config(
         "eval_steps": evaluation["eval_steps"],
         "save_steps": evaluation["save_steps"],
         "save_total_limit": evaluation["save_total_limit"],
-        "load_best_model_at_end": evaluation["load_best_model_at_end"],
-        "metric_for_best_model": evaluation["metric_for_best_model"],
+        # These come from the helper above, which now receives them from the
+        # YAML. Setting them here as well and letting the helper's unpack
+        # override them is the ordering bug that was fixed in train_adapter and
+        # missed here — the same fixed-one-of-two mistake as the val-leak.
         # Configured in YAML and previously read by nothing, so a run trained
         # every step regardless of a field-F1 plateau. `swift_early_stopping_args`
         # is the single definition of these; calling it keeps the callback's
         # contract and the launched run in agreement.
-        **swift_early_stopping_args(int(evaluation.get("early_stopping_patience", 2))),
+        **swift_early_stopping_args(
+            int(evaluation.get("early_stopping_patience", 2)),
+            metric_for_best_model=evaluation["metric_for_best_model"],
+            greater_is_better=bool(evaluation.get("greater_is_better", True)),
+            load_best_model_at_end=bool(evaluation["load_best_model_at_end"]),
+        ),
         "logging_steps": cfg["logging"]["logging_steps"],
         "seed": cfg["seed"],
         "deepspeed": f"configs/deepspeed/{deepspeed}.json",
@@ -325,7 +332,16 @@ def train_foundation(
 
 #: What a registry run-id looks like: `foundation-v3`, `acord-v2`. A value of
 #: this shape passed as a checkpoint path is a mistake every time.
-RUN_ID_SHAPE = re.compile(r"^(foundation|policy|lossrun|acord)-v\d+$")
+#: The run-ids this codebase actually generates: dotted versions
+#: (`foundation-v2.1`, which paths.py explicitly accepts) and the
+#: `{doc_type}-adapter-v{n}` form train_adapter emits. Requiring an
+#: undotted single-lineage id let every real adapter id and every point
+#: release past the guard, into ms-swift as resume_from_checkpoint, where
+#: it found no directory, trained from base, and recorded a lineage that
+#: never happened.
+RUN_ID_SHAPE = re.compile(
+    r"^(foundation|policy|lossrun|acord)(-adapter)?-v\d+(\.\d+)*$", re.IGNORECASE
+)
 
 
 def assert_checkpoint_path(continue_from: str) -> None:

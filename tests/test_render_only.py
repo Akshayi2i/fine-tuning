@@ -127,16 +127,25 @@ def test_a_document_that_renders_no_pages_is_an_error(seeded, monkeypatch):
 
 def test_an_ocr_meta_from_the_ocr_path_is_not_mistaken_for_a_render(seeded, two_pages):
     """An OCR'd document lacks `render_only`, so the skip check must re-render
-    rather than assume the images are already there."""
+    rather than assume the images are already there — but re-rendering must not
+    discard what OCR produced. Writing a fresh render-only meta over it dropped
+    `table_row_counts` and marked the document image_only while its page_*.md
+    still existed, which silently switched off the row-completeness cross-check
+    and stopped pre_annotate from passing any OCR text."""
     from common.config import resolution_cap_px
 
     seeded.write_json(paths.ocr_meta("policy", "policy_0001"), {
         "source_id": "policy_0001", "page_count": 2,
         "resolution_cap_px": resolution_cap_px(),
+        "table_row_counts": {"1": 8},
     })
     meta = render_document("policy", "policy_0001", seeded)
-    assert meta["render_only"] is True
+
+    # The images were produced — the original point of this test.
     assert seeded.exists(paths.processed_page("policy", "policy_0001", 1, "png"))
+    # And the OCR record survived intact.
+    assert meta["render_only"] is False, "an OCR'd document was downgraded to image_only"
+    assert meta["table_row_counts"] == {"1": 8}, "OCR row counts were discarded"
 
 
 @pytest.fixture(autouse=True)

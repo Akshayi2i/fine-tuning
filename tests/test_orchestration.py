@@ -462,10 +462,58 @@ def test_resuming_at_merge_does_not_retrain(client, controller):
 # --------------------------------------------------------------------------
 
 
+def _mark_trained(client, version: str) -> None:
+    """Flip every run for a version to the status real training would leave.
+
+    `stage_push` publishes only runs that actually finished, so a fixture that
+    never launched anything has to say so explicitly rather than relying on a
+    default that once let crashed runs be published.
+    """
+    from registry_utils.query_registry import get, list_runs
+    from registry_utils.write_run_manifest import write_manifest
+
+    for row in list_runs(client):
+        if row.get("run_id", "").endswith(version):
+            manifest = get(row["run_id"], client)
+            manifest.status = "trained"
+            write_manifest(manifest, client)
+
+
+def test_package_will_not_publish_a_run_that_never_finished(client, controller):
+    """`launch_and_record` marks a crashed run "failed" precisely so the registry
+    never claims weights it never wrote. Selecting manifests by run_id alone
+    undid that: an adapter that OOM'd at step 40 was flipped to "published" with
+    a Blob path serving would then fetch and find empty."""
+    from registry_utils.query_registry import get
+    from registry_utils.write_run_manifest import write_manifest
+
+    seed_corpus(client)
+    ctx = make_context(client, controller)
+    run_stages(ctx, stages_for("finetune"), command="finetune")
+    _mark_trained(client, "v1")
+
+    # The lossrun adapter died on the pod.
+    crashed = get("lossrun-adapter-v1", client)
+    crashed.status = "failed"
+    write_manifest(crashed, client)
+
+    package_ctx = make_context(client, controller)
+    assert run_stages(package_ctx, stages_for("package"), command="package").ok
+
+    assert get("lossrun-adapter-v1", client).artifacts.status == "staged",         "a failed run was published"
+    assert get("policy-adapter-v1", client).artifacts.status == "published",         "the runs that did finish should still publish"
+
+
 def test_package_pushes_all_three_artifact_classes_and_publishes(client, controller):
     seed_corpus(client)
     ctx = make_context(client, controller)
     run_stages(ctx, stages_for("finetune"), command="finetune")
+
+    # The DAG runs dry by default, so ms-swift is never launched and every
+    # manifest is honestly left at status "training". Real training flips it to
+    # "trained" via launch_and_record; package refuses anything else, so the
+    # fixture has to reflect a run that actually finished.
+    _mark_trained(client, "v1")
 
     package_ctx = make_context(client, controller)
     report = run_stages(package_ctx, stages_for("package"), command="package")
@@ -632,8 +680,16 @@ def test_rollback_needs_somewhere_to_roll_back_to(controller):
     controller._endpoint_versions.extend(["v1", "v2"])
     assert controller.health_check()["deployed_version"] == "v2"
 
+    # A preview names the target without moving anything. Asserting the live
+    # version had CHANGED after a dry run is what let the bug stand: rollback
+    # popped the history before checking dry_run, so health_check reported v1
+    # while v2 was still serving and the next real rollback refused with
+    # "nothing to roll back to".
     assert controller.rollback_endpoint(dry_run=True) == "v1"
-    assert controller.health_check()["deployed_version"] == "v1"
+    assert controller.health_check()["deployed_version"] == "v2",         "a dry run moved the endpoint"
+
+    # And it stays repeatable, because nothing was consumed.
+    assert controller.rollback_endpoint(dry_run=True) == "v1"
 
 
 # --------------------------------------------------------------------------

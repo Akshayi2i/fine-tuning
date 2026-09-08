@@ -117,7 +117,13 @@ def double_annotation_sample(
 
     selected = []
     for source_id in sorted(set(source_ids)):
-        digest = hashlib.sha256(f"{seed}:{source_id}".encode()).digest()
+        # Salted with "double:", because this was byte-for-byte the hash and
+        # default seed the corpus splitter uses. Selecting on position < 0.15
+        # while train is position < 0.70 made every sampled document a train
+        # document by construction — so the agreement score never measured
+        # label noise on the val/test population whose ceiling it is meant
+        # to establish.
+        digest = hashlib.sha256(f"{seed}:double:{source_id}".encode()).digest()
         position = int.from_bytes(digest[:8], "big") / float(1 << 64)
         if position < rate:
             selected.append(source_id)

@@ -149,7 +149,12 @@ def build_adapter_config(
         # The helper is unpacked FIRST so the explicit keys below win. Unpacking
         # it last silently overrode this config's metric_for_best_model and
         # load_best_model_at_end with the helper's own defaults.
-        **swift_early_stopping_args(int(evaluation.get("early_stopping_patience", 2))),
+        **swift_early_stopping_args(
+            int(evaluation.get("early_stopping_patience", 2)),
+            metric_for_best_model=evaluation["metric_for_best_model"],
+            greater_is_better=bool(evaluation.get("greater_is_better", True)),
+            load_best_model_at_end=bool(evaluation["load_best_model_at_end"]),
+        ),
         "metric_for_best_model": evaluation["metric_for_best_model"],
         # Both were declared in YAML and dropped here, so the best checkpoint was
         # identified and then thrown away — a 4-epoch adapter that peaked at step

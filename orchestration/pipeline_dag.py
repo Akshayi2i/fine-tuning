@@ -122,7 +122,18 @@ class StageContext:
     #: Per-adapter re-validation results for a Foundation major bump: every
     #: dependent adapter retrained against the new Foundation and gated. Absent
     #: evidence blocks promotion rather than deferring the question (arch §12).
+    #: Per-doc-type "has this adapter been revalidated against the new
+    #: Foundation" flags, for the arch §12 cascade block.
     revalidation_evidence: dict[str, bool] | None = None
+    #: Cross-type regression evidence for a CONTINUED Foundation, as
+    #: ``{doc_type: {"current": {...}, "candidate": {...}}}`` — both sides, the
+    #: shape `promotion_gate` reads. Separate from `revalidation_evidence`
+    #: because that field holds booleans for a different question; reusing it
+    #: produced ``{"acord": {"candidate": {...}}}`` with no ``"current"``, which
+    #: the gate correctly rejected as empty. The result was that a continued
+    #: Foundation could not pass by ANY input: supply metrics and it read as
+    #: empty evidence, supply the booleans and it read as no evidence at all.
+    cross_type_evidence: dict[str, dict[str, dict[str, float]]] | None = None
 
     # -- accumulated state -------------------------------------------------
     results: dict[str, StageResult] = field(default_factory=dict)
@@ -725,15 +736,16 @@ def stage_evaluation_gate(ctx: StageContext) -> StageResult:
         candidate,
         baseline,
         continued_from=getattr(foundation, "continued_from", None),
-        cross_type_evidence=(
-            {name: {"candidate": evidence} for name, evidence in ctx.revalidation_evidence.items()}
-            if isinstance(ctx.revalidation_evidence, dict)
-            and any(isinstance(v, dict) for v in ctx.revalidation_evidence.values())
-            else None
-        ),
+        # Passed through verbatim: the operator supplies both sides, because
+        # only they know which promoted per-type report is the baseline.
+        cross_type_evidence=ctx.cross_type_evidence or None,
     )
 
-    report_key = paths.eval_report(ctx.out_version)
+    # `gate_decision`, not `eval_report`. Writing here used to clobber the
+    # scored EvalReport at the same key, taking `by_doc_type` and every error
+    # record with it — which is what `vit_gate` reads to decide whether the
+    # vision encoder is the bottleneck.
+    report_key = paths.gate_decision(ctx.out_version)
     ctx.client.write_json(report_key, {
         "version": ctx.out_version,
         "candidate_metrics": candidate,
@@ -935,6 +947,19 @@ def stage_push(ctx: StageContext) -> StageResult:
         run_id = row.get("run_id", "")
         if not run_id.endswith(ctx.out_version):
             continue
+        # A run that crashed or never finished has no weights to publish.
+        # `launch_and_record` sets "failed" precisely so the registry never
+        # claims weights a dead run never wrote; publishing on run_id alone
+        # undid that, advertising Blob paths for an adapter that OOM'd at step
+        # 40 and sending serving to fetch an empty prefix.
+        status = row.get("status")
+        if status not in ("trained", "evaluated", "promoted"):
+            log.warning(
+                "not publishing %s: its status is %r, so its weights were never written. "
+                "Re-run training for this version rather than publishing a path to nothing.",
+                run_id, status,
+            )
+            continue
         doc_type = row.get("doc_type")
         run_kind: paths.AdapterKind = "foundation" if row.get("run_type") == "foundation" else "doc_type"
         manifest = get_manifest(run_id, ctx.client)
@@ -1123,6 +1148,19 @@ def run_stages(ctx: StageContext, stages: Sequence[Stage], *, command: str = "fi
                 report.blocked_at = stage.name
                 report.unlabeled_backlog = dict(ctx.unlabeled_backlog)
                 log.error("%s", blocked)
+                return report
+            except (PipelineError, paths.PathError) as exc:
+                # Deterministic: the stage cannot run at all with these inputs,
+                # so a second attempt re-does every listing and fails with the
+                # identical message after an entirely pointless backoff. Retries
+                # are for transient faults — a throttled Blob read, a pod that
+                # dropped — not for "below the day-zero floor" or a malformed
+                # --out-version.
+                result = StageResult(stage.name, "failed", str(exc))
+                ctx.results[stage.name] = result
+                report.results.append(result)
+                report.failed_at = stage.name
+                log.error("stage %s cannot run: %s (not retried)", stage.name, exc)
                 return report
             except Exception as exc:  # noqa: BLE001 - retried, then recorded and stops the run
                 if attempts < max(1, ctx.max_attempts):

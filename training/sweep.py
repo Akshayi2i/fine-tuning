@@ -34,6 +34,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import math
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -197,7 +198,21 @@ def pick_winner(results: Sequence[CandidateResult], metric: str, goal: str) -> C
     a minimise-loss phase outright.
     """
     scored = [(r, r.score(metric)) for r in results]
-    measured = [(r, s) for r, s in scored if s is not None]
+    # NaN is excluded alongside None. Every comparison against NaN is False, so
+    # `min` never replaces it once it is the running best — a diverged run whose
+    # loss went NaN wins a minimise phase outright, and `max` too. That is the
+    # exact "a crashed run must not win" failure the docstring above promises to
+    # prevent, arriving through a value that merely looks measured.
+    measured = [
+        (r, s) for r, s in scored
+        if s is not None and not (isinstance(s, float) and math.isnan(s))
+    ]
+    diverged = [r.candidate for r, s in scored if isinstance(s, float) and math.isnan(s)]
+    if diverged:
+        log.warning(
+            "excluding %d diverged candidate(s) whose %s was NaN: %s. A NaN is not a score.",
+            len(diverged), metric, [c.run_id for c in diverged],
+        )
     if not measured:
         return None
     return (min if goal == "minimize" else max)(measured, key=lambda pair: pair[1])[0]

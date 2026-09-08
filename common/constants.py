@@ -52,6 +52,13 @@ CANONICAL_TO_DOC_TYPE: Final[dict[str, str]] = {
 }
 
 
+#: The holding bucket for documents whose type is not yet known. Ingestion
+#: accepts it so a wrong guess is never baked into the `source_id` — the key
+#: every later stage joins on. It is NOT an active type: nothing downstream of
+#: ingestion trains, evaluates or serves against it.
+UNCLASSIFIED = "unclassified"
+
+
 def canonical_key(doc_type: str) -> str:
     """``'lossrun'`` -> ``'loss_run'``. Raises on an unknown or deferred type."""
     entry = DOC_TYPE_TO_CANONICAL.get(doc_type.lower())

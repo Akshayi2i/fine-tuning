@@ -79,15 +79,27 @@ class EarlyStoppingState:
         return self.should_stop
 
 
-def swift_early_stopping_args(patience: int = DEFAULT_PATIENCE) -> dict[str, object]:
+def swift_early_stopping_args(
+    patience: int = DEFAULT_PATIENCE,
+    *,
+    metric_for_best_model: str = "field_f1",
+    greater_is_better: bool = True,
+    load_best_model_at_end: bool = True,
+) -> dict[str, object]:
     """Early-stopping arguments for the ms-swift invocation.
 
     ms-swift wires these into the TRL/HF callback system; this is configuration,
     not a reimplementation of the callback (arch §10).
+
+    Every value is a parameter rather than a literal. `greater_is_better` was
+    hardcoded True while all four training YAMLs carried the key and no Python
+    read it, so a config selecting on `eval_loss` — where lower is better — made
+    HF restore the checkpoint with the *highest* loss, and that worst-of-run
+    adapter is what got staged, evaluated and offered to the promotion gate.
     """
     return {
         "early_stopping_patience": patience,
-        "metric_for_best_model": "field_f1",
-        "greater_is_better": True,
-        "load_best_model_at_end": True,
+        "metric_for_best_model": metric_for_best_model,
+        "greater_is_better": greater_is_better,
+        "load_best_model_at_end": load_best_model_at_end,
     }

@@ -240,7 +240,24 @@ def assert_servable(report: ValidationReport, serving_formats: list[str]) -> Non
     flag, deliberately — every other guarantee in the pipeline becomes advisory
     the moment one exists.
     """
-    blocked = [f.strip().lower() for f in serving_formats if f.strip().lower() in report.blocked_formats]
+    wanted = [f.strip().lower() for f in serving_formats]
+
+    # A format that appears in neither servable nor blocked was never judged at
+    # all — `validate_quant` only produces a result for formats it was given
+    # metrics for. Checking blocked_formats alone let an unscored GGUF sail
+    # through to push with zero measurements, which is precisely the
+    # "unmeasured is not passing" rule this module claims to enforce.
+    judged = {result.fmt for result in report.results}
+    unmeasured = [f for f in wanted if f not in judged]
+    if unmeasured:
+        raise QuantValidationError(
+            f"{unmeasured} are intended for serving but were never measured — no metrics were "
+            f"supplied for them, so `validate_quant` produced no verdict. A format nobody scored "
+            "has not passed; score it against the frozen golden eval set (SPEC_12) and re-run, or "
+            "drop it from --formats. There is no override (SPEC_10)."
+        )
+
+    blocked = [f for f in wanted if f in report.blocked_formats]
     if blocked:
         raise QuantValidationError(
             f"{blocked} did not pass quantization validation and will not be promoted:\n"

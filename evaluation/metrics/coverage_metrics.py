@@ -225,7 +225,13 @@ def score_by_mode(
             if not correct:
                 error_counter[classify_error(expected_value, got_value, all_expected=expected)] += 1
 
-        accuracy = sum(outcomes) / len(outcomes) if outcomes else 0.0
+        if not outcomes:
+            # No scalar fields to compare — a list-only document. Scoring it 0.0
+            # counted "nothing to measure" as "everything wrong", halving mode
+            # accuracy and pointing the ViT gate at a perception problem that
+            # was not there. Skipped, like every other unmeasured thing.
+            continue
+        accuracy = sum(outcomes) / len(outcomes)
         by_mode[mode].append(accuracy)
         if is_scanned:
             scanned.append(accuracy)

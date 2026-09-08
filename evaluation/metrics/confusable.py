@@ -103,6 +103,14 @@ def score_misattribution(
                 # entity-collapse failure it is named for.
                 confusables = alias_registry.confusables_for(doc_type, field_path)
                 label = alias_registry.aliases_for(doc_type, other_field)
+                # Both sides must resolve before a collision is dismissed as
+                # coincidental. Dropping the `label` requirement — so an
+                # unresolvable other_field meant "skip" — silently discarded real
+                # misattributions: the certificate-holder-for-insured-name case
+                # this metric exists to catch stopped being counted whenever the
+                # registry had no aliases recorded for the field it was stolen
+                # from. An unknown collision is counted, because a false positive
+                # in a gating metric costs a re-run and a false negative ships.
                 registered = bool(confusables) and bool(label) and any(c in label for c in confusables)
                 if confusables and label and not registered:
                     continue

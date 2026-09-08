@@ -46,13 +46,26 @@ class ResolvedModel(dict):
 # --------------------------------------------------------------------------
 
 def _index(client: BlobClient) -> list[dict[str, Any]]:
+    """Every run in the registry index.
+
+    An empty list means "the registry has no runs". It must never mean "the
+    index could not be read": swallowing a BlobError here made a throttled or
+    403'd Azure read indistinguishable from a first-ever run, so
+    `latest_promoted` returned None, the gate set is_first_version=True, and a
+    candidate whose accuracy had collapsed was promoted with nothing to regress
+    against. The same swallow silently cleared the Foundation cascade block.
+    """
     key = paths.registry_index()
     if not client.exists(key):
         return []
     try:
         return list(client.read_json(key).get("runs", []))
-    except BlobError:
-        return []
+    except BlobError as exc:
+        raise RegistryQueryError(
+            f"cannot read the registry index at {key}: {exc}. Refusing to continue, because an "
+            "unreadable index is not an empty one — treating it as empty turns the promotion gate "
+            "into 'first version, nothing to regress against' and lets any regression through."
+        ) from exc
 
 
 def get(run_id: str, client: BlobClient) -> RunManifest:
