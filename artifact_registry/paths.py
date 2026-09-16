@@ -36,16 +36,31 @@ from common.constants import ACTIVE_DOC_TYPES, UNCLASSIFIED
 
 AdapterKind = Literal["foundation", "doc_type"]
 
-#: Blob prefixes carrying tenant document data. These get the tenant prefix.
+#: Blob prefixes carrying tenant data. These get the tenant prefix.
+#:
+#: ``releases`` is here because **a model trained on a tenant's documents is that
+#: tenant's data** (arch v2.1 §8b) — a deletion request that stops at the corpus
+#: leaves the tenant's content encoded in weights and in a calibrator fitted on
+#: their fields. Everything a release owns lives under that one prefix, rather
+#: than being scattered into the v1 ``eval-reports/`` and ``calibration/`` trees:
+#: those are still unscoped, and adding a tenant segment to only some paths
+#: beneath them would make ``tenant_of`` read a version tag as a tenant id.
 TENANT_SCOPED: Final[frozenset[str]] = frozenset(
-    {"raw-documents", "processed", "golden-labels", "corpus"}
+    {"raw-documents", "processed", "golden-labels", "corpus", "releases"}
 )
 
-#: Blob prefixes holding no tenant data. These are never prefixed — the shared
-#: Foundation adapter and the run registry are cross-tenant by design.
+#: Blob prefixes holding no tenant data. These are never prefixed — the pinned
+#: base model and the cross-tenant run registry.
+#:
+#: MIGRATION (arch v2.1 §8b): ``adapters``, ``merged-models`` and
+#: ``quantized-models`` are still listed here and still unscoped. Under v2.1 they
+#: are tenant data and belong above, but their path helpers take no ``tenant_id``
+#: and 18 modules call them — that move lands with the serving topology change,
+#: not here. Until then the deletion cascade does not reach trained weights, and
+#: that limitation is stated rather than left implicit.
 SHARED: Final[frozenset[str]] = frozenset(
     {"base-models", "adapters", "merged-models", "quantized-models",
-     "registry", "eval-reports", "golden-eval-set", "calibration"}
+     "registry", "golden-eval-set", "eval-reports", "calibration"}
 )
 
 _VERSION_RE = re.compile(r"^v\d+(\.\d+)*$")
@@ -215,12 +230,26 @@ def merged_model_dir(version: str, doc_type: str | None = None) -> str:
     return _join("merged-models", scope, _version(version))
 
 
+#: Formats a release can be served in (arch v2.1 §13a). bf16 is the reference
+#: every quantized format's drop is measured against; fp8 is the default serving
+#: format from the second cycle; awq_int4 is for VRAM-constrained serving only.
+SERVING_FORMATS: Final[frozenset[str]] = frozenset({"bf16", "fp8", "awq_int4"})
+
+#: GGUF export targets llama.cpp, not the vLLM serving runtime — an optional
+#: edge export, validated separately, never the serving path.
+GGUF_FORMATS: Final[frozenset[str]] = frozenset({"fp16", "bf16", "q8_0", "q6_k", "q5_k_m", "q4_k_m"})
+
+
+def _format(fmt: str, allowed: frozenset[str] = SERVING_FORMATS) -> str:
+    fmt = fmt.strip().lower()
+    if fmt not in allowed:
+        raise PathError(f"unknown quantization format {fmt!r}; expected one of {sorted(allowed)}")
+    return fmt
+
+
 def quantized_model_dir(version: str, fmt: str, doc_type: str | None = None) -> str:
     """``quantized-models/{scope}/v{n}/gguf/{format}/`` — one subfolder per format."""
-    valid = {"fp16", "bf16", "q8_0", "q6_k", "q5_k_m", "q4_k_m"}
-    fmt = fmt.strip().lower()
-    if fmt not in valid:
-        raise PathError(f"unknown quantization format {fmt!r}; expected one of {sorted(valid)}")
+    fmt = _format(fmt, GGUF_FORMATS)
     scope = _doc_type(doc_type, allow_unified=True) if doc_type else UNIFIED
     return _join("quantized-models", scope, _version(version), "gguf", fmt)
 
@@ -268,6 +297,77 @@ def gate_decision(version: str) -> str:
     escalation decision could never be made on real evidence again.
     """
     return _join("eval-reports", _version(version), "gate_decision.json")
+
+
+_RELEASE_RE = re.compile(r"^release-\d{4}\.\d{1,2}\.\d+$")
+
+
+def _release(release_id: str) -> str:
+    """``release-YYYY.M.N``. Validated because a release id is what ``--model``
+    resolves and what the serving endpoint pulls — a typo there is a deploy that
+    silently serves the wrong weights, or nothing at all."""
+    if not _RELEASE_RE.match(release_id):
+        raise PathError(
+            f"invalid release id {release_id!r}; expected release-YYYY.M.N (e.g. release-2026.11.1)"
+        )
+    return release_id
+
+
+def release_bundle(release_id: str, tenant_id: str | None = None) -> str:
+    """The bundle that is gated, promoted, served and selected by ``--model``.
+
+    Tenant-scoped, because a model trained on a tenant's documents IS that
+    tenant's data (arch v2.1 §8b) — the deletion cascade has to reach it.
+    """
+    return _join(release_dir(release_id, tenant_id), "bundle.json")
+
+
+def release_index(tenant_id: str | None = None) -> str:
+    """Flat table of every release, for the same reason ``registry_index`` exists."""
+    return _join("releases", _tenant(tenant_id), "release_index.json")
+
+
+def release_dir(release_id: str, tenant_id: str | None = None) -> str:
+    """Everything one release owns, under one prefix.
+
+    Deliberately self-contained rather than scattered across the v1
+    ``eval-reports/`` and ``calibration/`` trees: a tenant deletion has to remove
+    the calibrators fitted on that tenant's fields as well as the bundle, and one
+    prefix makes that one delete instead of a checklist (arch v2.1 §8b).
+    """
+    return _join("releases", _tenant(tenant_id), _release(release_id))
+
+
+def release_calibrators(release_id: str, fmt: str, tenant_id: str | None = None) -> str:
+    """Calibrators are per release AND per serving format.
+
+    Quantization moves the logprob distribution, so a calibrator fitted on bf16
+    is wrong for FP8 — it would report confidence for a distribution that format
+    does not produce (arch v2.1 §5.3).
+    """
+    return _join(release_dir(release_id, tenant_id), "calibration", _format(fmt), "calibrators.json")
+
+
+def release_gate_decision(release_id: str, fmt: str, tenant_id: str | None = None) -> str:
+    """One gate run per serving format — a format inherits nothing from bf16's
+    result, because quantization degrades exactly what was fine-tuned in."""
+    return _join(release_dir(release_id, tenant_id), "gate", _format(fmt), "gate_decision.json")
+
+
+def corpus_epoch_file(version: str, epoch: int, tenant_id: str | None = None) -> str:
+    """One training file per epoch (arch v2.1 §6.1, §8.1).
+
+    Modality mode is sampled per document per epoch, so each epoch is a different
+    draw over the same documents. Materializing them makes a run reproducible
+    from the corpus alone, rather than depending on a sampler running identically
+    at training time. Four are always written; training uses the first N.
+    """
+    if not 1 <= int(epoch) <= 4:
+        raise PathError(
+            f"epoch {epoch} is outside 1-4; the corpus always materializes four epoch files "
+            "because the §11a epoch sweep tests up to four passes"
+        )
+    return _join(corpus_dir(version, tenant_id), "train", f"epoch_{int(epoch)}.jsonl")
 
 
 def golden_eval_set_dir() -> str:

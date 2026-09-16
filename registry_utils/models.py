@@ -288,3 +288,129 @@ class RunManifest(_Base):
             "lob_detection_accuracy": self.eval_metrics.lob_detection_accuracy,
             "confusable_misattribution_rate": self.eval_metrics.confusable_misattribution_rate,
         }
+
+
+# --------------------------------------------------------------------------
+# Release bundles (arch v2.1 §12.3)
+# --------------------------------------------------------------------------
+
+ReleaseStatus = Literal["candidate", "gated", "promoted", "archived", "rejected"]
+
+
+class GateOverride(_Base):
+    """A recorded decision to promote past a failed gate (arch v2.1 §15.5).
+
+    v1 had no override at all, on the reasoning that a gate which can be waived
+    stops being a guarantee. That was right about the risk and wrong about the
+    remedy: the v1 gate demanded improvement on twelve metrics within 0.001,
+    which at pilot volume is finer than the eval set can resolve, so nothing
+    could ever be promoted and the rule would have been broken in practice
+    rather than in the open.
+
+    An override is therefore allowed and **recorded** — named approver, written
+    reason, and the specific gates waived. A waiver nobody can attribute later is
+    the thing actually worth preventing.
+    """
+
+    approver: str = Field(..., description="a person, not a service account")
+    reason: str = Field(..., min_length=20, description="why this ships despite the gate")
+    waived_gates: list[str] = Field(..., min_length=1)
+    approved_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+
+    @field_validator("approver")
+    @classmethod
+    def _named_person(cls, v: str) -> str:
+        if not v.strip() or v.strip().lower() in {"system", "ci", "automated", "n/a", "none"}:
+            raise ValueError(
+                "a gate override must name the person accountable for it, not a system identity"
+            )
+        return v.strip()
+
+
+class ReleaseBundle(_Base):
+    """What is gated, promoted, served, and selected by ``--model``.
+
+    ``--model v2`` was ambiguous: it named weights but not the prompt that
+    rendered their input, the schema they were trained against, the calibrators
+    that turn their logprobs into confidence, or the OCR version whose formatting
+    the model learned. Changing any one of those changes behaviour, so the unit
+    of promotion has to pin all of them together (arch v2.1 §12.3).
+
+    **Calibrators and gate reports are per serving format.** Quantization moves
+    the logprob distribution, so a calibrator fitted on bf16 is wrong for FP8 —
+    which is why every format gets its own fit and its own gate run, and why
+    these are maps rather than single values.
+    """
+
+    release_id: str = Field(..., description="e.g. release-2026.11.1")
+    status: ReleaseStatus = "candidate"
+    tenant_scope: str
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+
+    base_model: str = Field(..., description="Qwen/Qwen3-VL-8B-Instruct@<hf_revision>")
+    adapter: str = Field(..., description="the unified extractor run, e.g. extractor-v1.0")
+    merged_model: str
+
+    #: format -> artifact path. bf16 is the reference and must always be present:
+    #: every quantization threshold in §13b is an absolute margin against it, so
+    #: a bundle without it has nothing to measure its own FP8 drop from.
+    serving_formats: dict[str, str] = Field(..., min_length=1)
+    calibrators: dict[str, str] = Field(default_factory=dict)
+    gate_reports: dict[str, str] = Field(default_factory=dict)
+
+    prompt_hash: str
+    schema_versions: dict[str, str] = Field(default_factory=dict)
+    ocr_pin: dict[str, Any] = Field(default_factory=dict)
+    vision_config_hash: str
+    vllm_config_hash: str
+
+    #: ms-swift, transformers, peft, torch, flash-attn and vllm pinned together.
+    #: Recorded because the trainer stack's behaviour is version-dependent and a
+    #: run reproduced against different pins is not the same run (§10.2).
+    lockfile_hash: str
+
+    override: GateOverride | None = None
+
+    @model_validator(mode="after")
+    def _consistency(self) -> ReleaseBundle:
+        if "bf16" not in self.serving_formats:
+            raise ValueError(
+                "every release must carry the bf16 reference: the §13b quantization thresholds "
+                "are absolute margins against it, so without it a quantized format has no "
+                "baseline to be measured against."
+            )
+        unknown = set(self.calibrators) - set(self.serving_formats)
+        if unknown:
+            raise ValueError(
+                f"calibrators {sorted(unknown)} name formats this release does not serve"
+            )
+        if self.status == "promoted":
+            missing = sorted(set(self.serving_formats) - set(self.calibrators))
+            if missing:
+                raise ValueError(
+                    f"formats {missing} are served with no calibrator. Confidence would be raw "
+                    "logprobs, which are systematically overconfident, and every review threshold "
+                    "downstream is defined against a calibrated score (arch v2.1 §5.3)."
+                )
+            ungated = sorted(set(self.serving_formats) - set(self.gate_reports))
+            if ungated and not self.override:
+                raise ValueError(
+                    f"formats {ungated} were promoted without a gate run. Quantization degrades "
+                    "exactly what was fine-tuned in, so a format inherits nothing from bf16's "
+                    "result (arch v2.1 §13a)."
+                )
+        return self
+
+    def index_row(self) -> dict[str, Any]:
+        """The flat row for the release index."""
+        return {
+            "release_id": self.release_id,
+            "status": self.status,
+            "tenant_scope": self.tenant_scope,
+            "created_at": self.created_at.isoformat(),
+            "adapter": self.adapter,
+            "base_model": self.base_model,
+            "serving_formats": sorted(self.serving_formats),
+            "overridden": self.override is not None,
+            "override_approver": self.override.approver if self.override else None,
+        }

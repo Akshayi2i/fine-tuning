@@ -347,3 +347,158 @@ def test_latest_promoted_finds_the_serving_version(client):
         client,
     )
     assert Q.latest_promoted(client, "foundation") == "foundation-v2"
+
+
+# --------------------------------------------------------------------------
+# Release bundles (arch v2.1 §12.3)
+# --------------------------------------------------------------------------
+
+def _bundle(**over):
+    from registry_utils.models import ReleaseBundle
+
+    base = dict(
+        release_id="release-2026.11.1",
+        tenant_scope="tenant_default",
+        base_model="Qwen/Qwen3-VL-8B-Instruct@abc1234",
+        adapter="extractor-v1.0",
+        merged_model="models/tenant_default/merged/release-2026.11.1/",
+        serving_formats={"bf16": "models/.../bf16/"},
+        prompt_hash="sha256:aaa",
+        vision_config_hash="sha256:bbb",
+        vllm_config_hash="sha256:ccc",
+        lockfile_hash="sha256:ddd",
+    )
+    base.update(over)
+    return ReleaseBundle(**base)
+
+
+def test_a_release_without_the_bf16_reference_is_refused():
+    """Every §13b quantization threshold is an absolute margin against bf16, so a
+    release that ships only a quantized format has nothing to measure its own
+    drop from."""
+    with pytest.raises(ValueError, match="bf16 reference"):
+        _bundle(serving_formats={"fp8": "models/.../fp8/"})
+
+
+def test_a_calibrator_cannot_name_a_format_the_release_does_not_serve():
+    with pytest.raises(ValueError, match="does not serve"):
+        _bundle(calibrators={"fp8": "calib-fp8"})
+
+
+def test_promoting_a_format_without_its_own_calibrator_is_refused():
+    """A calibrator fitted on bf16 is wrong for FP8 — quantization moves the
+    logprob distribution, and every review threshold downstream is defined
+    against a calibrated score."""
+    with pytest.raises(ValueError, match="no calibrator"):
+        _bundle(
+            status="promoted",
+            serving_formats={"bf16": "a/", "fp8": "b/"},
+            calibrators={"bf16": "calib-bf16"},
+            gate_reports={"bf16": "g1", "fp8": "g2"},
+        )
+
+
+def test_promoting_a_format_without_its_own_gate_run_is_refused():
+    """Quantization degrades exactly what was fine-tuned in, so a format inherits
+    nothing from bf16's gate result."""
+    with pytest.raises(ValueError, match="without a gate run"):
+        _bundle(
+            status="promoted",
+            serving_formats={"bf16": "a/", "fp8": "b/"},
+            calibrators={"bf16": "c1", "fp8": "c2"},
+            gate_reports={"bf16": "g1"},
+        )
+
+
+def test_an_override_must_name_a_person_not_a_service_account():
+    """v1 had no override, reasoning that a waivable gate is not a guarantee.
+    That was right about the risk and wrong about the remedy — the v1 gate could
+    not be passed at all, so the rule would have been broken in practice rather
+    than in the open. The remedy is attribution, not absence."""
+    from registry_utils.models import GateOverride
+
+    with pytest.raises(ValueError, match="names the person|name the person"):
+        GateOverride(approver="ci", reason="x" * 30, waived_gates=["ece_confidence"])
+
+
+def test_an_override_must_say_which_gates_it_waives():
+    from registry_utils.models import GateOverride
+
+    with pytest.raises(ValueError):
+        GateOverride(approver="A. Reviewer", reason="y" * 30, waived_gates=[])
+
+
+def test_an_overridden_release_records_who_approved_it_in_the_index():
+    from registry_utils.models import GateOverride
+
+    bundle = _bundle(
+        status="promoted",
+        serving_formats={"bf16": "a/", "fp8": "b/"},
+        calibrators={"bf16": "c1", "fp8": "c2"},
+        gate_reports={"bf16": "g1"},
+        override=GateOverride(
+            approver="A. Reviewer",
+            reason="FP8 ECE regressed 0.004 on a 30-document slice; shipping for the pilot",
+            waived_gates=["ece_confidence"],
+        ),
+    )
+    row = bundle.index_row()
+    assert row["overridden"] is True
+    assert row["override_approver"] == "A. Reviewer"
+
+
+def test_release_paths_are_tenant_scoped_and_per_format():
+    """A model trained on a tenant's documents IS that tenant's data, so the
+    deletion cascade has to reach the release too (arch v2.1 §8b)."""
+    bundle = paths.release_bundle("release-2026.11.1", "acme")
+    assert paths.is_tenant_scoped(bundle) and paths.tenant_of(bundle) == "acme"
+
+    bf16 = paths.release_gate_decision("release-2026.11.1", "bf16", "acme")
+    fp8 = paths.release_gate_decision("release-2026.11.1", "fp8", "acme")
+    assert bf16 != fp8, "each serving format needs its own gate decision"
+
+
+def test_a_malformed_release_id_is_refused():
+    """A release id is what --model resolves and what the endpoint pulls; a typo
+    is a deploy that serves the wrong weights or nothing at all."""
+    with pytest.raises(paths.PathError, match="invalid release id"):
+        paths.release_bundle("v2")
+
+
+def test_gguf_formats_are_not_serving_formats():
+    """GGUF targets llama.cpp, not vLLM. Asking for a GGUF format on the serving
+    path is a category error, not a preference (arch v2.1 §13a)."""
+    with pytest.raises(paths.PathError, match="unknown quantization format"):
+        paths.release_gate_decision("release-2026.11.1", "q4_k_m")
+
+
+def test_the_corpus_materializes_exactly_four_epoch_files():
+    """Mode is sampled per document per epoch, so each epoch is a different draw.
+    Materializing them makes a run reproducible from the corpus alone rather than
+    depending on a sampler running identically at training time."""
+    assert paths.corpus_epoch_file("v2", 1).endswith("train/epoch_1.jsonl")
+    with pytest.raises(paths.PathError, match="outside 1-4"):
+        paths.corpus_epoch_file("v2", 5)
+
+
+def test_everything_a_release_owns_sits_under_one_tenant_prefix():
+    """A tenant deletion has to remove the calibrators fitted on that tenant's
+    fields as well as the bundle. One prefix makes that one delete instead of a
+    checklist (arch v2.1 §8b)."""
+    root = paths.release_dir("release-2026.11.1", "acme")
+    for path in (
+        paths.release_bundle("release-2026.11.1", "acme"),
+        paths.release_calibrators("release-2026.11.1", "fp8", "acme"),
+        paths.release_gate_decision("release-2026.11.1", "bf16", "acme"),
+    ):
+        assert path.startswith(root), f"{path} escapes the release prefix"
+        assert paths.tenant_of(path) == "acme"
+
+
+def test_the_v1_unscoped_trees_are_not_misread_as_tenant_scoped():
+    """`eval-reports/v2/...` has no tenant segment. Adding that prefix to
+    TENANT_SCOPED would make tenant_of() return the version tag as a tenant id —
+    which is why release artifacts live under `releases/` instead of being
+    scattered into the v1 trees."""
+    assert paths.tenant_of(paths.eval_report("v2")) is None
+    assert paths.tenant_of(paths.calibration_params("v2", "acord")) is None
