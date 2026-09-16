@@ -131,7 +131,14 @@ class ValidationReport:
 
 
 def validate_format(fmt: str, metrics: dict[str, Any], reference: dict[str, Any]) -> FormatResult:
-    """Judge one format's metrics against the fp16 reference."""
+    """Judge one format's metrics against the bf16 reference.
+
+    Margins are **absolute percentage points** (arch v2.1 §13b). v1 used a
+    relative drop, which is a different amount of damage at every accuracy level:
+    2% of 0.95 is 1.9pp and 2% of 0.70 is 1.4pp, so the rule got stricter as the
+    model got worse. The same number should mean the same thing whatever the
+    baseline.
+    """
     threshold = threshold_for(fmt)
     result = FormatResult(fmt=fmt.strip().lower())
 
@@ -148,14 +155,15 @@ def validate_format(fmt: str, metrics: dict[str, Any], reference: dict[str, Any]
     result.json_validity = float(metrics["schema_validity_rate"])
 
     if is_reference(fmt):
-        # fp16 defines the baseline. It is still held to its own validity floor,
+        # bf16 defines the baseline. It is still held to its own validity floor,
         # because a reference that cannot emit valid JSON makes every comparison
         # against it meaningless.
-        result.passed = result.json_validity >= threshold.min_json_validity - EPSILON
+        result.passed = result.json_validity >= threshold.min_schema_validity - EPSILON
         if not result.passed:
             result.reasons.append(
-                f"JSON validity {result.json_validity:.3f} < {threshold.min_json_validity:.3f} — "
-                "the reference itself is not usable, so no format can be validated against it"
+                f"schema validity {result.json_validity:.3f} < "
+                f"{threshold.min_schema_validity:.3f} — the reference itself is not usable, so "
+                "no format can be validated against it"
             )
         return result
 
@@ -164,31 +172,69 @@ def validate_format(fmt: str, metrics: dict[str, Any], reference: dict[str, Any]
     if not isinstance(ref_f1, (int, float)) or not isinstance(ref_ece, (int, float)):
         raise QuantValidationError(
             f"cannot judge {fmt}: the {REFERENCE_FORMAT} reference has no "
-            "field_normalized_match/ece_confidence. Every threshold is relative to it, so "
-            "without the reference there is nothing to be relative to."
+            "field_normalized_match/ece_confidence. Every threshold is a margin against it, so "
+            "without the reference there is nothing to measure a margin from."
         )
 
-    # Relative drop, so the number means the same thing at F1 0.95 and 0.70.
-    result.field_f1_drop = (float(ref_f1) - result.field_f1) / float(ref_f1) if ref_f1 else 0.0
+    # Absolute, in percentage points.
+    result.field_f1_drop = float(ref_f1) - result.field_f1
     result.ece_increase = result.ece - float(ref_ece)
 
-    if result.field_f1_drop > threshold.max_field_f1_drop + EPSILON:
+    allowance = threshold.max_exact_match_drop_pp / 100.0
+    if result.field_f1_drop > allowance + EPSILON:
         result.reasons.append(
-            f"field F1 dropped {result.field_f1_drop:.2%} against a {threshold.max_field_f1_drop:.2%} allowance"
+            f"field match dropped {result.field_f1_drop * 100:.2f}pp against a "
+            f"{threshold.max_exact_match_drop_pp:.1f}pp allowance"
         )
+
+    # Each field class carries its own margin, because a wrong policy number is a
+    # wrong extraction while a slightly-off entity name is usually still
+    # matchable. Folding them into one allowance would let the unforgiving class
+    # absorb the forgiving one's slack.
+    for metric_name, allowed_pp, label in (
+        ("field_exact_match", threshold.max_exact_match_drop_pp, "exact match"),
+        ("list_field_recall", threshold.max_row_recall_drop_pp, "row recall"),
+    ):
+        candidate, baseline = metrics.get(metric_name), reference.get(metric_name)
+        if isinstance(candidate, (int, float)) and isinstance(baseline, (int, float)):
+            drop = float(baseline) - float(candidate)
+            if drop > allowed_pp / 100.0 + EPSILON:
+                result.reasons.append(
+                    f"{label} dropped {drop * 100:.2f}pp against a {allowed_pp:.1f}pp allowance"
+                )
+
+    rise = _increase(metrics, reference, "confusable_misattribution_rate")
+    if rise is not None and rise > threshold.max_misattribution_increase_pp / 100.0 + EPSILON:
+        result.reasons.append(
+            f"confusable misattribution rose {rise * 100:.2f}pp against a "
+            f"{threshold.max_misattribution_increase_pp:.1f}pp allowance — quantization "
+            "collapsing two entities is exactly the failure canonical mapping exists to prevent"
+        )
+
     if result.ece_increase > threshold.max_ece_increase + EPSILON:
         result.reasons.append(
-            f"ECE rose {result.ece_increase:+.4f} against a {threshold.max_ece_increase:.4f} allowance "
-            "— a miscalibrated model routes the wrong documents to review"
+            f"ECE rose {result.ece_increase:+.4f} against a {threshold.max_ece_increase:.4f} "
+            "allowance — a miscalibrated model routes the wrong documents to review"
         )
-    if result.json_validity < threshold.min_json_validity - EPSILON:
+    if result.json_validity < threshold.min_schema_validity - EPSILON:
         result.reasons.append(
-            f"JSON validity {result.json_validity:.3f} < {threshold.min_json_validity:.3f} — "
-            "structural discipline is one of the first things quantization costs"
+            f"schema validity {result.json_validity:.3f} < "
+            f"{threshold.min_schema_validity:.3f} — structural discipline is one of the first "
+            "things quantization costs, and structured decoding is supposed to guarantee it"
         )
 
     result.passed = not result.reasons
     return result
+
+
+def _increase(
+    metrics: dict[str, Any], reference: dict[str, Any], name: str
+) -> float | None:
+    """How much a lower-is-better metric rose, or ``None`` when unmeasured."""
+    candidate, baseline = metrics.get(name), reference.get(name)
+    if isinstance(candidate, (int, float)) and isinstance(baseline, (int, float)):
+        return float(candidate) - float(baseline)
+    return None
 
 
 def validate_quant(

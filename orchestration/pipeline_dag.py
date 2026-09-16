@@ -78,7 +78,10 @@ class StageContext:
     input_dir: Path | None = None
     doc_types: list[str] = field(default_factory=lambda: list(ACTIVE_DOC_TYPES))
     tenant_id: str | None = None
-    formats: list[str] = field(default_factory=lambda: ["fp16", "q5_k_m"])
+    #: Serving formats, vLLM-native (arch v2.1 §13a). bf16 alone until Phase 0
+    #: spike item 9 verifies FP8; the v1 default produced GGUF files the serving
+    #: endpoint could not load.
+    formats: list[str] = field(default_factory=lambda: ["bf16"])
     dtype: str = "fp16"
     #: Overrides the configured class for the training pod. ``None`` means the
     #: class in ``config/pipeline.yaml``.
@@ -149,6 +152,12 @@ class StageContext:
     #: the SAME one the gate uses: a selector scoring by a different definition
     #: of "correct" picks a checkpoint the gate then rejects.
     checkpoint_scorer: Any = None
+
+    #: Set once Phase 0 spike item 9 confirms a decoder-only FP8 export loads and
+    #: runs in vLLM. Until then FP8 is refused rather than produced untested: an
+    #: unverified serving format is a deployment that fails at load, or worse,
+    #: one that loads and reads badly (arch v2.1 §13a).
+    fp8_verified: bool = False
 
     # -- accumulated state -------------------------------------------------
     results: dict[str, StageResult] = field(default_factory=dict)
@@ -946,21 +955,33 @@ def _is_quantized(ctx: StageContext) -> bool:
 
 
 def stage_quantize(ctx: StageContext) -> StageResult:
-    """GGUF export. Threshold validation is deferred — nothing is served
-    quantized this cycle, so there is nothing to validate against (SPEC_10)."""
+    """Produce the vLLM-native serving formats (arch v2.1 §13a).
+
+    bf16 is the merged model itself and is never re-exported. FP8 is produced
+    only once Phase 0 spike item 9 has verified that a decoder-only export — with
+    the vision tower, the mergers and lm_head excluded — loads and runs in vLLM.
+
+    GGUF is not produced here at all. It is llama.cpp's format, the endpoint runs
+    vLLM, and v1 spent conversion and eval compute every cycle on a file nothing
+    could deploy. An edge build goes through ``postprocessing.quantize.export_gguf``
+    on request, and is validated in llama.cpp rather than by this gate.
+    """
     from postprocessing.quantize import plan_quantization, quantize
 
     if ctx.skip_quantize:
         return StageResult("quantize", "skipped", "--skip-quantize")
 
-    targets: list[str | None] = [None] if ctx.foundation_only else list(ctx.doc_types)
-    produced: dict[str, list[str]] = {}
-    for doc_type in targets:
-        plan = plan_quantization(version=ctx.out_version, formats=ctx.formats, doc_type=doc_type)
-        outputs = quantize(plan, dry_run=ctx.dry_run, allow_unverified_mmproj=ctx.dry_run)
-        for directory in outputs.values():
+    # ONE model under arch v2.1 §4.1, so one plan — not one per document type.
+    plan = plan_quantization(
+        version=ctx.out_version,
+        formats=ctx.formats,
+        fp8_verified=ctx.fp8_verified,
+    )
+    outputs = quantize(plan, dry_run=ctx.dry_run)
+    for fmt, directory in outputs.items():
+        if fmt != "bf16":   # bf16 IS the merged model; already marked by merge
             ctx.volume.mark(directory)
-        produced[doc_type or "unified"] = sorted(outputs)
+    produced: dict[str, list[str]] = {"unified": sorted(outputs)}
 
     # The threshold gate, between quantize and push (SPEC_13 §4). It runs only
     # when the caller supplied per-format metrics: scoring each GGUF needs the
@@ -976,8 +997,8 @@ def stage_quantize(ctx: StageContext) -> StageResult:
     elif not ctx.skip_quantize:
         log.warning(
             "no per-format metrics supplied, so the quantization thresholds were not applied. "
-            "Nothing is served quantized in the first cycle, which is why this is a warning — but "
-            "a format that reaches serving unvalidated has not passed (SPEC_10 §4)."
+            "Cycle 1 serves bf16, which IS the reference, so there is nothing to compare — but a "
+            "QUANTIZED format that reaches serving unvalidated has not passed (SPEC_10 §4)."
         )
 
     return StageResult(

@@ -62,7 +62,10 @@ def _untagged_manifest(run_id: str) -> RunManifest:
 
 AT_SCALE = {"policy": 400, "lossrun": 350, "acord": 300}
 
-FP16 = {"field_normalized_match": 0.90, "ece_confidence": 0.040, "schema_validity_rate": 1.0}
+#: The reference every serving format is measured against (arch v2.1 §13b).
+#: bf16, not fp16: fp16 is a GGUF format, so v1 measured against an artifact
+#: the serving endpoint could not load.
+BF16 = {"field_normalized_match": 0.90, "ece_confidence": 0.040, "schema_validity_rate": 1.0}
 
 
 def _metrics(f1: float, ece: float = 0.040, validity: float = 1.0) -> dict[str, float]:
@@ -186,80 +189,133 @@ def test_the_full_budget_stays_inside_nine_to_twelve_runs():
 # ==========================================================================
 
 
-def test_every_format_has_a_threshold():
-    assert set(THRESHOLDS) == {"fp16", "bf16", "q8_0", "q6_k", "q5_k_m", "q4_k_m"}
+def test_every_serving_format_has_a_threshold():
+    """GGUF formats are absent by design: they are validated in llama.cpp, not
+    by the serving gate, because the serving endpoint never loads one."""
+    assert set(THRESHOLDS) == {"bf16", "fp8", "awq_int4"}
 
 
 def test_an_unknown_format_is_refused_rather_than_defaulted():
     """A permissive default would let an unlisted format pass by omission."""
     with pytest.raises(ThresholdError, match="no quantization threshold"):
-        threshold_for("q2_k")
+        threshold_for("int2")
+
+
+def test_a_gguf_format_says_where_it_is_actually_validated():
+    """Asking the serving gate about a GGUF is a category error, and the error
+    should say so rather than reading as 'unsupported'."""
+    with pytest.raises(ThresholdError, match="llama.cpp"):
+        threshold_for("q5_k_m")
 
 
 def test_the_allowance_loosens_as_the_bits_drop():
-    order = ["bf16", "q8_0", "q6_k", "q5_k_m", "q4_k_m"]
-    drops = [threshold_for(f).max_field_f1_drop for f in order]
+    drops = [threshold_for(f).max_exact_match_drop_pp for f in ("bf16", "fp8", "awq_int4")]
     assert drops == sorted(drops), "a lower-bit format should not be held to a tighter bar"
 
 
-def test_json_validity_loosens_far_more_slowly_than_accuracy():
-    """Structural discipline is one of the first things quantization costs, and
-    a schema-invalid response is an error rather than a degraded result."""
-    assert threshold_for("q4_k_m").min_json_validity >= 0.99
+def test_the_unforgiving_field_class_gets_the_tighter_margin():
+    """A wrong policy number is a wrong extraction; a slightly-off entity name is
+    usually still matchable. One allowance would let the forgiving class lend its
+    slack to the unforgiving one."""
+    for fmt in ("fp8", "awq_int4"):
+        threshold = threshold_for(fmt)
+        assert threshold.max_exact_match_drop_pp < threshold.max_fuzzy_match_drop_pp
+
+
+def test_schema_validity_is_a_floor_not_a_margin():
+    """Structured decoding guarantees it, so anything below 100% means the
+    guarantee is not working — which is an error, not a degraded result."""
+    for fmt in THRESHOLDS:
+        assert threshold_for(fmt).min_schema_validity == 1.0
+
+
+def test_margins_are_absolute_percentage_points_not_relative():
+    """v1 allowed a 2% RELATIVE drop, which is 1.9pp at F1 0.95 and 1.4pp at
+    0.70 — so the rule got stricter as the model got worse. The same number
+    should mean the same thing whatever the baseline."""
+    allowance_pp = threshold_for("fp8").max_exact_match_drop_pp / 100.0
+
+    high = {**BF16, "field_normalized_match": 0.95}
+    low = {**BF16, "field_normalized_match": 0.70}
+    assert validate_quant({"bf16": high, "fp8": _metrics(0.95 - allowance_pp)}).all_passed
+    assert validate_quant({"bf16": low, "fp8": _metrics(0.70 - allowance_pp)}).all_passed
 
 
 def test_a_format_inside_its_allowance_passes():
-    report = validate_quant({"fp16": FP16, "q5_k_m": _metrics(0.885)})   # 1.7% drop, allowance 2%
-    assert report.servable_formats == ["fp16", "q5_k_m"]
+    report = validate_quant({"bf16": BF16, "fp8": _metrics(0.897)})   # 0.3pp, allowance 0.5pp
+    assert report.servable_formats == ["bf16", "fp8"]
     assert report.all_passed
 
 
 def test_a_format_over_its_allowance_is_blocked():
-    report = validate_quant({"fp16": FP16, "q5_k_m": _metrics(0.86)})    # 4.4% drop
-    assert "q5_k_m" in report.blocked_formats
-    assert "field F1 dropped" in report.results[-1].describe()
+    report = validate_quant({"bf16": BF16, "fp8": _metrics(0.88)})    # 2.0pp drop
+    assert "fp8" in report.blocked_formats
+    assert "field match dropped" in report.results[-1].describe()
 
 
 def test_the_boundary_is_evaluated_exactly():
-    allowance = threshold_for("q5_k_m").max_field_f1_drop
-    at = FP16["field_normalized_match"] * (1 - allowance)
+    allowance = threshold_for("fp8").max_exact_match_drop_pp / 100.0
+    at = BF16["field_normalized_match"] - allowance
 
-    assert validate_quant({"fp16": FP16, "q5_k_m": _metrics(at)}).all_passed
-    assert not validate_quant({"fp16": FP16, "q5_k_m": _metrics(at - 0.01)}).all_passed
+    assert validate_quant({"bf16": BF16, "fp8": _metrics(at)}).all_passed
+    assert not validate_quant({"bf16": BF16, "fp8": _metrics(at - 0.01)}).all_passed
+
+
+def test_row_recall_is_checked_on_its_own_margin():
+    """A quantized model that keeps its field accuracy while dropping claim rows
+    has lost exactly what a Loss Run is for, and an aggregate field score would
+    not show it."""
+    reference = {**BF16, "field_exact_match": 0.90, "list_field_recall": 0.90}
+    candidate = {**_metrics(0.90), "field_exact_match": 0.90, "list_field_recall": 0.86}
+    report = validate_quant({"bf16": reference, "fp8": candidate})
+
+    assert "fp8" in report.blocked_formats
+    assert any("row recall" in r for r in report.results[-1].reasons)
+
+
+def test_entity_collapse_blocks_a_format():
+    """Quantization collapsing two entities is exactly the failure canonical
+    mapping exists to prevent."""
+    reference = {**BF16, "confusable_misattribution_rate": 0.01}
+    candidate = {**_metrics(0.90), "confusable_misattribution_rate": 0.05}
+    report = validate_quant({"bf16": reference, "fp8": candidate})
+
+    assert "fp8" in report.blocked_formats
+    assert any("misattribution" in r for r in report.results[-1].reasons)
 
 
 def test_calibration_drift_blocks_a_format_on_its_own():
     """A miscalibrated model routes the wrong documents to review, whatever its
     accuracy."""
-    report = validate_quant({"fp16": FP16, "q6_k": _metrics(0.899, ece=0.10)})
-    assert "q6_k" in report.blocked_formats
+    report = validate_quant({"bf16": BF16, "fp8": _metrics(0.899, ece=0.10)})
+    assert "fp8" in report.blocked_formats
     assert any("ECE rose" in r for r in report.results[-1].reasons)
 
 
 def test_a_format_that_was_not_measured_does_not_pass():
-    report = validate_quant({"fp16": FP16, "q4_k_m": {"field_normalized_match": 0.88}})
-    assert "q4_k_m" in report.blocked_formats
+    report = validate_quant({"bf16": BF16, "awq_int4": {"field_normalized_match": 0.88}})
+    assert "awq_int4" in report.blocked_formats
     assert any("not measured" in r for r in report.results[-1].reasons)
 
 
 def test_validation_without_the_reference_is_refused():
-    """Every threshold is relative to fp16, so without it each format would be
-    compared to nothing."""
-    with pytest.raises(QuantValidationError, match="no fp16 metrics"):
-        validate_quant({"q5_k_m": _metrics(0.88)})
+    """Every threshold is a margin against bf16, so without it each format would
+    be compared to nothing."""
+    with pytest.raises(QuantValidationError, match="no bf16 metrics"):
+        validate_quant({"fp8": _metrics(0.88)})
 
 
 def test_the_reference_must_itself_emit_valid_json():
     """A reference that cannot produce valid JSON makes every comparison against
     it meaningless."""
-    report = validate_quant({"fp16": _metrics(0.90, validity=0.90)})
-    assert "fp16" in report.blocked_formats
+    report = validate_quant({"bf16": _metrics(0.90, validity=0.90)})
+    assert "bf16" in report.blocked_formats
 
 
 def test_promotion_of_a_blocked_format_is_refused():
-    report = validate_quant({"fp16": FP16, "q4_k_m": _metrics(0.70)})
+    report = validate_quant({"bf16": BF16, "awq_int4": _metrics(0.70)})
     with pytest.raises(QuantValidationError, match="did not pass"):
-        assert_servable(report, ["q4_k_m"])
+        assert_servable(report, ["awq_int4"])
 
 
 def test_there_is_no_override_for_a_blocked_format():
@@ -274,10 +330,79 @@ def test_there_is_no_override_for_a_blocked_format():
 
 
 def test_the_result_is_recorded_for_the_manifest():
-    entry = validate_quant({"fp16": FP16, "q5_k_m": _metrics(0.89)}).manifest_entry()
-    assert entry["reference_format"] == "fp16"
+    entry = validate_quant({"bf16": BF16, "fp8": _metrics(0.897)}).manifest_entry()
+    assert entry["reference_format"] == "bf16"
     assert entry["servable"] and "per_format" in entry
 
 
-def test_the_default_serving_target_is_q5_k_m():
-    assert DEFAULT_SERVING_FORMAT == "q5_k_m"
+def test_the_default_serving_target_is_bf16_until_fp8_is_verified():
+    """FP8 is the plan, not a proven capability. Phase 0 spike item 9 exists to
+    confirm a decoder-only FP8 export loads and runs in vLLM; until it has, the
+    first cycle serves the merged bf16 model — slower and certain, rather than
+    fast and unproven (arch v2.1 §13a)."""
+    assert DEFAULT_SERVING_FORMAT == "bf16"
+
+
+def test_gguf_is_no_longer_a_per_cycle_deliverable():
+    """It is llama.cpp's format and the endpoint runs vLLM, so producing one per
+    cycle spent conversion and eval compute on an artifact nothing could deploy."""
+    from postprocessing.quantize import DEFAULT_FORMATS, QuantizationError, plan_quantization
+
+    assert "q5_k_m" not in DEFAULT_FORMATS
+    with pytest.raises(QuantizationError, match="vLLM does not"):
+        plan_quantization(version="v2", formats=["q5_k_m"])
+
+
+def test_a_serving_plan_always_carries_the_bf16_reference():
+    """Every §13b threshold is an absolute margin against bf16, so a run that
+    produces only a quantized format has nothing to measure its drop from."""
+    from postprocessing.quantize import QuantizationError, plan_quantization
+
+    with pytest.raises(QuantizationError, match="omit the bf16 reference"):
+        plan_quantization(version="v2", formats=["fp8"])
+
+
+def test_fp8_is_refused_until_the_spike_verifies_it():
+    """An unverified serving format is a deployment that fails at load — or
+    worse, one that loads and reads badly."""
+    from postprocessing.quantize import QuantizationError, plan_quantization, quantize
+
+    plan = plan_quantization(version="v2", formats=["bf16", "fp8"])
+    with pytest.raises(QuantizationError, match="not verified"):
+        quantize(plan, dry_run=True)
+
+    verified = plan_quantization(version="v2", formats=["bf16", "fp8"], fp8_verified=True)
+    produced = quantize(verified, dry_run=True)
+    assert set(produced) == {"bf16", "fp8"}
+
+
+def test_bf16_is_never_re_exported():
+    """It IS the merged model. A copy would be a second 16GB artifact identical
+    to the first."""
+    from postprocessing.quantize import plan_quantization, quantize
+
+    plan = plan_quantization(version="v2", formats=["bf16"])
+    assert quantize(plan, dry_run=True)["bf16"] == plan.merged_model
+    assert plan.quantized_formats == []
+
+
+def test_the_vision_path_is_never_quantized():
+    """Compressing it produces a model that loads cleanly and reads pages badly
+    — very hard to notice, because it still emits well-formed JSON (§13a)."""
+    from postprocessing.quantize import NEVER_QUANTIZED
+
+    joined = " ".join(NEVER_QUANTIZED)
+    assert "visual" in joined and "merger" in joined and "lm_head" in joined
+
+
+def test_a_gguf_export_still_refuses_an_unverified_mmproj():
+    """Unchanged from v1, and it stays unchanged: exporting without one produces
+    a model that loads and cannot see."""
+    from postprocessing.quantize import QuantizationError, export_gguf, plan_gguf_export
+
+    plan = plan_gguf_export(version="v2", formats=["q5_k_m"])
+    with pytest.raises(QuantizationError, match="cannot see"):
+        export_gguf(plan, dry_run=True)
+
+    verified = plan_gguf_export(version="v2", formats=["q5_k_m"], mmproj_verified=True)
+    assert export_gguf(verified, dry_run=True)

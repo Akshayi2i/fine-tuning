@@ -306,7 +306,7 @@ def test_a_serving_format_that_was_never_scored_cannot_be_promoted():
 
     reference = {"field_normalized_match": 0.90, "ece_confidence": 0.04,
                  "schema_validity_rate": 1.0}
-    report = validate_quant({"fp16": reference}, serving_formats=["fp16", "q4_k_m"])
+    report = validate_quant({"bf16": reference}, serving_formats=["bf16", "fp8"])
 
     with pytest.raises(QuantValidationError, match="never measured"):
         assert_servable(report, ["fp16", "q4_k_m"])

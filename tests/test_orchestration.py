@@ -577,7 +577,7 @@ def test_package_pushes_all_three_artifact_classes_and_publishes(client, control
     # adapter, because the merged models were produced per document type by the
     # per-type runs stacked on top of it.
     assert foundation.artifacts.merged_model
-    assert foundation.artifacts.quantized_formats == ["fp16", "q5_k_m"]
+    assert foundation.artifacts.quantized_formats == ["bf16"]
 
 
 def test_no_per_type_run_is_produced_by_a_default_build(client, controller):
@@ -606,7 +606,7 @@ def test_a_default_build_publishes_the_unified_model(client, controller):
 
     foundation = get("extractor-v1", client)
     assert foundation.artifacts.merged_model
-    assert foundation.artifacts.quantized_formats == ["fp16", "q5_k_m"]
+    assert foundation.artifacts.quantized_formats == ["bf16"]
 
 
 def test_package_clears_staging_after_a_verified_push(client, controller):
@@ -756,9 +756,9 @@ def test_finetune_requires_an_out_version():
 def test_all_accepts_the_union_of_both_flag_sets():
     args = cli.build_parser().parse_args([
         "all", "--input", "./intake", "--out-version", "v2",
-        "--formats", "fp16", "q5_k_m", "--keep-staging",
+        "--formats", "bf16", "fp8", "--keep-staging",
     ])
-    assert args.out_version == "v2" and args.formats == ["fp16", "q5_k_m"] and args.keep_staging
+    assert args.out_version == "v2" and args.formats == ["bf16", "fp8"] and args.keep_staging
 
 
 def test_extract_takes_base_as_a_first_class_model():
@@ -1016,7 +1016,7 @@ def test_the_config_file_is_actually_read():
     assert settings.gpu_class_for("train_foundation").startswith("A100")
     assert "A100" not in settings.gpu_class_for("preprocessing")
     assert settings.retry_policy()["retry_on_gate_block"] is False
-    assert settings.defaults()["formats"] == ["fp16", "q5_k_m"]
+    assert settings.defaults()["formats"] == ["bf16"]
 
 
 def test_cli_defaults_come_from_the_config_file():

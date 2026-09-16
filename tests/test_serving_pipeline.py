@@ -14,7 +14,7 @@ import pytest
 from artifact_registry.blob_client import BlobClient, InMemoryBackend
 from calibration.fit_calibration import CalibrationParams
 from inference_core.model_runner import EchoBackend, load_model
-from postprocessing.quantize import QuantizationError, plan_quantization, quantize
+from postprocessing.quantize import QuantizationError, plan_quantization
 from serving.adapter_router import route
 from serving.doc_type_classifier import (
     Classification,
@@ -404,31 +404,35 @@ def test_the_merge_falls_back_to_the_staged_adapter_directory():
     assert plan.adapter.endswith("/v2")
 
 
-def test_quantization_defaults_to_baseline_plus_one_serving_format():
-    """Producing all six every cycle wastes eval compute on formats nobody
-    deploys (arch §13a)."""
+def test_quantization_defaults_to_the_bf16_reference_alone():
+    """FP8 is the plan, not a proven capability — Phase 0 spike item 9 verifies a
+    decoder-only export loads in vLLM. Until then cycle 1 serves the merged bf16
+    model (arch v2.1 §13a)."""
     plan = plan_quantization(version="v2")
-    assert plan.formats == ["fp16", "q5_k_m"]
+    assert plan.formats == ["bf16"]
+    assert plan.quantized_formats == [], "nothing is compressed in cycle 1"
 
 
-def test_quantization_refuses_an_unverified_multimodal_projector():
-    """A GGUF without an mmproj loads and cannot see — it would fail silently on
-    every image-only document."""
-    plan = plan_quantization(version="v2", formats=["q4_k_m"])
-    with pytest.raises(QuantizationError, match="mmproj"):
-        quantize(plan, dry_run=True)
+def test_a_gguf_format_is_refused_on_the_serving_path():
+    """GGUF is llama.cpp's format and the endpoint runs vLLM. Producing one per
+    cycle spent conversion and eval compute on an artifact nothing could deploy."""
+    with pytest.raises(QuantizationError, match="vLLM does not"):
+        plan_quantization(version="v2", formats=["q5_k_m"])
 
 
-def test_quantization_proceeds_once_the_projector_is_verified():
-    plan = plan_quantization(version="v2", formats=["fp16", "q4_k_m"], mmproj_verified=True)
-    outputs = quantize(plan, dry_run=True)
-    assert set(outputs) == {"fp16", "q4_k_m"}
-    assert all("gguf" in path for path in outputs.values())
+def test_serving_and_edge_artifacts_do_not_share_a_prefix():
+    """They are loaded by different programs, and one prefix invites deploying
+    the wrong one."""
+    from artifact_registry import paths
+
+    assert "/vllm/" in paths.quantized_model_dir("v2", "fp8")
+    assert "/gguf/" in paths.quantized_model_dir("v2", "q5_k_m")
 
 
 def test_unknown_quantization_format_is_refused():
-    with pytest.raises(QuantizationError, match="unknown quantization format"):
-        plan_quantization(version="v2", formats=["q3_k_s"])
+    with pytest.raises(QuantizationError, match="unknown serving format"):
+        plan_quantization(version="v2", formats=["int2"])
+
 
 
 # --------------------------------------------------------------------------

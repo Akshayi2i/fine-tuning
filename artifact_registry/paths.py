@@ -264,10 +264,20 @@ def _format(fmt: str, allowed: frozenset[str] = SERVING_FORMATS) -> str:
 
 
 def quantized_model_dir(version: str, fmt: str, doc_type: str | None = None) -> str:
-    """``quantized-models/{scope}/v{n}/gguf/{format}/`` — one subfolder per format."""
-    fmt = _format(fmt, GGUF_FORMATS)
+    """``quantized-models/{scope}/v{n}/{runtime}/{format}/``
+
+    The runtime segment is not decoration. A serving format and a GGUF export are
+    loaded by different programs — vLLM and llama.cpp — and putting them under one
+    prefix invites deploying the wrong one. ``fp8`` and ``bf16`` land under
+    ``vllm/``; every GGUF format under ``gguf/`` (arch v2.1 §13a).
+    """
+    fmt = _format(fmt, SERVING_FORMATS | GGUF_FORMATS)
+    # bf16 exists in both sets; it is a serving format, and the GGUF build of the
+    # same name is reached through the gguf runtime only when explicitly asked
+    # for by an edge export.
+    runtime = "vllm" if fmt in SERVING_FORMATS else "gguf"
     scope = _doc_type(doc_type, allow_unified=True) if doc_type else UNIFIED
-    return _join("quantized-models", scope, _version(version), "gguf", fmt)
+    return _join("quantized-models", scope, _version(version), runtime, fmt)
 
 
 def run_manifest(run_id: str, run_type: str, doc_type: str | None = None) -> str:

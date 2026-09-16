@@ -42,8 +42,15 @@ retry:
   retry_on_gate_block: false
 
 defaults:
-  formats: [fp16, q5_k_m]
-  dtype: fp16
+  # vLLM-native serving formats (arch v2.1 13a). bf16 alone until Phase 0 spike
+  # item 9 verifies a decoder-only FP8 export loads and runs in vLLM; the v1
+  # default produced GGUF files the serving endpoint could not load at all.
+  formats: [bf16]
+
+  # bf16, not fp16: the adapter trained in bf16 against a bf16 base, and FP8 is
+  # quantized from this merge. fp16 would insert a precision change between
+  # training and every serving format for no reason.
+  dtype: bf16
   min_labels_per_type: 25
   keep_staging: false
   seed: 42

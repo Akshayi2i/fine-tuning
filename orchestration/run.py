@@ -3,7 +3,7 @@
 Three commands plus one umbrella::
 
     python -m orchestration.run finetune --input ./intake --out-version v2 --gpu a100-80
-    python -m orchestration.run package  --version v2 --formats fp16 q5_k_m
+    python -m orchestration.run package  --version v2 --formats bf16 fp8
     python -m orchestration.run extract  --model base --input testing/test_data/
     python -m orchestration.run all      --input ./intake --out-version v2
 
@@ -55,7 +55,7 @@ def build_context(args: argparse.Namespace, *, client: BlobClient | None = None,
         "input_dir": Path(args.input) if getattr(args, "input", None) else None,
         "doc_types": list(getattr(args, "doc_types", None) or ACTIVE_DOC_TYPES),
         "tenant_id": getattr(args, "tenant", None),
-        "formats": list(getattr(args, "formats", None) or ["fp16", "q5_k_m"]),
+        "formats": list(getattr(args, "formats", None) or ["bf16"]),
         "dtype": getattr(args, "dtype", "fp16"),
         "gpu_class": getattr(args, "gpu", None),
         "dry_run": getattr(args, "dry_run", False),
@@ -145,7 +145,7 @@ def _add_finetune_flags(parser: argparse.ArgumentParser) -> None:
 def _add_package_flags(parser: argparse.ArgumentParser, *, version_required: bool = True) -> None:
     if version_required:
         parser.add_argument("--version", required=True)
-    parser.add_argument("--formats", nargs="+", default=list(defaults().get("formats", ["fp16", "q5_k_m"])))
+    parser.add_argument("--formats", nargs="+", default=list(defaults().get("formats", ["bf16"])))
     parser.add_argument("--skip-quantize", dest="skip_quantize", action="store_true")
     parser.add_argument("--keep-staging", dest="keep_staging", action="store_true")
     parser.add_argument("--from-blob", dest="from_blob", action="store_true",
