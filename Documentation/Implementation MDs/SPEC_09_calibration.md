@@ -2,7 +2,7 @@
 
 > Read `SPEC_00_MASTER_CONTEXT.md` first. Dependencies: SPEC_01, SPEC_02, SPEC_07, SPEC_08. Uses the inference core (SPEC_07) for logprobs/spans and the evaluation normalizer (SPEC_08) for the correctness signal. No forward dependency on serving/testing.
 >
-> **Architecture refs:** `finetuning-architecture-v1.md` §5 (**confidence flow, calibration, list-field second signal**), §0b (LoB carries confidence too), §15 (ECE as a gating metric).
+> **Architecture refs:** `finetuning-architecture-v2.1.docx` §5 (**confidence flow, calibration, list-field second signal**), §0b (LoB carries confidence too), §15 (ECE as a gating metric).
 
 ## Goal
 

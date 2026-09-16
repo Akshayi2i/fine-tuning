@@ -2,7 +2,7 @@
 
 > Read `SPEC_00_MASTER_CONTEXT.md` first. Dependencies: SPEC_01, SPEC_02, SPEC_06, SPEC_07. Uses the shared inference core (SPEC_07) for all model runs — no forward dependency on serving or testing.
 >
-> **Architecture refs:** `finetuning-architecture-v1.md` §15 (**metric definitions + LoB metric**), §0b (LoB gating), §3 (ViT gate inputs), §5 (list-field recall), §13 step 6 (the gate is a hard stop), §12 (gate result recorded in the manifest).
+> **Architecture refs:** `finetuning-architecture-v2.1.docx` §15 (**metric definitions + LoB metric**), §0b (LoB gating), §3 (ViT gate inputs), §5 (list-field recall), §13 step 6 (the gate is a hard stop), §12 (gate result recorded in the manifest).
 
 ## Goal
 

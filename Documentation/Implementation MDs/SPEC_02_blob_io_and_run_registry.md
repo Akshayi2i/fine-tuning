@@ -2,7 +2,7 @@
 
 > Read `SPEC_00_MASTER_CONTEXT.md` first. Dependencies: SPEC_01. This is the ONLY module that talks to the Azure SDK directly. Everything else goes through it.
 >
-> **Architecture refs:** `finetuning-architecture-v1.md` §8b (tenant isolation per Fideon SPEC_12), §12 (versioning + training run registry), §13b (quantization thresholds recorded), §15 (metrics recorded), §18/§18a (Blob layout, raw-document access control).
+> **Architecture refs:** `finetuning-architecture-v2.1.docx` §8b (tenant isolation per Fideon SPEC_12), §12 (versioning + training run registry), §13b (quantization thresholds recorded), §15 (metrics recorded), §18/§18a (Blob layout, raw-document access control).
 
 ## Goal
 
@@ -72,7 +72,7 @@ CLI + functions:
 - `latest_promoted(kind, doc_type)` → the version currently serving.
 - `resolve_model_version(tag)` → given a user tag, return the concrete artifact paths. Used by SPEC_07, SPEC_11, SPEC_12, SPEC_13.
   - **`"base"` is a valid tag** and resolves to the pinned HF base model with **no adapter** — the zero-shot path used by `extract --model base` (SPEC_13), the pilot baseline (SPEC_15), and day-zero pre-annotation (SPEC_04).
-  - `"v2"` resolves Foundation + the routed per-type adapter, or the merged/quantized model.
+  - `"v2"` resolves the merged model, plus a graduated per-type adapter (§4.2) when the routed type has one. Never a stack: one LoRA per request is what vLLM serves.
   - Resolves from Blob for `published` versions and from the staging volume for `staged` ones, so `extract` works on a model that has not been packaged yet.
 - `diff_manifests(run_a, run_b)` → field-by-field delta. This is the arch §12 regression-debugging workflow: when a doc type regresses, diff the new manifest against the last-good one and see immediately whether the corpus, foundation version, MinerU version, or a hyperparameter moved.
 

@@ -4,7 +4,7 @@
 >
 > **Naming hazard (master §0.1):** in this folder `SPEC_07` is the inference core. The architecture's "**Fideon SPEC_07 Stage 3**" is the external production **audit gate** — a different document. They are unrelated.
 >
-> **Architecture refs:** `finetuning-architecture-v1.md` §5 (logprobs → field spans), §6 (modality modes), §7 (prompt template identity, multi-page inputs), §11 (resolution cap).
+> **Architecture refs:** `finetuning-architecture-v2.1.docx` §5 (logprobs → field spans), §6 (modality modes), §7 (prompt template identity, multi-page inputs), §11 (resolution cap).
 
 ## Why this module exists
 
@@ -17,7 +17,7 @@ A clean, low-level inference engine: given a resolved model version + a prepared
 ## Deliverables
 
 ### 1. `inference_core/model_runner.py`
-- `load_model(version, backend="vllm"|"hf"|"gguf")` — resolves the version to concrete artifacts via SPEC_02 `resolve_model_version`, and loads either base + Foundation (+ optional per-type adapter) or a merged/quantized model. Backend-swappable: vLLM for serving, HF for local eval, GGUF for the portable/edge path.
+- `load_model(version, backend="vllm"|"hf"|"gguf")` — resolves the version to concrete artifacts via SPEC_02 `resolve_model_version`, and loads the **merged** model, optionally with ONE graduated per-type adapter applied per request. Backend-swappable: vLLM for serving, HF for local eval, GGUF for the offline/edge path only.
 - `generate(model, messages, want_logprobs=True, **gen_kwargs)` → `{text, tokens, token_logprobs}`.
   - **Logprobs are mandatory-capable** — vLLM supports them natively and HF via `generate(output_scores=True)`. Calibration (SPEC_09) is built entirely on them, so a backend that cannot return them is not a valid backend for anything but smoke testing.
 - Deterministic given seed + greedy/temperature settings; logs and returns the generation config so an output can be reproduced.

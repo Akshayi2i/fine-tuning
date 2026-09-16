@@ -4,7 +4,7 @@
 >
 > **This spec is executed, not imported.** It is an operational runbook, not a library — nothing else in the repo depends on it. It exists because architecture v1 added §16, which has no home in the module specs.
 >
-> **Architecture refs:** `finetuning-architecture-v1.md` §16 (**pilot validation protocol**), §16a/§16b/§16c, §8 (pilot split ratios), §4c (day-zero bootstrap), §15 (metrics).
+> **Architecture refs:** `finetuning-architecture-v2.1.docx` §16 (**pilot validation protocol**), §16a/§16b/§16c, §8 (pilot split ratios), §4c (day-zero bootstrap), §15 (metrics).
 
 ## Goal
 
@@ -58,9 +58,9 @@ Confirm all of:
 
 ### 3. Experiment C — Pilot Training Run (Weeks 2–6, 25–30 documents per type)
 
-Annotate 25–30 documents per document type per SPEC_04, using the **pilot split ratios (~70/18/12)** from SPEC_05. Train Foundation and per-type adapters. Evaluate on the pilot test split.
+Annotate 25–30 documents per document type per SPEC_04, using the **pilot split ratios (~70/18/12)** from SPEC_05. Train ONE unified adapter with the §11.1 pilot hyperparameters. Evaluate on the pilot test split, in every modality regime.
 
-This is the **minimum experiment that tests the architecture's generalisation claim**: whether the Foundation captures cross-type behavior, whether per-type adapters specialise correctly, whether modality-dropout arbitration functions, whether row-completeness detection fires on unseen documents, and whether confidence calibration is meaningful with held-out data.
+This is the **minimum experiment that tests the architecture's generalisation claim**: whether one adapter captures cross-type behaviour without the types interfering, whether modality-dropout arbitration functions, whether totals reconciliation catches a missed row on unseen documents, and whether the per-field-type calibrators have enough data to be enforced at all — at pilot volume several field types will not clear the 300-instance floor and will route everything to review, which is the system working rather than failing.
 
 **Pilot success criteria — directional targets, not production thresholds:**
 
@@ -79,7 +79,7 @@ This is the **minimum experiment that tests the architecture's generalisation cl
 
 | Failed criterion | First place to look |
 |---|---|
-| Field F1 low | Prompt/schema design; corpus coverage for that doc type; per-type adapter LR/epochs (a targeted retrain, not the deferred sweep) |
+| Field F1 low | Prompt/schema design; corpus coverage for that doc type; LR/epochs on the unified run (a targeted retrain, not the deferred sweep) |
 | List-field recall low | Loss Run corpus row-length variety; row-completeness signal (SPEC_09); consider list-specific prompt rules |
 | Schema validity < 100% | Prompt rules (no fences, null-handling); JSON structural discipline in the Foundation corpus |
 | Image-only F1 gap > 15% | **The ViT escalation gate (SPEC_06 `vit_gate`)** — but only if errors are perception-type, not schema/reasoning |

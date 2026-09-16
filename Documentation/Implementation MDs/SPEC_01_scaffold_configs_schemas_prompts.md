@@ -2,7 +2,7 @@
 
 > Read `SPEC_00_MASTER_CONTEXT.md` first. Dependencies: none. This spec creates the repo skeleton and all static configuration that later modules read.
 >
-> **Architecture refs:** `finetuning-architecture-v1.md` §0a (schema contract), §0b (LoB), §6 (modality instructions), §7 (dataset format, schema registry, prompt template), §9/§9a (LoRA targets), §11 (full hyperparameter spec), §11a (sweeps), §13a/§13b (quantization), §19 (repo structure).
+> **Architecture refs:** `finetuning-architecture-v2.1.docx` §0a (schema contract), §0b (LoB), §6 (modality instructions), §7 (dataset format, schema registry, prompt template), §9/§9a (LoRA targets), §11 (full hyperparameter spec), §11a (sweeps), §13a/§13b (quantization), §19 (repo structure).
 
 ## Goal
 

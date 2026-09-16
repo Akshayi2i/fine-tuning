@@ -2,7 +2,7 @@
 
 > Read `SPEC_00_MASTER_CONTEXT.md` first. Dependencies: all prior specs (01–12).
 >
-> **Architecture refs:** `finetuning-architecture-v1.md` §13 (**end-to-end pipeline, 11 stages, idempotency, the hard-stop gate**), §14 (**RunPod: ephemeral training pods vs. persistent serving endpoint**), §12 (every cycle recorded), §17 (extraction routine), §11a (sweep orchestration — deferred).
+> **Architecture refs:** `finetuning-architecture-v2.1.docx` §13 (**end-to-end pipeline, 13 stages, idempotency, the gate**), §13c (**operator command surface**), §14 (**RunPod: ephemeral training pods vs. persistent serving endpoint**), §12 (every cycle recorded), §17 (extraction routine), §11a (sweep orchestration — deferred).
 
 ## Goal
 
@@ -15,7 +15,7 @@ Single entrypoint, `orchestration/run.py`, with four subcommands:
 | # | Command | Covers arch §13 stages | Ends with |
 |---|---|---|---|
 | **1** | `finetune` | 1 → 7 (ingest, OCR, dataset build, train, evaluate, **gate**, merge) | Adapters + merged model on the **RunPod staging volume** |
-| **2** | `package` | 8 → 9 (quantize, push) | Adapters + merged + quantized model in **Azure Blob** |
+| **2** | `package` | 8 → 11 (quantize, calibrate, **gate**, bundle) | A promoted **release bundle** in Azure Blob |
 | **3** | `extract` | §17 extraction routine | Extracted JSON + confidence + metrics, locally |
 | **—** | `all` | `finetune` then `package` | Same as command 2 |
 
@@ -30,10 +30,10 @@ python -m orchestration.run finetune \
        --out-version v2 \
        --gpu a100-80
 
-# 2 — quantize, then push adapters + merged + quantized to Azure Blob.
+# 2 — quantize, calibrate, gate, then publish the release bundle.
 python -m orchestration.run package \
        --version v2 \
-       --formats fp16 q5_k_m
+       --formats bf16 fp8
 
 # 3 — extraction, model chosen by the operator.
 python -m orchestration.run extract --model base --input testing/test_data/
@@ -42,14 +42,16 @@ python -m orchestration.run extract --model v2   --input testing/test_data/ \
 
 # all — commands 1 and 2 back to back. Extraction excluded by design.
 python -m orchestration.run all \
-       --input ./intake --out-version v2 --formats fp16 q5_k_m
+       --input ./intake --out-version v2 --formats bf16 fp8
 ```
 
 Each subcommand is a thin argument-parsing shell over `pipeline_dag.py` stage functions (§4). No orchestration logic lives in the CLI layer.
 
 ## 2. `finetune` — command 1 (stages 1 → 7)
 
-Runs, in order: **ingest → OCR → dataset build → train Foundation → train per-type adapters → evaluate → promotion gate → merge.**
+**`finetune` produces artifacts; `package` judges and publishes them.** The gate moved into `package` under arch v2.1 §13, because it scores the merged model in each serving format — and neither the merge nor the formats exist until `finetune` has finished.
+
+Runs, in order: **ingest → OCR → labeling → dataset build → train (ONE unified adapter) → select checkpoint → merge.**
 
 **The human-labeling precondition.** Stage 3 (labeling) is human work and cannot be inside an automated command. `finetune` therefore:
 
@@ -60,13 +62,15 @@ Runs, in order: **ingest → OCR → dataset build → train Foundation → trai
 
 This is the honest shape: you ingest 500 documents, 200 are labeled, you train on 200, and the command tells you 300 are waiting for a reviewer.
 
-**Training fan-out.** One `finetune` run launches **1 + N GPU jobs** (Foundation, then one per active doc type), sequentially — a per-type adapter cannot start until the Foundation it depends on has trained and passed evaluation (arch §12). The controller launches, polls, and tears down each pod in turn.
+**No training fan-out.** One `finetune` run launches **one** training job. v1 launched 1 + N sequentially — a Foundation, then one adapter per document type stacked on it — and that topology is unservable: vLLM applies one LoRA per request, so the two could never both be active (arch v2.1 §4.1). A per-type adapter returns only through the §4.2 graduation gate, trained on the merged foundation and never stacked.
 
 **Where the gate's numbers come from.** `finetune` reads the candidate's scores from the frozen-eval-set report (`eval-reports/{version}/summary.json`, SPEC_08) and the baseline from the currently promoted version's own report. Neither is optional and neither is fabricated: with no report the command fails rather than gating on nothing, and with no promoted version the baseline is genuinely `None` — a first version — rather than a lookup that quietly failed.
 
-**The gate is a hard stop inside the command.** If evaluation fails against the current production version on any gating metric, `finetune` **stops at stage 6 and does not merge**. It exits non-zero with the per-metric deltas. There is no `--force`, and `all` therefore never reaches `package` on a failed gate.
+**The gate is a hard stop inside `package`.** It runs after merge, quantize and calibrate (arch v2.1 §13), so a regression stops the **release**, not the build: merging still happens, nothing is packaged, and the staged artifacts sit on a volume that will be reclaimed. It exits non-zero with the per-metric verdicts — floor, interval and basis, not a bare delta.
 
-**Flags:** `--input`, `--doc-types`, `--corpus-version`, `--out-version`, `--gpu`, `--commit <sha>`, `--from-stage <name>` (resume), `--skip-ingest`, `--foundation-only`, `--min-labels-per-type`, `--push-adapters` (see §3), `--tenant` (optional, defaults from env).
+There is no `--force`. There **is** an override (§15.5), requiring a named person and a written reason, both recorded in the gate decision and the release bundle. v1 had none at all, on the reasoning that a waivable gate is a suggestion — which was right about the risk and wrong about the remedy, because the v1 gate demanded improvement on twelve metrics within 0.001 and could not be passed at pilot volume at all.
+
+**Flags:** `--input`, `--doc-types`, `--corpus-version`, `--out-version`, `--gpu`, `--commit <sha>`, `--from-stage <name>` (resume), `--skip-ingest`, `--min-labels-per-type`, `--push-adapters` (see §3), `--tenant` (optional, defaults from env). `--foundation-only` is gone: one unified adapter is the only topology.
 
 ## 3. The RunPod staging volume
 
@@ -93,12 +97,12 @@ The layout deliberately mirrors the Blob layout (master §4) so `package` copies
 
 **Config:** `RUNPOD_VOLUME_ID` and `RUNPOD_VOLUME_MOUNT` (default `/runpod-volume`) in `.env`. The controller attaches the volume to every pod it launches; a launch without it is refused rather than silently writing to pod-local disk.
 
-## 4. `package` — command 2 (stages 8 → 9)
+## 4. `package` — command 2 (stages 8 → 11)
 
 Runs: **quantize → push adapters + merged model + quantized model(s) to Azure Blob → update the run manifest.**
 
 - Reads `--version v{n}` from the staging volume. If that version is not staged, **fail loudly** naming the expected path and the remediation (re-run `finetune --from-stage merge`, or `--from-blob` if adapters were pushed with `--push-adapters`).
-- Quantizes per `--formats` (default: `fp16` baseline + `q5_k_m` serving target, per SPEC_10). Produces the `mmproj` file for the multimodal path.
+- Quantizes per `--formats` (default: `fp16` baseline + `fp8` serving target, per SPEC_10). Produces the `mmproj` file for the multimodal path.
 - Pushes **all three artifact classes** to their respective Blob locations (master §4):
 
 | Artifact | Blob destination |
@@ -127,8 +131,8 @@ A wrapper over `testing/run_extraction.py` (SPEC_12), which itself wraps the ser
 | Value | Resolves to |
 |---|---|
 | `base` | Untuned `Qwen/Qwen3-VL-8B-Instruct` at the pinned revision, **no adapter** |
-| `v1`, `v2`, … | Foundation + the routed per-type adapter for that version, or the merged/quantized model |
-| `v2 --format q5_k_m` | That version's specific quantized GGUF |
+| `v1`, `v2`, … | That version's merged model, plus a graduated per-type adapter where the routed type has one |
+| `v2 --format fp8` | That version's FP8 serving weights |
 
 `--model base` is not a curiosity — it is the **zero-shot baseline** of the pilot protocol (SPEC_15) and the day-zero pre-annotation path (SPEC_04). `pilot/zero_shot_baseline.py` is a thin wrapper over this command rather than a parallel implementation.
 
@@ -143,7 +147,7 @@ Runs `finetune`, then `package`, sharing `--out-version`. Halts if the gate fail
 ## 7. `orchestration/runpod_controller.py`
 
 **Training — ephemeral pods (arch §14):**
-- Launch an on-demand RunPod **GPU Pod** per preprocessing/training/eval/quantize job. Sizing configurable: **A100 80GB for Foundation**, **A100 40GB or L40S** for per-type adapter runs, and a **cheaper class (L4 / A10 / L40S) for OCR** — MinerU does not need an A100, and reserving it for training keeps the preprocessing stage inexpensive.
+- Launch an on-demand RunPod **GPU Pod** per preprocessing/training/eval/quantize job. Sizing configurable: **A100 80GB for the unified training run**, and a **cheaper class (L4 / A10 / L40S) for OCR** — MinerU does not need an A100, and reserving it for training keeps the preprocessing stage inexpensive.
 - **Stages 2, 4 and 5 all want a GPU**, so `finetune` provisions **one pod for the whole command** rather than shuttling a corpus between machines. That is cheaper than three pod launches and removes two Blob round trips.
 - **Training code lives in the private git repo; the pod clones it fresh at job start** at a pinned commit — code is never permanently resident on a pod.
 - Every launched pod has the staging volume attached (§3).
@@ -158,7 +162,7 @@ Runs `finetune`, then `package`, sharing `--out-version`. Halts if the gate fail
 
 ## 8. `orchestration/pipeline_dag.py`
 
-The 11 stages (arch §13) as reusable, individually addressable stage functions — this is the implementation `run.py` composes, and the same functions an Airflow DAG or GitHub Actions workflow can schedule.
+The 13 stages (arch v2.1 §13) as reusable, individually addressable stage functions — this is the implementation `run.py` composes, and the same functions an Airflow DAG or GitHub Actions workflow can schedule.
 
 | # | Stage | Command | Writes to |
 |---|---|---|---|
@@ -166,13 +170,15 @@ The 11 stages (arch §13) as reusable, individually addressable stage functions 
 | 2 | **Preprocessing (GPU)** — MinerU OCR + page rendering at the resolution cap | `finetune` | `processed/` (Blob) |
 | 3 | **Labeling** — human review | *(outside the CLI)* | `golden-labels/` (Blob) |
 | 4 | **Dataset build** — compile JSONL, inject schema, modality split, train/val/test split | `finetune` | `corpus/v{n}/` (Blob) |
-| 5 | **Training** — LoRA on a bf16 base, Foundation then per-type | `finetune` | staging volume |
-| 6 | **Evaluation & gate** — frozen golden eval set | `finetune` | staging volume + manifest |
-| 7 | **Merge** — PEFT `merge_and_unload()` | `finetune` | staging volume |
-| 8 | **Quantize** — GGUF export | `package` | staging volume |
-| 9 | **Push artifacts** — adapters, merged, quantized | `package` | Blob |
-| 10 | **Serving** — endpoint pulls the promoted artifact | `deploy-endpoint` | endpoint |
-| 11 | **Feedback loop** — low-confidence output → labeling queue | `extract` + SPEC_04 | next corpus version |
+| 5 | **Training** — ONE unified LoRA on a bf16 base | `finetune` | staging volume |
+| 6 | **Checkpoint eval** — vLLM generation on validation, selected by field F1 | `finetune` | staging volume |
+| 7 | **Merge** — PEFT `merge_and_unload()`, one adapter | `finetune` | staging volume |
+| 8 | **Quantize** — bf16 reference + FP8, vLLM-native | `package` | staging volume |
+| 9 | **Calibrate** — per-field-type calibrators and risk-controlled thresholds, per serving format | `package` | release bundle |
+| 10 | **Evaluation & gate** — frozen golden eval set, per serving format | `package` | gate decision |
+| 11 | **Package** — release bundle pinning adapter, prompt, schema, calibrators, OCR pin and serving config | `package` | Blob |
+| 12 | **Serving** — endpoint pulls the promoted release bundle | `deploy-endpoint` | endpoint |
+| 13 | **Feedback loop** — low-confidence output, human corrections, and a random 5% of auto-accepted documents → labeling queue | `extract` + SPEC_04 | next corpus version |
 
 **Pipeline properties that are requirements, not aspirations (arch §13):**
 - Every stage reads from and writes to Azure Blob or the staging volume — never pod-local disk.
@@ -184,7 +190,7 @@ The 11 stages (arch §13) as reusable, individually addressable stage functions 
 ## 9. `orchestration/config/`
 - GPU class per stage, corpus/version tags, staging volume id and mount, schedule, notification hooks, retry policy.
 - **Sweep orchestration (arch §11a) — deferred with SPEC_06 `sweep.py`:** when enabled, the 3-phase sweep runs as a scheduled job sequence (~9–12 runs before the first **production** run), each writing a manifest, winner promoted to the production training config. Not part of the first cycle.
-- **Foundation-upgrade cascade (arch §12):** when a new Foundation major version passes its gate, generate the re-validation work list from `query_registry.adapters_depending_on()` (SPEC_02) and schedule retraining of every dependent per-type adapter **before** the new Foundation becomes production. The DAG produces the work list and waits for it to pass rather than silently promoting.
+- **Foundation-upgrade cascade (arch §12):** when a new unified major version passes its gate, generate the re-validation work list from `query_registry.adapters_depending_on()` (SPEC_02) and schedule retraining of every dependent GRADUATED adapter (§4.2) **before** it becomes production. Dormant until a type graduates — the default topology produces no dependents at all. The DAG produces the work list and waits for it to pass rather than silently promoting.
 
 ## Constraints
 - Four subcommands, one entrypoint. `all` = `finetune` + `package`, never `extract`.
@@ -202,7 +208,7 @@ The 11 stages (arch §13) as reusable, individually addressable stage functions 
 - [ ] `finetune` writes a run manifest to Blob with `artifacts.status: "staged"` even though weights are not pushed.
 - [ ] `run package --version v2` quantizes and pushes adapters, merged model, and each GGUF format to their correct Blob paths, then flips the manifest to `"published"`.
 - [ ] `package` fails loudly with remediation when the requested version is not on the staging volume.
-- [ ] `run extract --model base` runs the untuned base model with no adapter; `--model v2` resolves Foundation + per-type adapter.
+- [ ] `run extract --model base` runs the untuned base model with no adapter; `--model v2` resolves that version's merged model, plus a graduated per-type adapter where the routed type has one.
 - [ ] `run all` chains 1 and 2, **never runs extraction**, and does not reach `package` when the gate fails.
 - [ ] `--from-stage` resumes mid-pipeline; re-running a completed stage is a no-op — **except ingestion**, which always runs and relies on checksum dedup.
 - [ ] A completion check covers **every** target it claims to, not just the first: a quantize run that failed halfway must not read as complete on resume.

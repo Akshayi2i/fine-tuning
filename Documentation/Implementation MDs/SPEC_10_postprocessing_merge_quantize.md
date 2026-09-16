@@ -1,95 +1,105 @@
-# SPEC 10 — Postprocessing (Merge Adapter + GGUF Quantize)
+# SPEC 10 — Postprocessing (Merge + Serving-Format Quantization)
 
-> Read `SPEC_00_MASTER_CONTEXT.md` first. Dependencies: SPEC_01, SPEC_02, SPEC_06. (Independent of the inference/eval/calibration chain — only needs a trained adapter.)
+> Read `SPEC_00_MASTER_CONTEXT.md` first. Dependencies: SPEC_02, SPEC_06.
 >
-> **Architecture refs:** `finetuning-architecture-v1.md` §13 steps 7–9, §13a (**user-selectable GGUF format matrix**), §13b (quantization quality thresholds — reference only this cycle), §18 (artifact paths).
-
-> **This spec is split across two operator commands (SPEC_13).** `merge_adapter` is the last stage of **command 1 (`finetune`)** and writes to the RunPod staging volume. `quantize` is the first stage of **command 2 (`package`)**, which then pushes adapters, merged model, and every quantized format to Azure Blob. Build both here; the command boundary is orchestration's concern, not this module's.
+> **Architecture refs:** `finetuning-architecture-v2.1.docx` §13 steps 7–8, §13a (**vLLM-native serving formats**), §13b (quantization quality thresholds, absolute percentage points), §18 (artifact paths).
 
 ## Goal
 
-Merge a trained LoRA adapter into the base model and export user-selectable GGUF quantization formats. Numeric quality thresholds are specified here and enforced when a quantized format is actually served — not in the first cycle, whose serving path is vLLM on the merged fp16/bf16 model.
+Fold the trained adapter into the base model, and produce the quantized formats **the serving endpoint can actually load**. Quality thresholds are specified here and enforced before any quantized format is served.
 
-## Deliverables
+## What changed from v1, and why
 
-### 1. `postprocessing/merge_adapter.py`
-- Loads base model + a Foundation adapter (and optionally a stacked per-type adapter); runs PEFT `merge_and_unload()` → a full fp16/bf16 merged model.
-- Writes to the **staging volume** at `/runpod-volume/staging/merged-models/{doc_type|unified}/v{n}/`. `package` pushes it to `merged-models/{doc_type|unified}/v{n}/` in Blob (SPEC_02).
-- Supports **Foundation-only (unified)** or **Foundation + per-type** merges depending on serving strategy. Merged models never overwrite adapters — separate paths.
-- CLI: `--foundation vN [--adapter doc_type vN] --out-version vN --dtype fp16|bf16`.
+v1 produced `fp16` + `q5_k_m` GGUF files every cycle. GGUF is **llama.cpp's** format and the endpoint runs **vLLM**, so the pipeline spent conversion and eval compute on an artifact nothing could deploy — and there was no small format the server *could* open, leaving bf16 or nothing.
 
-### 2. `postprocessing/quantize.py`
-Quantization is a **configurable export step, not a single fixed choice** (arch §13a). All formats derive from the same fp16 GGUF conversion, so one or many can be exported in one run.
+v1's own module docstring had the right of it: *"GGUF is the portable/edge path and vLLM on the merged model is the primary one."* It never followed through, and left `DEFAULT_FORMATS = ("fp16", "q5_k_m")` making a GGUF the per-cycle deliverable.
 
-**Pipeline:** merged fp16/bf16 → base GGUF (`convert_hf_to_gguf.py` from llama.cpp) → `llama-quantize` per requested format.
+## 1. `training/merge.py`
 
-```
-python postprocessing/quantize.py --model v2 --formats fp16 q6_k q5_k_m q4_k_m
-python postprocessing/quantize.py --model v2 --formats q4_k_m
-```
+- Loads the base in **bf16** and folds in **one** adapter via PEFT `merge_and_unload()` → one standalone bf16 model.
+- **One adapter, one merge.** v1 applied a Foundation LoRA and then a per-type LoRA on top, producing a model per document type — and the order mattered, because reversing it produced a different model from the one that was evaluated. That whole ordering problem is gone with the topology that created it (arch §4.1).
+- A graduated per-type adapter (§4.2) is **never merged**. It is applied at serving time on top of these merged weights, one LoRA per request — the only shape vLLM can serve.
+- Folds in the **checkpoint the §11.2 selector chose**, recorded on the plan. The merged weights do not say which checkpoint they came from, and once the staging volume is reclaimed nothing else does either.
+- `dtype` defaults to **bf16, not fp16**: the adapter trained in bf16 against a bf16 base, and FP8 is quantized from this artifact. Merging to fp16 would insert a precision change between training and every serving format for no reason.
+- Writes to the **staging volume**. The merged model is ~16 GB and quantization also runs on RunPod; pushing it to Azure and pulling it back is a 32 GB round trip for nothing (master §12a).
 
-**Format matrix (arch §13a):**
+## 2. `postprocessing/quantize.py` — serving formats
 
-| Format | Bits/weight | Relative size¹ | Quality | Typical use |
-|---|---|---|---|---|
-| **FP16** | 16 | 100% (~16 GB) | Reference / lossless | Accuracy baseline; what every quantized variant is measured against |
-| **BF16** | 16 | 100% (~16 GB) | Reference / lossless | Same size, wider dynamic range; preferred baseline on native-bf16 hardware |
-| **Q8_0** | 8 | ~53% | Near-lossless | Maximum quality at half the fp16 memory |
-| **Q6_K** | ~6.6 | ~44% | Very high | Strong quality/size balance |
-| **Q5_K_M** | ~5.7 | ~38% | High | **Default serving target** |
-| **Q4_K_M** | ~4.8 | ~32% | Good | Most memory-efficient; only under VRAM constraint |
-
-¹ Relative to the fp16 merged model. Actual sizes vary — measure on the real merged model.
-
-**What to produce routinely:** supporting all six is a capability, not a per-cycle obligation. Converge on **fp16 as the accuracy baseline + one serving format** produced and validated every cycle; generate Q8_0, Q6_K, BF16 **on demand** when a specific deployment target calls for them. Regenerating and re-validating all six every cycle wastes eval compute. Make this the CLI default, not just a docstring.
-
-**Multimodal (VL) handling — verify, don't assume (arch §13a):** Qwen3-VL is multimodal, so the GGUF export must handle the vision encoder + projector as well as the LLM. In the llama.cpp ecosystem this means producing the quantized LLM GGUF **plus a separate `mmproj` file**, served together. **Confirm current llama.cpp support for the exact Qwen3-VL version at implementation time.** If vision-side GGUF support lags:
-- warn clearly and refuse to emit a silently-broken model,
-- keep the **vLLM path primary** (serving the merged fp16/bf16, or an AWQ/FP8 variant),
-- treat GGUF as the portable / edge / offline option.
-
-- Reads the merged model from the staging volume, writes each format back to staging, and `package` pushes them to `quantized-models/{doc_type|unified}/v{n}/gguf/{format}/`; record `quantized_formats` in the RunManifest (SPEC_02).
-- CLI: `--model vN --formats ...`, `--mmproj/--no-mmproj`, `--dry-run`.
-
-### 3. Quantization quality thresholds — `postprocessing/quant_thresholds.py`
-
-The primary serving path is **vLLM on the merged fp16/bf16 model** (arch §13a), so the first cycle ships nothing quantized and the gate has nothing to fire on. The table is now **data in one module** rather than prose here, because it is explicitly provisional — revised once absolute F1 values are known, since a 2% relative drop means something different at F1 0.95 than at 0.70 — and revising it must be one edit.
-
-"Re-validate before promotion" needs numbers attached or it degrades into a judgement call per release. **Acceptable degradation relative to the fp16 reference:**
-
-| Format | Max field F1 drop | Max ECE increase | Min JSON validity |
+| Format | Tool | Hardware | Role |
 |---|---|---|---|
-| FP16 | Reference (0%) | Reference | 100% |
-| BF16 | ≤ 0.5% | ≤ 0.005 | 100% |
-| Q8_0 | ≤ 1.0% | ≤ 0.010 | 100% |
-| Q6_K | ≤ 1.5% | ≤ 0.015 | ≥ 99.5% |
-| Q5_K_M | ≤ 2.0% | ≤ 0.020 | ≥ 99.5% |
-| Q4_K_M | ≤ 4.0% | ≤ 0.030 | ≥ 99.0% |
+| **bf16 merged** | PEFT merge | Any | Reference, and cycle 1's serving format |
+| **FP8 (W8A8)** | llm-compressor | Native FP8 on Ada/Hopper (L4, L40S, H100); weight-only on A100 | Default serving format from cycle 2 |
+| **AWQ INT4 (W4A16)** | llm-compressor | Modern NVIDIA | VRAM-constrained serving only, if it meets threshold |
 
-- A format exceeding **any** threshold is **not promoted to serving**.
-- **Q5_K_M is the default serving target**; Q4_K_M is used only under VRAM constraint and only when it meets threshold.
-- These are initial pilot-cycle targets, **revised after the first full evaluation cycle** once absolute F1 values are known — a 2% relative drop means something different at F1 0.95 than at 0.70. Keep them in this module as data, not scattered constants, so revising them is one edit.
+```bash
+python -m orchestration.run package --run extractor-v2.0 --formats bf16 fp8
+```
 
-### 4. `postprocessing/validate_quant.py`
-- Runs each produced GGUF through the extraction/testing routine (SPEC_12) against the **frozen golden eval set**, and evaluates the result against the threshold table.
-- **Every quantized format intended for serving must pass before promotion.** Lower-bit quantization degrades exactly the behaviors that were fine-tuned in — strict JSON structure, precise field values (dates, currency, policy numbers), and confidence calibration. It is common to find fp16 and Q6_K statistically indistinguishable while Q4_K_M drops a point or two on field-exact-match; whether that trade is acceptable is a per-deployment decision, which is why all formats stay available rather than one being hardcoded.
-- Reports the accuracy delta vs fp16 per format, writes `quant_threshold_results` (pass/fail per format) into the RunManifest, and **refuses promotion of an over-threshold format**.
-- Build-order note: this calls into SPEC_12, and it only matters once a quantized format is being served. Build merge + quantize first; wire this when GGUF actually ships.
+**bf16 is never re-exported.** It *is* the merged model; a copy would be a second 16 GB artifact identical to the first.
+
+**FP8 is refused until verified.** `plan_quantization` defaults to bf16 alone and `quantize()` raises on `fp8` unless `fp8_verified=True`, which Phase 0 spike item 9 sets. An unverified serving format is a deployment that fails at load — or worse, one that loads and reads badly.
+
+**The vision path is never quantized.** `NEVER_QUANTIZED = visual.*, mergers, aligners, lm_head`, passed to llm-compressor as its ignore list (arch §13a). Compressing it produces a model that loads cleanly and reads pages badly — very hard to notice, because it still emits well-formed JSON.
+
+**Every serving format gets its own calibrator fit and its own gate run.** Quantization degrades exactly what was fine-tuned in, so an FP8 release inherits nothing from bf16's result.
+
+## 2a. GGUF — the edge export, on request only
+
+`plan_gguf_export` / `export_gguf` produce a GGUF for an **offline or edge** deployment. Not per-cycle, not on the serving path, and **validated separately in llama.cpp** against the §13b AWQ INT4 column — the serving gate does not cover it, because the serving endpoint never loads one.
+
+The v1 mmproj guard is carried over **unchanged**: Qwen3-VL is multimodal, so a GGUF needs the quantized LLM **plus a separate `mmproj`** file for the vision encoder and projector. Exporting without a verified one produces a model that loads and cannot see, which fails silently on every image-only document.
+
+Serving and edge artifacts are stored under **different runtime prefixes** — `quantized-models/{scope}/v{n}/vllm/{format}/` and `.../gguf/{format}/`. They are loaded by different programs, and one prefix invites deploying the wrong one.
+
+## 3. `postprocessing/quant_thresholds.py`
+
+**Absolute percentage points against bf16, per field class** (arch §13b):
+
+| Metric | FP8 max drop | AWQ INT4 max drop |
+|---|---|---|
+| Exact match — identifiers, money, dates | 0.5 pp | 1.0 pp |
+| Match — names, addresses | 1.0 pp | 2.0 pp |
+| List-field row recall | 0.5 pp | 1.0 pp |
+| Confusable misattribution (increase) | 0.5 pp | 1.0 pp |
+| ECE (increase) | 0.01 | 0.02 |
+| Schema validity (constrained) | 100% | 100% |
+
+Three things about this table are deliberate:
+
+- **Absolute, not relative.** v1 allowed a 2% *relative* field-F1 drop, which is 1.9 pp at F1 0.95 and 1.4 pp at 0.70 — so the rule got **stricter as the model got worse**, which is backwards. The same number should mean the same thing whatever the baseline.
+- **Per field class.** A wrong policy number is a wrong extraction; a slightly-off entity name is usually still matchable. One allowance would let the forgiving class lend its slack to the unforgiving one.
+- **Schema validity is a floor, not a margin.** Structured decoding guarantees it (§13), so anything below 100% means the guarantee is not working — an error, not a degraded result.
+
+The reference is **bf16**. v1 measured every format against fp16, a GGUF format, so the reference itself was an artifact the endpoint could not load.
+
+A format exceeding **any** threshold is not served. Asking the serving gate about a GGUF format raises and says where it *is* validated, rather than reading as "unsupported".
+
+## 4. `postprocessing/validate_quant.py`
+
+- Runs each produced format through the extraction routine (SPEC_12) against the **frozen golden eval set**, and evaluates against the table above.
+- Also checks **row recall** and **confusable misattribution** on their own margins: a quantized model that keeps its field accuracy while dropping claim rows has lost exactly what a Loss Run is for, and an aggregate field score would not show it.
+- Writes `quant_threshold_results` into the RunManifest and **refuses promotion of an over-threshold format** — no override flag.
 
 ## Constraints
+
 - Merged models never overwrite adapters (separate Blob paths).
-- Every **served** quantized format passes threshold validation first — no exceptions, no override flag. (Moot in the first cycle: nothing is served quantized.)
+- Every **served** quantized format passes threshold validation first — no exceptions, no override.
+- The bf16 reference is always produced: every §13b threshold is a margin against it, so a run producing only a quantized format has nothing to measure its drop from.
 - Record all produced formats in the manifest.
-- Never emit a GGUF whose multimodal projector support is unverified without a loud warning.
+- Never emit a GGUF whose multimodal projector support is unverified.
 
 ## Acceptance checklist
-- [ ] `merge_adapter` produces a loadable merged model (foundation-only and foundation+per-type).
-- [ ] `quantize --formats fp16 q4_k_m` produces both GGUFs **plus the `mmproj` file**.
-- [ ] Default invocation produces fp16 + one serving format, not all six.
-- [ ] An immature / unsupported VL-GGUF path warns clearly and does not emit a silently broken model.
-- [ ] `merge_adapter` writes to the staging volume; `package` lands adapters, merged model, and every format at the correct Blob paths and flips the manifest to `"published"`.
-- [ ] `quant_thresholds` returns pass/fail correctly **at each format's exact boundary** — a format landing precisely on its allowance passes, and floating-point recomputation must not block it.
-- [ ] `validate_quant` reports the delta vs fp16 per format, writes `quant_threshold_results` into the RunManifest, and refuses an over-threshold format **with no override path**.
-- [ ] A format that was not measured does not pass, and validation without the fp16 reference is refused outright.
+
+- [ ] `merge` produces one loadable bf16 model from one adapter, folding in the selected checkpoint.
+- [ ] `plan_quantization` defaults to **bf16 alone**, and refuses a GGUF format with an error naming the runtime mismatch.
+- [ ] `quantize` refuses FP8 until `fp8_verified`, and never re-exports bf16.
+- [ ] A serving plan without the bf16 reference is refused outright.
+- [ ] `NEVER_QUANTIZED` covers the vision tower, every merger and `lm_head`.
+- [ ] `export_gguf` refuses an unverified mmproj, and is reachable only on request.
+- [ ] Serving and GGUF artifacts land under different runtime prefixes.
+- [ ] `quant_thresholds` returns pass/fail correctly **at each format's exact boundary** — a format landing precisely on its allowance passes.
+- [ ] Margins behave identically at F1 0.95 and 0.70, which is what "absolute" means.
+- [ ] `validate_quant` refuses an over-threshold format **with no override path**, and refuses validation without the bf16 reference.
+- [ ] A format that was not measured does not pass.
 - [ ] **`assert_servable` refuses a serving format that produced no verdict at all.** `validate_quant` only returns a result for formats it was given metrics for, so a format nobody scored appears in neither `servable_formats` nor `blocked_formats`. Checking `blocked_formats` alone let it sail through to push with zero measurements — the precise inverse of the rule this module exists to enforce.
-- [ ] The gate sits inside `package`, between quantize and push.
+- [ ] The threshold gate sits inside `package`, between quantize and calibrate.

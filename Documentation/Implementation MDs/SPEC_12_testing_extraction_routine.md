@@ -4,7 +4,7 @@
 >
 > **Naming hazard (master §0.1):** the architecture's "**Fideon SPEC_12**" is the external multi-tenant deployment spec. This file is our testing harness. Different documents.
 >
-> **Architecture refs:** `finetuning-architecture-v1.md` §17 (**extraction/testing routine**), §19 (folder placement), §13a (quantized-format validation consumer), §5 (confidence without ground truth).
+> **Architecture refs:** `finetuning-architecture-v2.1.docx` §17 (**extraction/testing routine**), §19 (folder placement), §13a (quantized-format validation consumer), §5 (confidence without ground truth).
 
 ## Goal
 
@@ -60,8 +60,8 @@ python testing/run_extraction.py --model v3 --input testing/test_data/ \
   | Value | Resolves to |
   |---|---|
   | `base` | Untuned `Qwen/Qwen3-VL-8B-Instruct` at the pinned revision, **no adapter** |
-  | `v1`, `v2`, … | Foundation + the routed per-type adapter, or the merged model |
-  | `v2` + `--format q5_k_m` | That version's specific quantized GGUF |
+  | `v1`, `v2`, … | The merged model, plus a graduated per-type adapter where the routed type has one |
+  | `v2` + `--format fp8` | That version's FP8 serving weights. A GGUF format here is a category error: llama.cpp loads those, and the endpoint runs vLLM |
 
   **`base` is not a curiosity** — it is the zero-shot baseline of the pilot protocol (SPEC_15) and the day-zero pre-annotation path (SPEC_04). Supporting it here means those two have one implementation, not three.
 - `--mode ocr_plus_image` (default) | `image_only` — both production pathways testable from one harness.
@@ -126,7 +126,7 @@ One entry per extraction, so an output JSON is never ambiguous about its origin:
       "document": "abcLossRun.pdf",
       "doc_type": "loss_run",
       "model_version": "v2",
-      "quant_format": "q5_k_m",
+      "quant_format": "fp8",
       "mode": "ocr_plus_image",
       "result_path": "results/v2/abcLossRun.json",
       "metrics_path": "metrics/v2/abcLossRun.metrics.json",

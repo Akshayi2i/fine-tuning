@@ -2,7 +2,7 @@
 
 > Read `SPEC_00_MASTER_CONTEXT.md` first. Dependencies: SPEC_01 (schemas, alias registry, `common.normalize`, `common.aliases`), SPEC_02, SPEC_03 (MinerU output — `derive_aliases` reads it).
 >
-> **Architecture refs:** `finetuning-architecture-v1.md` §0a (schema contract), §0b (LoB in every label), §4c (**day-zero bootstrap**), §7 "Golden JSON Generation Mechanism", §13 step 11 (feedback loop).
+> **Architecture refs:** `finetuning-architecture-v2.1.docx` §0a (schema contract), §0b (LoB in every label), §4c (**day-zero bootstrap**), §7 "Golden JSON Generation Mechanism", §13 step 11 (feedback loop).
 
 ## Goal
 

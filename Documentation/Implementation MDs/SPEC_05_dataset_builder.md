@@ -2,7 +2,7 @@
 
 > Read `SPEC_00_MASTER_CONTEXT.md` first. Dependencies: SPEC_01, SPEC_02, SPEC_04.
 >
-> **Architecture refs:** `finetuning-architecture-v1.md` §6 (modality dropout), §7 (dataset format, schema registry, prompt template versioning, long documents), §8 (corpus versioning, split strategy), §8a (MinerU pin in the manifest), §8b (tenant isolation per Fideon SPEC_12; **de-identification per Fideon SPEC_11 — BLOCKED, see §1**), §0b (LoB coverage).
+> **Architecture refs:** `finetuning-architecture-v2.1.docx` §6 (modality dropout), §7 (dataset format, schema registry, prompt template versioning, long documents), §8 (corpus versioning, split strategy), §8a (MinerU pin in the manifest), §8b (tenant isolation per Fideon SPEC_12; **de-identification per Fideon SPEC_11 — BLOCKED, see §1**), §0b (LoB coverage).
 
 ## Goal
 
@@ -12,7 +12,7 @@ Compile processed docs + golden labels into versioned, chat-format JSONL trainin
 
 ### 1. De-identification — **BLOCKED. Do not implement.**
 
-Arch §8b requires the Foundation LoRA to train only on Presidio de-identified data (Fideon SPEC_11). **Do not build `data_pipeline/deidentify/` until the question below is answered**, because implementing it as specified would make the fine-tuned model measurably worse.
+Arch §8b requires the unified extractor LoRA to train only on Presidio de-identified data (Fideon SPEC_11). **Do not build `data_pipeline/deidentify/` until the question below is answered**, because implementing it as specified would make the fine-tuned model measurably worse.
 
 **Why this is a training bug, not a compliance gap.** Arch §8b specifies de-identification of **text**. It says nothing about the **page images** the vision encoder reads. If the text is de-identified and the image is not:
 

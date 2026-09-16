@@ -1,19 +1,24 @@
-# SPEC 06 — Training (ms-swift LoRA: Foundation + Per-Type Adapters)
+# SPEC 06 — Training (ms-swift LoRA: ONE Unified Adapter)
 
 > Read `SPEC_00_MASTER_CONTEXT.md` first. Dependencies: SPEC_01, SPEC_02, SPEC_05.
 >
-> **Architecture refs:** `finetuning-architecture-v1.md` §3 (ViT escalation gate — **LoRA, never full FT**), §4 (adapter strategy), §8b (tenancy per Fideon SPEC_12; de-identification per Fideon SPEC_11 — blocked, see SPEC_05), **§9.2 (bf16 base vs 4-bit — the decision and its open measurement)**, §9a (LoRA targets), §10 (**locked three-layer trainer stack**), §11 (full hyperparameter spec), §11a (**sweep methodology**), §12 (versioning + run registry).
+> **Architecture refs:** `finetuning-architecture-v2.1.docx` §3 (ViT escalation gate — **LoRA, never full FT**), §4 (adapter strategy), §8b (tenancy per Fideon SPEC_12; de-identification per Fideon SPEC_11 — blocked, see SPEC_05), **§9.2 (bf16 base vs 4-bit — the decision and its open measurement)**, §9a (LoRA targets), §10 (**locked three-layer trainer stack**), §11 (full hyperparameter spec), §11a (**sweep methodology**), §12 (versioning + run registry).
 
 ## Goal
 
-Fine-tune Qwen3-VL-8B-Instruct with **LoRA on a bf16 base** via the locked trainer stack. Train the shared Foundation LoRA and the per-type adapters on top, freezing the ViT by default with a gated escalation path, and record every run — sweeps included — in the registry.
+Fine-tune Qwen3-VL-8B-Instruct with **LoRA on a bf16 base** via the locked trainer stack. **One adapter**, across every document type and every task, with the ViT *and* the mergers frozen, and every run — sweeps included — recorded in the registry.
+
+Two reversals from v1, both forced by how vLLM serves:
+
+* **One adapter, not a Foundation plus per-type stack.** vLLM applies one LoRA per request, so the two could never both be active — the v1 topology was unservable, not merely awkward. It also did not fit the data: at 25–30 documents per type a rank-16 adapter memorises its own training set.
+* **The mergers are not a LoRA target** (`freeze_aligner: true`). Tower and connector LoRA in vLLM is experimental with known mixed-adapter batching risks, and image-vs-OCR arbitration is learned in the **decoder**, where image tokens and OCR text tokens attend to each other. The mergers only map visual features and never see OCR text at all.
 
 ## The locked stack (arch §10) — not a choice to re-make
 
 ```
 Layer 3   ms-swift                    ← what you invoke (CLI / config)
               │ wraps and configures ↓
-Layer 2   TRL SFTTrainer              ← the real training loop
+Layer 2   swift.trainers.Seq2SeqTrainer   ← the real loop, on the HF Trainer
               │ (optimizer, backprop, grad accumulation, checkpointing,
               │  eval hooks, early stopping, DeepSpeed/Accelerate)
               │ built on ↓
@@ -22,7 +27,7 @@ Layer 1   PyTorch + Transformers + PEFT + bitsandbytes + Accelerate/DeepSpeed
 
 `SFTTrainer` is **not skipped** — it sits underneath ms-swift. `train_foundation.py` and `train_adapter.py` are **thin wrappers that assemble the ms-swift config and launch it**, not custom training loops.
 
-**Fallback clause:** dropping to TRL `SFTTrainer` directly at Layer 3 is permitted **only** if ms-swift lacks a specific Qwen3-VL capability needed at implementation time. That is a contingency, not a parallel option — document it if invoked.
+**Fallback clause:** dropping to ms-swift's `Seq2SeqTrainer` directly at Layer 3 is permitted **only** if ms-swift lacks a specific Qwen3-VL capability needed at implementation time. That is a contingency, not a parallel option — document it if invoked.
 
 ## Deliverables
 
@@ -33,7 +38,7 @@ Entrypoint that:
 - Loads `configs/training/foundation.yaml` + `configs/base_model.yaml`.
 - Configures **base precision from `training/base_precision.py`** — one helper shared by both trainers, so a Foundation and the adapters stacked on it cannot hold the base differently. Default is a **bf16 frozen base** (`quantization_bit: 0`, passed explicitly rather than omitted, and the `bnb_4bit_*` arguments suppressed entirely so the run log never carries settings describing nothing the run did). Setting `load_in_4bit: true` switches to 4-bit NF4 with double quantization and bf16 compute. Then bf16 LoRA adapters (rank 64 / alpha 128 / dropout 0.05, `bias: none`), target modules = attention + MLP projections **+ the vision-language projector**, **ViT frozen** (`train_vit: false`), `flash_attention_2`.
 - Applies the full arch §11 parameter set — AdamW paged 8-bit, cosine schedule with warmup, max grad norm 1.0, gradient checkpointing, effective batch via accumulation, resolution cap and `max_seq_len` from config.
-- Launches **ms-swift** SFT (which runs TRL `SFTTrainer` underneath) with DeepSpeed (ZeRO-2 default, ZeRO-3 when VRAM-constrained).
+- Launches **ms-swift** SFT (which runs ms-swift's `Seq2SeqTrainer` underneath) with DeepSpeed (ZeRO-2 default, ZeRO-3 when VRAM-constrained).
 - Trains across **ALL doc types + ALL 3 modality regimes** — the mixed corpus is what makes the Foundation learn shared behavior (insurance terminology, table/checkbox reading, OCR-vs-image arbitration, JSON structural discipline).
 - Saves the adapter to the **RunPod staging volume** at `/runpod-volume/staging/adapters/foundation/v{n}/` (master §12a). It is pushed to Blob later by `package` (SPEC_13 command 2), or immediately when `finetune --push-adapters` is set.
 - Writes a `RunManifest` (SPEC_02) with full config, data stats, LoB coverage, seed, git commit, corpus version, MinerU version, schema/prompt template versions — at status **`training`**, because nothing has run yet. `launch_and_record` then flips it to `trained` when ms-swift returns, or **`failed`** when it raises, so the registry never claims weights a crashed run never wrote.
@@ -57,7 +62,7 @@ Per-doc-type (and per-tenant) adapter entrypoint:
 
 Flags: `--doc-type acord|policy|lossrun`, `--acord-form 25|125|140` (optional, for the future split case), `--foundation vN`, `--corpus vN`, `--out-version vN`.
 
-**Dependency-upgrade rule (arch §12):** when Foundation moves to a new major version, **all** per-type adapters must be re-validated and likely retrained against it before it becomes the production Foundation. Treat it like a dependency upgrade, not an automatic cascade — `query_registry.adapters_depending_on()` (SPEC_02) produces the exact work list.
+**Dependency-upgrade rule (arch §12):** a GRADUATED per-type adapter (§4.2) trains on the merged foundation weights, so when the unified run moves to a new major version every dependent adapter must be re-validated and likely retrained before it becomes production. Dormant until a type graduates — the default topology produces none. Treat it like a dependency upgrade, not an automatic cascade — `query_registry.adapters_depending_on()` (SPEC_02) produces the exact work list.
 
 ### 3. `training/data_collator.py`
 **Override hook only.** ms-swift provides correct multimodal collation and `-100` label masking (system, image, and OCR tokens masked; **loss computed only on the assistant JSON**) by default — you don't hand-write it (arch §10). This file:
@@ -151,7 +156,7 @@ a recorded config, and two rendering rules are load-bearing:
 - [ ] The assistant span **includes** the end-of-turn token, so EOS is supervised — an unsupervised EOS means generation runs to `max_new_tokens`, which the runner reports as truncation and the row-completeness signal reports as dropped rows.
 - [ ] Early stopping reaches the trainer: `early_stopping_patience` is emitted, not merely configured.
 - [ ] **Label masking verified**: loss computed only on assistant tokens; a mutated masking implementation fails the test.
-- [ ] Per-type adapter trains on top of a given Foundation and records the `foundation_version` dependency.
+- [ ] A graduated per-type adapter (§4.2) trains on the MERGED foundation weights and records its `foundation_version` dependency. Never stacked on an unmerged adapter: vLLM applies one LoRA per request.
 - [ ] `--continue-from` marks the manifest so the promotion gate demands cross-type regression evidence.
 - [ ] Adapter lands on the staging volume; the RunManifest lands in **Blob** with `artifacts.status: "staged"`, LoB coverage, and seed recorded.
 - [ ] `--train-vit` configures a **ViT LoRA**; no code path enables full ViT fine-tuning.

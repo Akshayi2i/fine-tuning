@@ -2,7 +2,7 @@
 
 > Read `SPEC_00_MASTER_CONTEXT.md` first. Dependencies: SPEC_01, SPEC_02.
 >
-> **Architecture refs:** `finetuning-architecture-v1.md` §7 (page images, multi-page), §8a (**MinerU version pinning**), §11 (resolution cap), §13 steps 1–2, §18a (raw-document storage, dedup, retention, access pattern).
+> **Architecture refs:** `finetuning-architecture-v2.1.docx` §7 (page images, multi-page), §8a (**MinerU version pinning**), §11 (resolution cap), §13 steps 1–2, §18a (raw-document storage, dedup, retention, access pattern).
 
 ## Goal
 

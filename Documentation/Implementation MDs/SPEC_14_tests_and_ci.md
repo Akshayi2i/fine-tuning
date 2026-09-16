@@ -2,7 +2,7 @@
 
 > Read `SPEC_00_MASTER_CONTEXT.md` first. Dependencies: all prior specs (01–13).
 >
-> **Architecture refs:** `finetuning-architecture-v1.md` §0a/§0b (schema + LoB contracts), §5 (list-field recall), §7 (prompt identity, split leakage), §8a/§8b (MinerU pin, tenancy), §10 (collator masking), §15 (gating).
+> **Architecture refs:** `finetuning-architecture-v2.1.docx` §0a/§0b (schema + LoB contracts), §5 (list-field recall), §7 (prompt identity, split leakage), §8a/§8b (MinerU pin, tenancy), §10 (collator masking), §15 (gating).
 
 ## Goal
 

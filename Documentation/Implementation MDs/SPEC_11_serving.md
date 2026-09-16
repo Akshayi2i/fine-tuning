@@ -4,7 +4,7 @@
 >
 > **Naming hazard (master §0.1):** the architecture's "**Fideon SPEC_11**" is the external Presidio de-identification spec (implemented in our SPEC_05). This file is our serving layer. Different documents.
 >
-> **Architecture refs:** `finetuning-architecture-v1.md` §0a (audit gate contract), §0b (LoB output), §4a (**classifier as a load-bearing component**), §4b (ACORD two-level), §4c (day-zero classifier), §5 (confidence), §7 (long-document page routing), §14 (**RunPod split: what runs where**).
+> **Architecture refs:** `finetuning-architecture-v2.1.docx` §0a (audit gate contract), §0b (LoB output), §4a (**classifier as a load-bearing component**), §4b (ACORD two-level), §4c (day-zero classifier), §5 (confidence), §7 (long-document page routing), §14 (**RunPod split: what runs where**).
 
 ## Goal
 
@@ -36,7 +36,7 @@ confidence calibration
 
 ### 1. `serving/vllm_entrypoint.py`
 - RunPod Serverless handler wrapping vLLM, serving the promoted merged/quantized model over an OpenAI-compatible API, **with logprobs enabled** (calibration depends on them).
-- **LoRA hot-swap**: Foundation + a per-request per-type adapter via vLLM multi-LoRA, chosen from the classifier result — no base-model reload per request (arch §4).
+- **LoRA hot-swap**: the merged model plus, for a type that has graduated (§4.2), **one** per-request adapter chosen from the classifier result — no base-model reload. One LoRA per request is what vLLM supports, which is exactly why the v1 Foundation-plus-per-type stack could never have been served.
 - Pulls the promoted artifact from Blob on cold start (SPEC_02); version configurable.
 - Uses SPEC_07 `model_runner` / `input_builder` for generation so output matches eval and testing exactly.
 - **Asserts the serving MinerU version matches the training corpus pin** (SPEC_03 `assert_version_matches`) — a mismatch is distribution shift and a regression trigger (arch §8a), not a warning to ignore.
@@ -100,7 +100,7 @@ Per request: (OCR if provided) → classify → route adapter/prompt/schema → 
 
 ## Acceptance checklist
 - [ ] Endpoint serves a request end-to-end → schema-shaped JSON + calibrated confidence + `line_of_business`.
-- [ ] The correct per-type adapter is hot-swapped from the classification result.
+- [ ] Where a type has graduated, the correct per-type adapter is hot-swapped from the classification result; otherwise the merged model serves it with no adapter, and that is NOT flagged for review — flagging the expected path would queue every document.
 - [ ] ACORD classification returns both `doc_type` and `acord_form`, and the form selects the schema.
 - [ ] Low classifier confidence → **Foundation-only fallback + review flag**, never a silent guess.
 - [ ] A long policy doc triggers page routing, records `pages_used`, and sends its selected pages in **one** interleaved call; a short doc skips routing.

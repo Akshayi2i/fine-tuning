@@ -8,7 +8,24 @@
 >
 > Anything genuinely build-level — a CLI flag, a module name, a test — lives here and is not expected to appear in the architecture.
 >
-> **Revision:** aligned to `finetuning-architecture-v1.md` (architecture v1). This supersedes the earlier spec set derived from `qwen3vl-insurance-extraction-finetuning-architecture.md`; all architecture section numbers were renumbered in v1 (see §0.2 below).
+> **Revision:** aligned to **`finetuning-architecture-v2.1.docx`**. The section numbers below are v2.1's.
+>
+> What v2.1 changed, and what it means for these specs:
+>
+> | Change | Why | Specs affected |
+> |---|---|---|
+> | **ONE unified LoRA**, merged; per-type only via the §4.2 graduation gate | vLLM applies one LoRA per request, so the v1 Foundation-plus-per-type stack was **unservable** | 00, 02, 06, 07, 10, 11, 12, 13, 15 |
+> | **Per-task token budgets** (4k–32k), `max_pixels` not a long-side cap | 8192 could not hold a one-page ACORD with schema, image, OCR and output | 01, 05, 06 |
+> | **Task decomposition**: classify, page_select, extract, lossrun header/rows/totals | Long Loss Runs and Policies do not fit one call | 05, 11, 12 |
+> | **Group-level splits** (carrier, template, account) + held-out carriers | Source-document splits leak renewals and shared templates | 05, 08 |
+> | **Per-epoch modality sampling** | Three rows per document produced 33/33/33, not 50/20/30, and tripled effective epochs | 05, 06 |
+> | **Gate**: absolute floors + paired-bootstrap non-inferiority + a recorded override | "Beat previous on every metric within 0.001" could not be passed at pilot volume, and had no override | 08, 13 |
+> | **Confidence**: per-field-type feature calibrators, risk-controlled thresholds | Min-logprob is length-biased; a fixed 0.70 was tied to no measured error rate | 09, 11 |
+> | **Serving formats**: bf16 → FP8 on vLLM; GGUF demoted to an edge export | GGUF is llama.cpp's format and the endpoint runs vLLM | 10, 12, 13 |
+> | **13 pipeline stages**, gate after merge/quantize/calibrate | The gate scores the merged model in each serving format, and reads a metric that does not exist until thresholds are chosen | 13 |
+> | **Trainer stack corrected**: ms-swift's own `Seq2SeqTrainer` on the HF Trainer, not TRL | Factual correction — TRL is an ms-swift dependency for RLHF trainers, not the SFT loop | 06 |
+>
+> This supersedes the earlier spec set derived from `qwen3vl-insurance-extraction-finetuning-architecture.md`.
 
 ---
 
@@ -36,14 +53,14 @@ The previous spec set cited the old architecture numbering. Everything has been 
 |---|---|---|
 | Pipeline integration / schema contract / LoB | *(did not exist)* | **§0, §0a, §0b** |
 | Qwen3-VL recap + ViT escalation gate | §2 | **§3** |
-| Adapter strategy (Foundation → per-type) | §3 | **§4** |
+| Adapter strategy (ONE unified LoRA; per-type only via the §4.2 graduation gate) | §3 | **§4** |
 | Doc-type classifier | §3a | **§4a** |
 | ACORD sub-types | §3b | **§4b** |
 | Day-zero bootstrap | *(did not exist)* | **§4c** |
-| Confidence (logprobs + calibration) | §4 | **§5** |
+| Confidence (per-field-type feature calibrators, risk-controlled thresholds) | §4 | **§5** |
 | Dual-input-mode training | §5 | **§6** |
 | Dataset format / golden JSON / long docs | §6 | **§7** |
-| Corpus management + split strategy | §7 | **§8** |
+| Corpus management + GROUP-level split strategy | §7 | **§8** |
 | MinerU version pinning | *(did not exist)* | **§8a** |
 | Multi-tenant corpus isolation | *(did not exist)* | **§8b** |
 | Fine-tuning technique (LoRA on a bf16 base) | §8 | **§9** |
@@ -53,7 +70,7 @@ The previous spec set cited the old architecture numbering. Everything has been 
 | Hyperparameter sweep methodology | *(did not exist)* | **§11a** |
 | Versioning + run registry | §11 | **§12** |
 | End-to-end pipeline | §12 | **§13** |
-| GGUF format matrix | §12a | **§13a** |
+| Serving-format quantization (bf16 → FP8; GGUF demoted to an edge export) | §12a | **§13a** |
 | Quantization quality thresholds | *(did not exist)* | **§13b** |
 | RunPod infrastructure | §13 | **§14** |
 | Evaluation framework | §14 | **§15** |
@@ -117,7 +134,7 @@ The same real-world field appears under many surface labels across documents. Th
 
 1. **Golden labels are canonical.** Annotators map whatever the document says onto the canonical key. Surface labels never appear as keys in a golden JSON.
 2. **Inference output is canonical.** The extraction returns `insured_name` regardless of how the document phrased it.
-3. **The VLM performs the mapping.** This is a core thing the Foundation LoRA is trained to do (arch §4, "insurance terminology & abbreviations") — recognising that *Applicant* on this page denotes the same field as *Named Insured* on that one.
+3. **The VLM performs the mapping.** This is a core thing the unified extractor LoRA is trained to do (arch §4, "insurance terminology & abbreviations") — recognising that *Applicant* on this page denotes the same field as *Named Insured* on that one.
 
 **How the model is taught it — three mechanisms, all required:**
 
@@ -144,14 +161,14 @@ The same real-world field appears under many surface labels across documents. Th
 | Base model | `Qwen/Qwen3-VL-8B-Instruct`, pinned HF revision |
 | Fine-tuning technique | **LoRA on a bf16 base** — bf16 frozen base weights, LoRA adapters in bf16. Both serving paths hold the base in bf16/fp16 (merged model per SPEC_10, vLLM LoRA hot-swap per SPEC_11), so training in bf16 means the adapter is applied to exactly the weights it trained against. **4-bit NF4 QLoRA remains a live flag** (`quantization.load_in_4bit`) for VRAM-constrained pods — arch §9.2 |
 | Trainable components | **Projector + LLM decoder** via LoRA. **Vision Encoder (ViT) frozen by default** — escalated only via the eval gate (arch §3). **When the ViT is trained it gets a LoRA — never a full fine-tune** (arch §3). |
-| Adapter strategy | **Hybrid**: one shared **Foundation LoRA** (rank 64, alpha 128) trained across all doc types + all 3 modality regimes, then small **per-type LoRA** adapters (rank 16, alpha 32) stacked on top. |
-| Trainer stack | **Layer 3 ms-swift** (what you invoke) → **Layer 2 TRL `SFTTrainer`** (the real loop) → **Layer 1 PyTorch/Transformers/PEFT/bitsandbytes/Accelerate+DeepSpeed**. Locked, one option per layer (arch §10). |
-| Trainer fallback | Dropping to TRL `SFTTrainer` directly at Layer 3 is a **contingency**, permitted only if ms-swift lacks a required Qwen3-VL capability at implementation time — not a parallel option. |
+| Adapter strategy | **ONE unified LoRA** (rank 64, alpha 128), trained across all document types, all tasks and all modality regimes, then merged. The task, type and schema are always in the prompt, so cross-type interference is controlled by conditioning rather than by separate weights. Per-type adapters return only through the §4.2 **graduation gate** (≥500 labeled docs of that type AND a measured >2pp win outside the bootstrap CI), trained on the merged foundation, decoder-only, **never stacked** — vLLM applies one LoRA per request, so the v1 Foundation-plus-per-type stack was unservable. |
+| Trainer stack | **Layer 3 ms-swift** (what you invoke) → **Layer 2 ms-swift's `Seq2SeqTrainer`** (the real loop) → **Layer 1 PyTorch/Transformers/PEFT/bitsandbytes/Accelerate+DeepSpeed**. Locked, one option per layer (arch §10). |
+| Trainer fallback | Dropping to ms-swift's `Seq2SeqTrainer` directly at Layer 3 is a **contingency**, permitted only if ms-swift lacks a required Qwen3-VL capability at implementation time — not a parallel option. |
 | Collator | ms-swift provides multimodal collation and `-100` masking; `training/data_collator.py` is an **override hook only** (arch §10). |
 | LoRA target modules | `q_proj, k_proj, v_proj, o_proj, gate_proj, up_proj, down_proj` in every decoder layer + vision-language projector/merger (justified per-module in arch §9a). |
 | Attention impl | `flash_attention_2`. |
 | Confidence | Per-token logprobs → per-field aggregation (default **min token prob** in span) → **post-hoc calibration** (temperature scaling default / isotonic). List fields also get a **row-completeness** signal. Review threshold ≈ 0.7, tuned. |
-| Quantization | **GGUF**, user-selectable (`fp16\|bf16\|q8_0\|q6_k\|q5_k_m\|q4_k_m`). Routinely produce/validate only **fp16 baseline + one serving format**; **`q5_k_m` is the default serving target**; per-format quality thresholds enforced (arch §13b). |
+| Quantization | **vLLM-native serving formats**: bf16 merged (reference, and cycle 1's serving format) then **FP8 W8A8** via llm-compressor from cycle 2; AWQ INT4 only under VRAM constraint. The vision tower, mergers and `lm_head` stay bf16 in every format. GGUF is an on-request **edge** export, validated in llama.cpp, never the serving path — it is llama.cpp's format and the endpoint runs vLLM. Thresholds are absolute percentage points against bf16, per field class (arch v2.1 §13a-b). |
 | Artifact storage | **Azure Blob** — all weights/corpus/PDFs. Repo holds code only. |
 | Compute | **RunPod** — ephemeral training pods + a persistent Serverless vLLM inference endpoint. Business logic lives outside RunPod. |
 | Schema contract | Target JSON = Fideon SPEC_00 canonical schema; audit gate Fideon SPEC_07 Stage 3 validates every inference call (§1.1). |
@@ -334,7 +351,7 @@ Insurance documents contain PII (names, TINs/SSNs, addresses, financials).
 
 > ### BLOCKER — Presidio de-identification must not be implemented as specified
 >
-> Arch §8b requires the Foundation LoRA to train only on Presidio de-identified data, but specifies de-identification of **text**, not of the **page images** the vision encoder reads. Implementing it that way is not merely an incomplete privacy control — it **corrupts the training signal**:
+> Arch §8b requires the unified extractor LoRA to train only on Presidio de-identified data, but specifies de-identification of **text**, not of the **page images** the vision encoder reads. Implementing it that way is not merely an incomplete privacy control — it **corrupts the training signal**:
 >
 > - **`image_only` (30% of the Foundation corpus):** the image shows "John Smith", the target says `PERSON_1`. The target is **not derivable from the input**. That is an unlearnable example, and 30% of the corpus made of them is pure hallucination pressure.
 > - **`ocr_plus_image` (50%):** OCR says `PERSON_1`, image says "John Smith", target says `PERSON_1` → teaches **trust-OCR-over-image**, the exact inverse of what the projector LoRA and the 20% `noisy_ocr_image` regime exist to teach (arch §3, §6).
@@ -439,9 +456,9 @@ A cycle is run through **three commands plus one umbrella command**, all from `o
 
 ```bash
 python -m orchestration.run finetune --input ./intake --out-version v2 --gpu a100-80
-python -m orchestration.run package  --version v2 --formats fp16 q5_k_m
+python -m orchestration.run package  --version v2 --formats bf16 fp8
 python -m orchestration.run extract  --model base|v1|v2 --input testing/test_data/
-python -m orchestration.run all      --input ./intake --out-version v2 --formats fp16 q5_k_m
+python -m orchestration.run all      --input ./intake --out-version v2 --formats bf16 fp8
 ```
 
 **`all` never includes `extract`.** Extraction is a separate concern from building a model — it runs against any chosen version, including models trained weeks earlier and the untuned base.
@@ -450,7 +467,7 @@ python -m orchestration.run all      --input ./intake --out-version v2 --formats
 
 1. **Labeling is human work inside the span of command 1.** `finetune` ingests and OCRs everything, builds the corpus from only the source_ids that have a validated `golden.json`, and **reports the unlabeled backlog**. It aborts before training only when the labeled set is below `--min-labels-per-type` (default 25, matching SPEC_04's day-zero rule).
 2. **The gate is a hard stop inside command 1.** A failed evaluation stops `finetune` *before* merge and exits non-zero. `all` therefore never reaches `package` on a failed gate.
-3. **Command 1 fans out into 1 + N GPU jobs** — Foundation first, then one per active doc type, sequentially, because a per-type adapter cannot start before the Foundation it depends on has trained and passed evaluation (arch §12).
+3. **Command 1 launches ONE GPU job.** v1 fanned out into 1 + N sequentially, because each per-type adapter sat on top of the Foundation. That topology is gone (arch v2.1 §4.1): vLLM applies one LoRA per request, so a Foundation LoRA and a per-type LoRA could never both be active on a call.
 
 ### 12a. Staging volume vs. registry — do not conflate these
 
