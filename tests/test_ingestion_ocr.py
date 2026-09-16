@@ -391,3 +391,121 @@ def test_ocr_engine_protocol_is_satisfied_by_the_stub():
     engine: run_mineru.OcrEngine = StubEngine()
     pages = engine.process(b"%PDF", device="cpu", max_long_side_px=1792)
     assert pages and pages[0].page_number == 1
+
+
+# --------------------------------------------------------------------------
+# Near-duplicate detection and grouping (arch v2.1 §8.2)
+# --------------------------------------------------------------------------
+
+def _fp(source_id, **over):
+    from data_pipeline.ingestion.dedup_and_group import DocumentFingerprint
+
+    base = dict(
+        source_id=source_id,
+        doc_type="policy",
+        content_sha256=f"sha-{source_id}",
+    )
+    base.update(over)
+    return DocumentFingerprint(**base)
+
+
+def test_the_same_file_twice_is_grouped_not_dropped():
+    """A carrier that issues four hundred near-identical certificates is a real
+    part of the distribution. Removing them trains on a corpus that does not look
+    like production; what must not happen is those four hundred spanning a split."""
+    from data_pipeline.ingestion.dedup_and_group import assign_groups
+
+    report = assign_groups([_fp("a", content_sha256="same"), _fp("b", content_sha256="same")])
+
+    assert report.group_of["a"] == report.group_of["b"]
+    assert report.exact_duplicates == {"b": "a"}
+    assert set(report.group_of) == {"a", "b"}, "neither document was dropped"
+
+
+def test_a_renewal_groups_with_its_prior_year():
+    """Same carrier, same template, same account — every value differs and the
+    family does not. This is the leak the source-document split could not see."""
+    from data_pipeline.ingestion.dedup_and_group import assign_groups
+
+    report = assign_groups([
+        _fp("2025", carrier="Acme Ins. Co.", template_id="ACORD25", account="Rivera Fabrication"),
+        _fp("2026", carrier="ACME INS CO", template_id="acord25", account="rivera fabrication"),
+    ])
+    assert report.group_of["2025"] == report.group_of["2026"], (
+        "carrier and account names differing only in case and punctuation are one family"
+    )
+
+
+def test_an_identical_page_one_layout_is_one_template():
+    from data_pipeline.ingestion.dedup_and_group import assign_groups
+
+    report = assign_groups([
+        _fp("a", layout_phash="ffff0000"),
+        _fp("b", layout_phash="ffff0000"),
+        _fp("c", layout_phash="0000ffff"),
+    ])
+    assert report.group_of["a"] == report.group_of["b"]
+    assert report.group_of["c"] != report.group_of["a"]
+
+
+def test_near_duplicate_text_merges_groups():
+    from data_pipeline.ingestion.dedup_and_group import assign_groups, minhash
+
+    shared = " ".join(f"policy clause number {i} applies to the named insured" for i in range(40))
+    report = assign_groups([
+        _fp("a", minhash=minhash(shared)),
+        _fp("b", minhash=minhash(shared + " one extra trailing clause")),
+        _fp("c", minhash=minhash("completely unrelated loss run claim table headings only")),
+    ])
+    assert report.group_of["a"] == report.group_of["b"]
+    assert report.group_of["c"] != report.group_of["a"]
+    assert report.near_duplicate_pairs
+
+
+def test_grouping_is_transitive():
+    """A chain of renewals is one account. Letting the ends of the chain split
+    leaks exactly what grouping prevents, even where the ends are not themselves
+    similar enough to merge directly."""
+    from data_pipeline.ingestion.dedup_and_group import assign_groups
+
+    report = assign_groups([
+        _fp("a", layout_phash="1111"),
+        _fp("b", layout_phash="1111", account="shared"),
+        _fp("c", account="shared"),
+    ])
+    assert report.group_of["a"] == report.group_of["c"]
+    assert report.group_count == 1
+
+
+def test_documents_naming_no_carrier_are_reported():
+    """They can still be grouped by layout and text, but the held-out-carrier
+    slice cannot use them — so the count is worth surfacing."""
+    from data_pipeline.ingestion.dedup_and_group import assign_groups
+
+    report = assign_groups([_fp("a"), _fp("b", carrier="Acme")])
+    assert report.unattributed == ["a"]
+
+
+def test_an_unrelated_document_is_its_own_family():
+    from data_pipeline.ingestion.dedup_and_group import assign_groups
+
+    report = assign_groups([_fp("a"), _fp("b"), _fp("c")])
+    assert report.group_count == 3
+
+
+def test_word_shingles_survive_a_single_ocr_error():
+    """Character shingles break on every shingle overlapping a corrupted
+    character; a word shingle loses only those containing that word."""
+    from data_pipeline.ingestion.dedup_and_group import estimated_jaccard, minhash
+
+    clean = " ".join(f"the named insured shown in declarations item {i}" for i in range(30))
+    ocr_error = clean.replace("insured", "1nsured", 1)
+    assert estimated_jaccard(minhash(clean), minhash(ocr_error)) > 0.85
+
+
+def test_grouping_is_deterministic():
+    """Corpus composition must be reproducible from the manifest alone."""
+    from data_pipeline.ingestion.dedup_and_group import assign_groups
+
+    docs = [_fp(f"d{i}", layout_phash=f"h{i % 3}") for i in range(9)]
+    assert assign_groups(docs).group_of == assign_groups(list(reversed(docs))).group_of

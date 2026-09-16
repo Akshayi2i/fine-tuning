@@ -239,12 +239,19 @@ def test_the_double_annotation_sample_is_not_a_subset_of_train():
     byte-for-byte, so every sampled document was in train by construction and
     the agreement score never measured noise on the evaluation population.
     """
-    from data_pipeline.dataset_builder.split_train_val_test import assign_splits
+    from data_pipeline.dataset_builder.split_groups import GroupRecord, assign_group_splits
     from data_pipeline.labeling.review_tool.tasks import double_annotation_sample
 
     source_ids = [f"policy_{i:04d}" for i in range(300)]
     sampled = set(double_annotation_sample(source_ids))
-    assignment = assign_splits({"policy": source_ids})
+    # One group per document: this seam is about the sampler's hash colliding
+    # with the splitter's, not about families.
+    assignment = assign_group_splits({
+        "policy": [
+            GroupRecord(group_id=sid, doc_type="policy", source_ids=[sid])
+            for sid in source_ids
+        ]
+    })
     holdout = {sid for sid, split in assignment.assignment.items() if split != "train"}
 
     assert sampled, "nothing was sampled"

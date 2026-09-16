@@ -416,17 +416,36 @@ def stage_dataset_build(ctx: StageContext) -> StageResult:
         sample_to_target_mix,
         write_jsonl,
     )
-    from data_pipeline.dataset_builder.split_train_val_test import assign_splits
+    from data_pipeline.dataset_builder.split_groups import GroupRecord, assign_group_splits
 
     documents = load_labeled_documents(ctx)
     if not documents:
         raise PipelineError("no labeled, OCR'd documents to build a corpus from")
 
-    by_type: dict[str, list[str]] = {}
+    # One GroupRecord per family, per doc type. A document with no detected
+    # family is its own group — which reproduces the v1 per-document behaviour
+    # for that document rather than leaving it unassigned.
+    records: dict[str, dict[str, GroupRecord]] = {}
     for document in documents:
-        by_type.setdefault(document.doc_type, []).append(document.source_id)
+        per_type = records.setdefault(document.doc_type, {})
+        record = per_type.get(document.family)
+        if record is None:
+            per_type[document.family] = GroupRecord(
+                group_id=document.family,
+                doc_type=document.doc_type,
+                source_ids=[document.source_id],
+                carrier=document.carrier,
+                synthetic=document.synthetic,
+            )
+        else:
+            record.source_ids.append(document.source_id)
+            # A family is synthetic only if every member is. One real document in
+            # the group makes the whole group splittable, which is the safe
+            # direction: it keeps generated labels out of val and test.
+            record.synthetic = record.synthetic and document.synthetic
 
-    assignment = assign_splits(by_type, seed=ctx.seed)
+    by_type = {dt: sorted(v.values(), key=lambda r: r.group_id) for dt, v in records.items()}
+    assignment = assign_group_splits(by_type, seed=ctx.seed)
     built = build_corpus(documents, assignment, seed=ctx.seed)
     # Expansion produces an even third of each regime; the arch §6 target is
     # 50/20/30, and sampling train is what reaches it. Val and test keep all

@@ -19,10 +19,11 @@ from typing import Any
 
 from common.constants import MODALITY_MIX, MODALITY_MODES
 from data_pipeline.dataset_builder.noisy_ocr_augment import corrupt_ocr_pages
-from data_pipeline.dataset_builder.split_train_val_test import (
-    SplitAssignment,
+from data_pipeline.dataset_builder.split_groups import (
+    GroupSplitAssignment,
     assert_no_leakage,
     assert_single_tenant,
+    assert_synthetic_is_train_only,
 )
 from inference_core.input_builder import build_training_row
 
@@ -49,6 +50,23 @@ class SourceDocument:
     tenant_id: str | None = None
     field_provenance: dict[str, str] = field(default_factory=dict)
     is_scanned: bool = False
+
+    #: The family this document belongs to (arch v2.1 §8.2). Splitting happens at
+    #: this level, not at source_id: the same carrier's template and the same
+    #: account's renewals must not span the split, or eval measures template
+    #: memorisation. Defaults to the document's own id, which makes a document
+    #: with no detected family its own group rather than silently ungrouped.
+    group_id: str | None = None
+    carrier: str | None = None
+
+    #: Generated rather than collected (arch v2.1 §4d). Train-only: its labels
+    #: are perfect because they were generated from them, so scoring against one
+    #: measures the generator.
+    synthetic: bool = False
+
+    @property
+    def family(self) -> str:
+        return self.group_id or self.source_id
 
 
 @dataclass
@@ -119,7 +137,7 @@ def expand_document(
 
 def build_corpus(
     documents: list[SourceDocument],
-    assignment: SplitAssignment,
+    assignment: GroupSplitAssignment,
     *,
     seed: int = 42,
 ) -> BuildResult:
@@ -128,7 +146,7 @@ def build_corpus(
 
     for document in documents:
         try:
-            split = assignment.split_of(document.source_id)
+            split = assignment.split_of(document.family)
         except Exception as exc:
             result.skipped.append((document.source_id, str(exc)))
             continue
@@ -140,6 +158,15 @@ def build_corpus(
             log.warning("skipping %s: %s", document.source_id, exc)
             continue
 
+        # Stamped here rather than inside expand_document: the family is a
+        # property of the corpus build, not of one document's expansion, and the
+        # leakage assertion reads it off every row.
+        for row in rows:
+            row["group_id"] = document.family
+            row["synthetic"] = document.synthetic
+            if assignment.half_of(document.family):
+                row["val_half"] = assignment.half_of(document.family)
+
         result.rows_by_split[split].extend(rows)
         for row in rows:
             result.modality_counts[row["modality_mode"]] += 1
@@ -148,6 +175,7 @@ def build_corpus(
 
     # The checks that make the ordering rule real rather than documented.
     assert_no_leakage(assignment, result.all_rows)
+    assert_synthetic_is_train_only(result.all_rows)
     assert_single_tenant(result.all_rows)
 
     log.info("corpus built: %s", result.summary())

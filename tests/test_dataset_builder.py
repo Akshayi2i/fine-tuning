@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 
-from common.constants import MODALITY_MODES
+from common.constants import MODALITY_MODES, split_ratio_for
 from data_pipeline.corpus_manifest import (
     build_manifest,
     compute_alias_coverage,
@@ -27,12 +27,31 @@ from data_pipeline.dataset_builder.build_jsonl import (
     write_jsonl,
 )
 from data_pipeline.dataset_builder.noisy_ocr_augment import corrupt_ocr
-from data_pipeline.dataset_builder.split_train_val_test import (
+from data_pipeline.dataset_builder.split_groups import (
+    GroupRecord,
     SplitError,
     assert_no_leakage,
     assert_single_tenant,
-    assign_splits,
+    assert_synthetic_is_train_only,
+    assign_group_splits,
 )
+
+
+def _groups(source_ids_by_doc_type, **over):
+    """One group per document, which is the v1 behaviour and the right baseline
+    for the tests that are about split ratios rather than about families."""
+    return {
+        doc_type: [
+            GroupRecord(group_id=sid, doc_type=doc_type, source_ids=[sid], **over)
+            for sid in sids
+        ]
+        for doc_type, sids in source_ids_by_doc_type.items()
+    }
+
+
+def assign_splits(source_ids_by_doc_type, **kwargs):
+    """Shim so the ratio/stability tests keep reading as they did."""
+    return assign_group_splits(_groups(source_ids_by_doc_type), **kwargs)
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
 
@@ -458,3 +477,144 @@ def test_every_confusion_entry_is_applied_at_its_full_width():
     index, source = 2, "rn"
     corrupted = token[:index] + CHAR_CONFUSIONS[source] + token[index + len(source):]
     assert corrupted == "Wamer", corrupted
+
+
+# --------------------------------------------------------------------------
+# Group-aware splits (arch v2.1 §8.2)
+# --------------------------------------------------------------------------
+
+def _family(group_id, n, doc_type="policy", **over):
+    return GroupRecord(
+        group_id=group_id,
+        doc_type=doc_type,
+        source_ids=[f"{group_id}_{i:03d}" for i in range(n)],
+        **over,
+    )
+
+
+def test_a_family_never_spans_the_split():
+    """The whole reason the unit moved from document to group. One carrier's
+    template in train and another copy of it in test measures how well the model
+    memorised a layout, and nothing crashes to say so."""
+    families = [_family(f"grp{i}", 8) for i in range(20)]
+    assignment = assign_group_splits({"policy": families})
+
+    for fam in families:
+        splits = {assignment.split_of(fam.group_id)}
+        assert len(splits) == 1, f"{fam.group_id} spans {splits}"
+
+
+def test_leakage_is_detected_on_the_expanded_rows():
+    """The assignment is a dict and cannot contain a duplicate. Expansion into
+    tasks, windows and modes is what could place them inconsistently, so the
+    check runs there."""
+    assignment = assign_group_splits({"policy": [_family("grp0", 4)]})
+    rows = [
+        {"group_id": "grp0", "source_id": "grp0_000", "split": "train"},
+        {"group_id": "grp0", "source_id": "grp0_001", "split": "test"},
+    ]
+    with pytest.raises(SplitError, match="LEAKAGE"):
+        assert_no_leakage(assignment, rows)
+
+
+def test_a_row_without_its_group_is_refused():
+    """Every row carries its group, because the group is the unit that must not
+    span the split. A row that does not name one cannot be checked at all."""
+    assignment = assign_group_splits({"policy": [_family("grp0", 2)]})
+    with pytest.raises(SplitError, match="missing group_id"):
+        assert_no_leakage(assignment, [{"source_id": "grp0_000", "split": "train"}])
+
+
+def test_held_out_carriers_go_entirely_to_test():
+    """'Unseen template' is a different question from 'unseen document', and only
+    a carrier held out in full answers it."""
+    families = [
+        _family(f"grp{i}", 4, carrier=f"carrier_{i % 8}") for i in range(24)
+    ]
+    assignment = assign_group_splits({"policy": families})
+    held_out = assignment.held_out_carriers.get("policy", [])
+
+    assert len(held_out) == 2, f"expected 2 held-out carriers, got {held_out}"
+    for fam in families:
+        if fam.carrier in held_out:
+            assert assignment.split_of(fam.group_id) == "test"
+
+
+def test_no_carrier_is_held_out_below_the_minimum():
+    """Holding out 2 of 3 carriers answers the generalisation question by
+    destroying the corpus."""
+    families = [_family(f"grp{i}", 4, carrier=f"carrier_{i % 3}") for i in range(9)]
+    assignment = assign_group_splits({"policy": families})
+    assert assignment.held_out_carriers.get("policy", []) == []
+
+
+def test_the_largest_carrier_is_not_held_out():
+    """Held-out carriers are drawn from the smaller half: removing the carrier
+    that contributes most of the training data is not a generalisation test."""
+    families = [_family("big", 200, carrier="dominant")]
+    families += [_family(f"grp{i}", 2, carrier=f"carrier_{i}") for i in range(8)]
+    assignment = assign_group_splits({"policy": families})
+    assert "dominant" not in assignment.held_out_carriers.get("policy", [])
+
+
+def test_validation_is_halved_by_group():
+    """Fitting the calibrator and setting the review threshold on the same
+    documents makes the threshold optimistic — the calibrator has already seen
+    the errors the threshold is meant to price (arch v2.1 §5.3-5.4)."""
+    families = [_family(f"grp{i}", 3) for i in range(60)]
+    assignment = assign_group_splits({"policy": families})
+
+    val_groups = assignment.groups_in("val")
+    assert val_groups, "no validation groups to halve"
+    halves = {assignment.half_of(g) for g in val_groups}
+    assert halves == {"calibration", "threshold"}, f"validation not halved: {halves}"
+
+    for group_id in assignment.groups_in("train"):
+        assert assignment.half_of(group_id) is None, "only validation groups carry a half"
+
+
+def test_synthetic_families_stay_in_train():
+    """Their labels are perfect because they were generated from them, so a
+    metric scored against one reports how faithfully the generator rendered its
+    own input — and reports it as model accuracy (arch v2.1 §4d)."""
+    families = [_family(f"real{i}", 4, carrier=f"c{i}") for i in range(10)]
+    families += [_family(f"synth{i}", 4, synthetic=True) for i in range(10)]
+    assignment = assign_group_splits({"policy": families})
+
+    for fam in families:
+        if fam.synthetic:
+            assert assignment.split_of(fam.group_id) == "train"
+
+
+def test_a_synthetic_row_outside_train_is_refused():
+    rows = [{"group_id": "s0", "source_id": "s0_000", "split": "test", "synthetic": True}]
+    with pytest.raises(SplitError, match="synthetic"):
+        assert_synthetic_is_train_only(rows)
+
+
+def test_ratios_follow_document_count_not_group_count():
+    """The §8.2 volume bands describe how much data exists. One group of forty
+    certificates is still forty documents of training signal, and treating it as
+    a single unit would pick the pilot ratios for a corpus well past pilot."""
+    few_big = {"policy": [_family(f"grp{i}", 40) for i in range(8)]}   # 320 documents
+    many_small = {"policy": [_family(f"grp{i}", 1) for i in range(8)]}  # 8 documents
+
+    big = assign_group_splits(few_big).ratios_by_doc_type["policy"]
+    small = assign_group_splits(many_small).ratios_by_doc_type["policy"]
+    assert big != small, "group count, not document count, drove the ratio band"
+
+
+def test_assignment_is_stable_as_the_corpus_grows():
+    """A group that was in test stays in test, so eval numbers stay comparable
+    without reshuffling on every ingest."""
+    first = [_family(f"grp{i}", 3) for i in range(40)]
+    grown = first + [_family(f"grp{i}", 3) for i in range(40, 60)]
+
+    before = assign_group_splits({"policy": first}, ratios=split_ratio_for(500))
+    after = assign_group_splits({"policy": grown}, ratios=split_ratio_for(500))
+
+    moved = [
+        f.group_id for f in first
+        if before.split_of(f.group_id) != after.split_of(f.group_id)
+    ]
+    assert not moved, f"{len(moved)} group(s) moved on growth: {moved[:5]}"
