@@ -237,6 +237,39 @@ def subset_of(document: dict[str, Any]) -> list[str]:
     return subsets
 
 
+def _reconciliation_rate(
+    scored: Sequence[tuple[dict[str, Any], dict[str, Any], dict[str, Any]]],
+) -> float | None:
+    """Share of VERIFIABLE Loss Runs whose claims reconciled (arch v2.1 §5.5).
+
+    Read from the serving path's own reconciliation report rather than recomputed
+    here, so the number the gate reads is the number production produced — a
+    second implementation would eventually disagree with the first, and the gate
+    would be scoring something serving does not do.
+
+    ``None`` when no document carried one: a subset with no Loss Runs has nothing
+    to say about reconciliation, and emitting 0.0 would report a total failure of
+    a check that never ran.
+    """
+    reports = [
+        metadata["reconciliation"] for _, _, metadata in scored
+        if isinstance(metadata.get("reconciliation"), dict)
+    ]
+    if not reports:
+        return None
+    verifiable = [r for r in reports if r.get("status") != "unverifiable"]
+    if not verifiable:
+        # Every Loss Run printed no totals. Unverifiable is not failure, but it
+        # is not evidence either — reported as None so the gate does not read an
+        # absence of evidence as a score.
+        log.warning(
+            "%d Loss Run(s) scored and none printed totals, so row completeness is "
+            "unverifiable across the whole subset (arch v2.1 §5.5).", len(reports),
+        )
+        return None
+    return sum(1 for r in verifiable if r.get("status") == "reconciled") / len(verifiable)
+
+
 def score_subset(
     doc_type: str,
     subset: str,
@@ -383,6 +416,11 @@ def score_subset(
             for _, _, metadata in scored
             if metadata.get("provenance_pages")
         ]).recall if any(m.get("provenance_pages") for _, _, m in scored) else None,
+        # Emitted only where reconciliation ran — Loss Runs. gate_metrics()
+        # weights by the documents that produced each metric, so a metric that
+        # only one doc type can produce still reaches the gate, weighted by that
+        # type's documents rather than diluted by the others.
+        "lossrun_totals_reconciliation_rate": _reconciliation_rate(scored),
     }
     report.metrics = {k: v for k, v in report.metrics.items() if v is not None}
     return report

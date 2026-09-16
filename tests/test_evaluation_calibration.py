@@ -1255,3 +1255,36 @@ def test_unverifiable_documents_are_excluded_from_the_rate():
 
     assert reconciliation_rate([good, silent]) == 1.0
     assert reconciliation_rate([silent]) == 0.0
+
+
+def test_a_conditional_metric_is_not_applicable_rather_than_unmeasured():
+    """An ACORD-only eval set has nothing to say about Loss Run reconciliation,
+    and blocking on it would make the gate a statement about the eval set's
+    composition rather than about the model."""
+    from evaluation.gating import CONDITIONAL_METRICS
+
+    candidate = _metrics()
+    del candidate["lossrun_totals_reconciliation_rate"]
+    result = promotion_gate(candidate, None)
+
+    assert "lossrun_totals_reconciliation_rate" in CONDITIONAL_METRICS
+    assert "lossrun_totals_reconciliation_rate" not in result.failed_gates
+
+
+def test_a_conditional_metric_still_faces_its_floor_when_present():
+    """Exempt ONLY from the was-it-measured requirement. Anything wider would be
+    the v1 mistake in reverse: a gate that passes by no longer looking."""
+    result = promotion_gate(_metrics(lossrun_totals_reconciliation_rate=0.40), None)
+    assert not result.passed
+    assert "lossrun_totals_reconciliation_rate" in result.failed_gates
+
+
+def test_the_modality_metrics_are_not_conditional():
+    """They look like subset metrics, but §6 REQUIRES the eval set to cover all
+    three regimes — so a run that produced none of them has a defective eval set.
+    Exempting them would let it quietly stop covering the no-OCR production path
+    while the gate kept passing."""
+    from evaluation.gating import CONDITIONAL_METRICS
+
+    for metric in ("image_only_accuracy", "scanned_accuracy", "ocr_arbitration_accuracy"):
+        assert metric not in CONDITIONAL_METRICS

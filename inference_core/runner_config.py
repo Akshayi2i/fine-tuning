@@ -32,12 +32,44 @@ class RunnerConfig:
     max_seq_len: int = 8192
     gpu_memory_utilization: float = 0.90
     enable_lora: bool = True
+
+    #: vLLM applies ONE LoRA per request (arch v2.1 §4.1), so this caps how many
+    #: are kept resident, not how many are active on a call. The v1 topology
+    #: needed two active at once and could never have been served.
     max_loras: int = 4
     max_lora_rank: int = 64
+
+    #: The SPEC_00 target schema for structured decoding (arch v2.1 §13).
+    #: ``None`` leaves generation unconstrained, which is what the evaluation job
+    #: uses for its training-health signal: whether the model learned the format
+    #: on its own is a different question from whether the format is enforced.
+    json_schema: dict[str, Any] | None = None
+
+    #: MUST be ``raw_logprobs`` when structured decoding is on. Constrained
+    #: decoding masks invalid tokens, so the post-mask distribution is not the
+    #: model's own — a calibrator fitted on it describes a distribution the model
+    #: never produced (§5.1). Asserted at load rather than hoped for.
+    logprobs_mode: str = "raw_logprobs"
 
     @property
     def is_greedy(self) -> bool:
         return self.temperature == 0.0
+
+    def assert_logprobs_are_the_models_own(self) -> None:
+        """Refuse to serve masked logprobs as if they were the model's own.
+
+        Every confidence feature in §5.1 reads this distribution, and every
+        review threshold in §5.4 is defined against the result. Fitting a
+        calibrator on post-mask logprobs produces a number that looks like a
+        probability, is not one, and cannot be told apart from one downstream.
+        """
+        if self.json_schema is not None and self.logprobs_mode != "raw_logprobs":
+            raise ValueError(
+                f"structured decoding is on with logprobs_mode={self.logprobs_mode!r}. "
+                "Constrained decoding masks invalid tokens, so these are not the model's own "
+                "probabilities — set logprobs_mode: raw_logprobs in "
+                "configs/inference/vllm_serving.yaml (arch v2.1 §5.1)."
+            )
 
     def as_generation_kwargs(self) -> dict[str, Any]:
         """Backend-agnostic generation arguments."""

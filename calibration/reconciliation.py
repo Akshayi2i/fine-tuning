@@ -196,6 +196,33 @@ def reconcile(
         if value is not None and column in RECONCILED_COLUMNS:
             report.grand_total_printed[column] = value
 
+    # A single-period Loss Run commonly prints the period once in the header and
+    # not on every row, so the claims land under "unspecified" while the subtotal
+    # names the period — and every such document would flag. When there is
+    # exactly ONE printed period and no claim names a period, they are that
+    # period's claims.
+    #
+    # Deliberately not done for several periods: unattributed claims across two
+    # periods cannot be assigned without guessing, and a guess here would produce
+    # a reconciliation that means nothing.
+    if (
+        len(printed_by_period) == 1
+        and set(claims_by_period) == {"unspecified"}
+    ):
+        only_period = next(iter(printed_by_period))
+        claims_by_period[only_period] = claims_by_period.pop("unspecified")
+        log.debug(
+            "attributed %d unattributed claim(s) to the document's single policy period %r",
+            len(claims_by_period[only_period]), only_period,
+        )
+    elif len(printed_by_period) > 1 and "unspecified" in claims_by_period:
+        log.warning(
+            "%d claim row(s) name no policy period while the document prints %d of them. "
+            "They cannot be attributed without guessing, so their period reconciles as its "
+            "own bucket and will not balance.",
+            len(claims_by_period["unspecified"]), len(printed_by_period),
+        )
+
     for period in sorted(set(claims_by_period) | set(printed_by_period)):
         rows = claims_by_period.get(period, [])
         printed = printed_by_period.get(period, {})

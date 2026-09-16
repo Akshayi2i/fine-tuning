@@ -26,6 +26,23 @@ generation:
   logprobs: true
   top_logprobs: 1
 
+  # MUST stay raw_logprobs while structured decoding is on (arch v2.1 5.1).
+  # Constrained decoding masks invalid tokens, so the post-mask distribution is
+  # NOT the model's own - and a calibrator fitted on it produces a number that
+  # looks like a probability, is not one, and cannot be told apart from one
+  # anywhere downstream. RunnerConfig.assert_logprobs_are_the_models_own()
+  # refuses the combination rather than trusting this comment.
+  logprobs_mode: "raw_logprobs"
+
+  # Structured decoding against the SPEC_00 target schema (arch v2.1 13).
+  # Guarantees structural validity and stops an enum field - doc type, ACORD
+  # form, line of business - taking a value outside its enum, because those
+  # tokens are masked at decode time rather than rejected afterwards.
+  #
+  # Evaluation runs BOTH constrained (what production sees) and unconstrained
+  # (a training-health signal: whether the model learned the format on its own).
+  structured_outputs: true
+
 serving:
   backend: "vllm"              # vllm | hf | gguf
   served_model_tag: null       # resolved from the registry at deploy time

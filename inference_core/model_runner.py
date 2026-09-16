@@ -203,15 +203,40 @@ class VLLMBackend(ModelBackend):
             ) from exc
 
         engine = self._load(config)
-        params = SamplingParams(
-            temperature=config.temperature,
-            top_p=config.top_p,
-            max_tokens=config.max_new_tokens,
+        sampling: dict[str, Any] = {
+            "temperature": config.temperature,
+            "top_p": config.top_p,
+            "max_tokens": config.max_new_tokens,
             # Requested per token, not per sequence: confidence is per field, and
             # a sequence-level score cannot be attributed to one.
-            logprobs=config.top_logprobs if config.logprobs else None,
-            seed=config.seed,
-        )
+            "logprobs": config.top_logprobs if config.logprobs else None,
+            "seed": config.seed,
+        }
+
+        # Structured decoding against the target schema (arch v2.1 §13).
+        # Guarantees structural validity and stops an enum field taking an
+        # invalid value — the model cannot emit a doc type or LoB outside the
+        # enum, because those tokens are masked at decode time.
+        #
+        # THE CAVEAT THAT MATTERS: masking changes the distribution the sampler
+        # sees, so `logprobs_mode: raw_logprobs` must be set on the engine or
+        # every confidence feature is computed on the post-mask distribution
+        # rather than the model's own (§5.1). That is an engine-level setting,
+        # asserted at load, not a per-request one — a calibrator fitted on masked
+        # logprobs describes a distribution the model never produced.
+        if getattr(config, "json_schema", None):
+            try:
+                from vllm.sampling_params import GuidedDecodingParams
+
+                sampling["guided_decoding"] = GuidedDecodingParams(json=config.json_schema)
+            except ImportError:  # pragma: no cover - older vLLM
+                log.warning(
+                    "this vLLM build exposes no GuidedDecodingParams, so schema validity is "
+                    "NOT guaranteed at decode time and the SPEC_07 audit gate is the only "
+                    "thing catching an invalid extraction (arch v2.1 §13)."
+                )
+
+        params = SamplingParams(**{k: v for k, v in sampling.items() if v is not None})
         # Hot-swap rather than reload. The adapter is a per-request argument
         # precisely so one engine serves every document type (arch §4).
         lora = LoRARequest(adapter, abs(hash(adapter)) % (10 ** 8), adapter) if adapter else None

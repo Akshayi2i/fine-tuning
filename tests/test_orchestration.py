@@ -61,6 +61,10 @@ PASSING_METRICS = {
     # A value on the page that came back null. Produces no tokens, so §5
     # confidence is blind to it and only this metric sees it (arch v2.1 §15.2).
     "false_null_rate": 0.03,
+    # Share of VERIFIABLE Loss Runs whose claims reconciled against printed
+    # totals. A missed row produces no tokens, so §5 confidence is blind to it
+    # and this is the only signal that sees it (arch v2.1 §5.5).
+    "lossrun_totals_reconciliation_rate": 0.92,
 }
 
 

@@ -24,7 +24,7 @@ from __future__ import annotations
 import json
 import logging
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Protocol
 
 from common.constants import ACORD_FORMS, ACTIVE_DOC_TYPES
@@ -45,7 +45,25 @@ class Classification:
     acord_form: str | None
     confidence: float
     raw_response: str = ""
-    method: str = "zero_shot"
+
+    #: ``trained`` under arch v2.1 §4a — classify is a task in the unified
+    #: corpus, not a zero-shot prompt against whatever model is loaded. The
+    #: zero-shot path survives for day-zero bootstrap (§4c) and retires when the
+    #: first fine-tuned release is promoted.
+    method: str = "trained"
+
+    #: Ranked alternatives, best first, including ``doc_type`` itself. What makes
+    #: the §4a low-confidence path possible: extracting for the top TWO candidate
+    #: types is only an option if the classifier says what the second one was.
+    candidates: list[tuple[str, float]] = field(default_factory=list)
+
+    #: The L1/L2 hypothesis this was reconciled against, when there was one.
+    hypothesis: str | None = None
+    hypothesis_agreed: bool | None = None
+
+    #: ``acord_edition`` is recorded in label metadata and used as an evaluation
+    #: slice (§4b) — never to select a schema, because editions share one.
+    acord_edition: str | None = None
 
     @property
     def is_usable(self) -> bool:
@@ -53,6 +71,60 @@ class Classification:
 
     def meets(self, threshold: float) -> bool:
         return self.is_usable and self.confidence >= threshold
+
+    def top_two(self) -> list[str]:
+        """The two most likely types, for the §4a low-confidence path.
+
+        Falls back to the single answer when the classifier offered no ranking —
+        one candidate is worse than two, and better than refusing to extract.
+        """
+        ranked = [t for t, _ in sorted(self.candidates, key=lambda kv: -kv[1])
+                  if t in ACTIVE_DOC_TYPES]
+        if self.doc_type and self.doc_type not in ranked:
+            ranked.insert(0, self.doc_type)
+        return ranked[:2]
+
+
+#: How a classifier answer and an L1/L2 hypothesis combine (arch v2.1 §4a).
+#: The model wins a confident disagreement: L1 is a carrier registry lookup and
+#: L2 is structural inference, and neither has seen the page. The disagreement is
+#: logged either way, because a systematic one is evidence about L1/L2.
+def combine_with_hypothesis(
+    classification: Classification,
+    hypothesis: str | None,
+    *,
+    confidence_threshold: float = 0.70,
+) -> Classification:
+    """Reconcile the model's answer with the upstream L1/L2 hypothesis."""
+    if not hypothesis:
+        classification.hypothesis = None
+        classification.hypothesis_agreed = None
+        return classification
+
+    classification.hypothesis = hypothesis
+    agreed = classification.doc_type == hypothesis
+    classification.hypothesis_agreed = agreed
+
+    if agreed:
+        # Two independent signals agreeing is worth more than either alone, and
+        # this is the case that lets a modest model confidence clear the bar.
+        classification.confidence = max(classification.confidence, confidence_threshold)
+        return classification
+
+    log.warning(
+        "L1/L2 proposed %r, the model classified %r at %.2f confidence. %s "
+        "A systematic disagreement here is evidence about L1/L2, not noise — the rate is "
+        "a reported metric (§15.2).",
+        hypothesis, classification.doc_type, classification.confidence,
+        "Accepting the model." if classification.confidence >= confidence_threshold
+        else "Neither is confident: routing to the low-confidence path.",
+    )
+    # The hypothesis becomes a candidate rather than an override: it is evidence,
+    # and the top-2 path is what evidence this weak supports.
+    known = {t for t, _ in classification.candidates}
+    if classification.confidence < confidence_threshold and hypothesis not in known:
+        classification.candidates.append((hypothesis, classification.confidence))
+    return classification
 
 
 class Classifier(Protocol):

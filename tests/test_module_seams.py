@@ -66,7 +66,13 @@ def test_every_gating_metric_is_one_the_scorer_actually_produces():
     emitted = set(report.gate_metrics())
 
     # The classifier is scored by SPEC_11, which eval does not run.
-    required = set(GATING_METRICS) - {"doc_type_classifier_accuracy"}
+    # Conditional metrics only exist when the eval set holds the relevant
+    # documents — a Loss Run for reconciliation, a routed Policy for page
+    # selection. Their absence is "not applicable", not "not measured", and the
+    # gate models that explicitly rather than by exception here.
+    from evaluation.gating import CONDITIONAL_METRICS
+
+    required = set(GATING_METRICS) - {"doc_type_classifier_accuracy"} - CONDITIONAL_METRICS
     missing = sorted(required - emitted)
     assert not missing, (
         f"the gate requires {missing}, which the scorer never produces. Every candidate is "
@@ -90,6 +96,9 @@ def test_a_flawless_candidate_is_promotable_and_a_regression_is_not():
     # the gate reading the keys the SCORER emits — not about schema validity.
     metrics["doc_type_classifier_accuracy"] = 0.97
     metrics["schema_validity_rate"] = 1.0
+    # The synthetic fixture runs no reconciliation either — it has no Loss Run
+    # windows and no printed totals to check against.
+    metrics["lossrun_totals_reconciliation_rate"] = 0.95
 
     assert promotion_gate(metrics, None).passed, "a flawless first version could not be promoted"
 

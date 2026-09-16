@@ -35,17 +35,40 @@ class Route:
 
     doc_type: str
     acord_form: str | None
-    #: ``None`` means Foundation-only — the fallback, not an error.
+
+    #: ``None`` means the MERGED model with no adapter — which under arch v2.1
+    #: §4.1 is the normal case, not a fallback. One unified adapter is merged
+    #: into the base, and a per-type LoRA exists only for a type that cleared the
+    #: §4.2 graduation gate. vLLM applies one LoRA per request, so there is never
+    #: a stack: it is the merged model, or the merged model plus one adapter.
     adapter: str | None
     schema_doc_type: str
     schema_acord_form: str | None
+
+    #: Kept under its v1 name so callers and manifests do not move in the same
+    #: change as the topology. It now means "no graduated adapter for this type",
+    #: which is the expected state for every type until one graduates.
     foundation_only: bool = False
+
     review_flags: list[str] = field(default_factory=list)
     classification: Classification | None = None
+
+    #: The §4a low-confidence path: extract for BOTH candidate types, validate
+    #: each against its own SPEC_00 schema, and send both plus the classification
+    #: scores to human routing review. Empty on the normal path.
+    #:
+    #: v1 fell back to one guessed schema with a flag. That is worse than it
+    #: sounds: a wrong-schema extraction is structurally valid and confidently
+    #: wrong, so it passes the audit gate and reaches a user looking correct.
+    candidate_routes: list[Route] = field(default_factory=list)
 
     @property
     def needs_routing_review(self) -> bool:
         return any(flag.startswith("routing:") for flag in self.review_flags)
+
+    @property
+    def is_ambiguous(self) -> bool:
+        return bool(self.candidate_routes)
 
 
 def route(
@@ -112,35 +135,62 @@ def route(
             classification=classification,
         )
 
-    # Classified, but not confidently enough to trust an adapter choice.
+    # Classified, but not confidently enough to commit to one schema.
     if classification.confidence < confidence_threshold:
+        candidates = classification.top_two()
         log.warning(
-            "classifier confidence %.2f below threshold %.2f for %r — Foundation-only "
-            "extraction rather than a guessed adapter (arch §4a)",
-            classification.confidence, confidence_threshold, classification.doc_type,
+            "classifier confidence %.2f below threshold %.2f for %r — extracting for %s and "
+            "sending both to human routing review (arch v2.1 §4a)",
+            classification.confidence, confidence_threshold, classification.doc_type, candidates,
         )
-        return Route(
+        primary = Route(
             doc_type=doc_type,
             acord_form=classification.acord_form,
-            adapter=None,
-            # The schema still follows the best guess: a generic extraction
-            # validated against a plausible schema is more useful than one
-            # validated against nothing.
+            adapter=adapter_map.get(doc_type),
             schema_doc_type=doc_type,
             schema_acord_form=classification.acord_form,
-            foundation_only=True,
+            foundation_only=adapter_map.get(doc_type) is None,
             review_flags=["routing:low_confidence"],
             classification=classification,
         )
+        # Each candidate is extracted against ITS OWN schema. v1 picked one and
+        # flagged it, which produces a structurally valid, confidently wrong
+        # extraction that passes the audit gate and reaches a user looking
+        # correct. Two answers plus the scores is what a router can review.
+        primary.candidate_routes = [
+            Route(
+                doc_type=candidate,
+                acord_form=classification.acord_form if candidate == "acord" else None,
+                adapter=adapter_map.get(candidate),
+                schema_doc_type=candidate,
+                schema_acord_form=classification.acord_form if candidate == "acord" else None,
+                foundation_only=adapter_map.get(candidate) is None,
+                review_flags=["routing:candidate"],
+                classification=classification,
+            )
+            for candidate in candidates
+            # An ACORD candidate with no form number has no schema to validate
+            # against, so it cannot be one of the two answers offered.
+            if not (candidate == "acord" and not classification.acord_form)
+        ]
+        if not primary.candidate_routes:
+            primary.review_flags.append("routing:no_extractable_candidate")
+            log.warning(
+                "neither candidate could be extracted (%s) — routing to human review without "
+                "an extraction rather than inventing a schema (arch v2.1 §4a).", candidates,
+            )
+        return primary
 
     adapter = adapter_map.get(doc_type)
 
     flags: list[str] = []
     if adapter is None:
-        # Not a failure: during the pilot the Foundation may be the only model
-        # trained, and Foundation-only is a supported serving path.
-        log.info("no per-type adapter configured for %r — serving Foundation-only", doc_type)
-        flags.append("routing:no_adapter_available")
+        # The NORMAL case under arch v2.1 §4.1, not a degraded one. The merged
+        # unified model serves every type; a per-type adapter exists only after
+        # §4.2 graduation. Logged at debug, and deliberately NOT flagged for
+        # review — flagging the expected path would put every document in the
+        # queue and teach everyone to ignore the flag.
+        log.debug("no graduated adapter for %r — serving the merged unified model", doc_type)
 
     return Route(
         doc_type=doc_type,

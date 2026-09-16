@@ -105,19 +105,52 @@ def test_confident_classification_selects_the_adapter():
     assert not result.review_flags
 
 
-def test_low_confidence_falls_back_to_foundation_only():
-    """A wrong-adapter extraction is worse than a slightly generic one: the
-    generic one is less sharp, the wrong one confidently answers the wrong
-    question (arch §4a)."""
+def test_low_confidence_extracts_for_both_candidates():
+    """v1 fell back to ONE guessed schema with a flag. That is worse than it
+    sounds: a wrong-schema extraction is structurally valid and confidently
+    wrong, so it passes the audit gate and reaches a user looking correct. Two
+    answers plus the classification scores is what a router can actually review
+    (arch v2.1 §4a)."""
     result = route(
-        Classification("lossrun", None, 0.40),
+        Classification("lossrun", None, 0.40, candidates=[("lossrun", 0.40), ("policy", 0.35)]),
         confidence_threshold=0.70,
-        adapter_map={"lossrun": "adapters/lossrun/v2"},
+        adapter_map={},
     )
-    assert result.adapter is None
-    assert result.foundation_only
+    assert result.is_ambiguous
+    assert [r.doc_type for r in result.candidate_routes] == ["lossrun", "policy"]
+    assert all(r.schema_doc_type == r.doc_type for r in result.candidate_routes),         "each candidate is validated against its OWN schema"
     assert "routing:low_confidence" in result.review_flags
     assert result.needs_routing_review
+
+
+def test_an_acord_candidate_without_a_form_is_not_offered():
+    """It has no schema to validate against, so it cannot be one of the two
+    answers presented for review."""
+    result = route(
+        Classification("acord", None, 0.40, candidates=[("acord", 0.40), ("policy", 0.38)]),
+        confidence_threshold=0.70,
+    )
+    assert "acord" not in [r.doc_type for r in result.candidate_routes]
+
+
+def test_a_confident_l1_l2_agreement_clears_the_threshold():
+    """Two independent signals agreeing is worth more than either alone, and
+    this is the case that lets a modest model confidence route cleanly."""
+    from serving.doc_type_classifier import combine_with_hypothesis
+
+    agreed = combine_with_hypothesis(Classification("policy", None, 0.55), "policy")
+    assert agreed.hypothesis_agreed is True
+    assert route(agreed).adapter is None and not route(agreed).is_ambiguous
+
+
+def test_a_confident_model_overrides_the_l1_l2_hypothesis():
+    """L1 is a carrier registry lookup and L2 is structural inference. Neither
+    has seen the page."""
+    from serving.doc_type_classifier import combine_with_hypothesis
+
+    result = combine_with_hypothesis(Classification("lossrun", None, 0.95), "policy")
+    assert result.doc_type == "lossrun"
+    assert result.hypothesis_agreed is False
 
 
 def test_low_confidence_still_keeps_the_best_guess_schema():
@@ -133,11 +166,16 @@ def test_unclassifiable_document_gets_a_fallback_and_a_flag():
     assert "routing:unclassified" in result.review_flags
 
 
-def test_missing_adapter_serves_foundation_only_without_failing():
-    """During the pilot the Foundation may be the only model trained."""
+def test_no_graduated_adapter_is_the_normal_path_not_a_flagged_one():
+    """Under arch v2.1 §4.1 the merged unified model serves every type; a
+    per-type adapter exists only after §4.2 graduation. Flagging the EXPECTED
+    path would put every document in the review queue and teach everyone to
+    ignore the flag."""
     result = route(Classification("policy", None, 0.99), adapter_map={})
+    assert result.adapter is None
     assert result.foundation_only
-    assert "routing:no_adapter_available" in result.review_flags
+    assert not result.review_flags, result.review_flags
+    assert not result.needs_routing_review
 
 
 def test_acord_form_reaches_the_schema_selection():
@@ -391,3 +429,174 @@ def test_quantization_proceeds_once_the_projector_is_verified():
 def test_unknown_quantization_format_is_refused():
     with pytest.raises(QuantizationError, match="unknown quantization format"):
         plan_quantization(version="v2", formats=["q3_k_s"])
+
+
+# --------------------------------------------------------------------------
+# Loss Run window merge (arch v2.1 §7b)
+# --------------------------------------------------------------------------
+
+def test_the_overlap_joins_a_row_split_across_a_page_break():
+    """The whole reason windows overlap. The first window saw the claim cut off
+    at the page boundary and read no amount; the second saw it whole."""
+    from serving.lossrun_merge import merge_windows
+
+    first = [{"row_type": "claim", "claim_number": "CL-2", "claimant": "Smith",
+              "total_incurred": None}]
+    second = [{"row_type": "claim", "claim_number": "CL-2", "claimant": "Smith",
+               "total_incurred": 50.0}]
+    report = merge_windows([first, second])
+
+    assert len(report.rows) == 1
+    assert report.rows[0]["total_incurred"] == 50.0
+    assert report.duplicates_collapsed == 1
+    assert not report.conflicts, "filling an absent field is not a conflict"
+
+
+def test_two_windows_reading_a_claim_differently_is_a_recorded_conflict():
+    """The merge picks one. That choice is mechanical and auditable, but it is
+    still a choice about a value nobody verified."""
+    from serving.lossrun_merge import merge_windows
+
+    report = merge_windows([
+        [{"row_type": "claim", "claim_number": "CL-1", "total_incurred": 100.0}],
+        [{"row_type": "claim", "claim_number": "CL-1", "total_incurred": 900.0,
+          "claimant": "Smith"}],
+    ])
+    assert len(report.rows) == 1
+    assert report.conflicts and report.flagged
+    # The more complete reading wins: a window that saw the whole row has
+    # strictly more evidence than one that saw it cut off.
+    assert report.rows[0]["total_incurred"] == 900.0
+
+
+def test_a_row_with_no_claim_number_falls_back_to_a_composite_key():
+    """Ordinary on older Loss Runs and on reports that redact the number."""
+    from serving.lossrun_merge import merge_windows
+
+    row = {"row_type": "claim", "loss_date": "2024-03-01", "claimant": "Smith",
+           "total_incurred": 100.0}
+    report = merge_windows([[dict(row)], [dict(row)]])
+    assert len(report.rows) == 1, "the same claim seen twice is one claim"
+
+
+def test_an_unkeyable_row_is_kept_not_dropped():
+    """A duplicate inflates a total, which reconciliation catches. A dropped row
+    understates a loss history, which nothing catches."""
+    from serving.lossrun_merge import merge_windows
+
+    report = merge_windows([[{"row_type": "claim", "description": "unreadable"}]])
+    assert len(report.rows) == 1
+    assert report.unkeyed_rows == 1
+
+
+def test_a_subtotal_repeated_across_an_overlap_is_counted_once():
+    """Counting it twice would double the figure reconciliation checks against."""
+    from serving.lossrun_merge import merge_windows
+
+    subtotal = {"row_type": "subtotal", "policy_period": "2024", "total_incurred": 150.0}
+    report = merge_windows([[dict(subtotal)], [dict(subtotal)]])
+    assert len(report.total_rows) == 1
+
+
+def test_the_merged_order_is_stable():
+    """A claims list whose order depends on dict iteration is not comparable
+    against its own previous extraction."""
+    from serving.lossrun_merge import merge_windows
+
+    rows = [
+        {"row_type": "claim", "claim_number": f"CL-{i}", "total_incurred": float(i)}
+        for i in (3, 1, 2)
+    ]
+    first = merge_windows([rows])
+    second = merge_windows([list(reversed(rows))])
+    assert [r["claim_number"] for r in first.rows] == [r["claim_number"] for r in second.rows]
+
+
+def test_merge_and_reconcile_closes_the_completeness_loop():
+    """A merge whose result is never reconciled has no completeness signal at
+    all — a missed row produces no tokens, so per-field confidence is
+    structurally blind to it (§5.5)."""
+    from serving.lossrun_merge import merge_and_reconcile
+
+    windows = [
+        [{"row_type": "claim", "claim_number": "CL-1", "total_incurred": 100.0}],
+        [{"row_type": "claim", "claim_number": "CL-2", "total_incurred": 75.0},
+         {"row_type": "subtotal", "policy_period": "2024", "total_incurred": 175.0}],
+    ]
+    merged, reconciliation = merge_and_reconcile(windows, totals_output={"total_incurred": 175.0})
+
+    assert len(merged.rows) == 2
+    assert reconciliation.reconciled, reconciliation.reasons()
+
+
+def test_a_missed_row_fails_reconciliation():
+    """The signal per-field confidence cannot produce."""
+    from serving.lossrun_merge import merge_and_reconcile
+
+    windows = [[
+        {"row_type": "claim", "claim_number": "CL-1", "total_incurred": 100.0},
+        {"row_type": "subtotal", "policy_period": "2024", "total_incurred": 175.0},
+    ]]
+    _merged, reconciliation = merge_and_reconcile(windows)
+    assert not reconciliation.reconciled
+    assert reconciliation.flagged
+
+
+def test_unattributed_claims_reconcile_against_a_single_printed_period():
+    """A single-period Loss Run commonly prints the period once in the header and
+    not on every row. Flagging every such document would be a measure of the
+    document's layout, not of the extraction."""
+    from calibration.reconciliation import reconcile
+
+    claims = [{"claim_number": "CL-1", "total_incurred": 100.0}]
+    totals = [{"row_type": "subtotal", "policy_period": "2024", "total_incurred": 100.0}]
+    assert reconcile(claims, totals).reconciled
+
+
+def test_unattributed_claims_across_several_periods_are_not_guessed():
+    """They cannot be assigned without guessing, and a guess here produces a
+    reconciliation that means nothing."""
+    from calibration.reconciliation import reconcile
+
+    claims = [{"claim_number": "CL-1", "total_incurred": 100.0}]
+    totals = [
+        {"row_type": "subtotal", "policy_period": "2024", "total_incurred": 60.0},
+        {"row_type": "subtotal", "policy_period": "2025", "total_incurred": 40.0},
+    ]
+    assert not reconcile(claims, totals).reconciled
+
+
+# --------------------------------------------------------------------------
+# Structured outputs and logprobs (arch v2.1 §13, §5.1)
+# --------------------------------------------------------------------------
+
+def test_structured_decoding_with_masked_logprobs_is_refused():
+    """Constrained decoding masks invalid tokens, so the post-mask distribution
+    is NOT the model's own. A calibrator fitted on it produces a number that
+    looks like a probability, is not one, and cannot be told apart from one
+    anywhere downstream (§5.1)."""
+    from inference_core.runner_config import RunnerConfig
+
+    unsafe = RunnerConfig(json_schema={"type": "object"}, logprobs_mode="processed_logprobs")
+    with pytest.raises(ValueError, match="raw_logprobs"):
+        unsafe.assert_logprobs_are_the_models_own()
+
+    safe = RunnerConfig(json_schema={"type": "object"}, logprobs_mode="raw_logprobs")
+    safe.assert_logprobs_are_the_models_own()
+
+
+def test_unconstrained_generation_needs_no_logprobs_mode_guard():
+    """Evaluation runs unconstrained too, as a training-health signal: whether
+    the model learned the format on its own is a different question from whether
+    the format is enforced."""
+    from inference_core.runner_config import RunnerConfig
+
+    RunnerConfig(json_schema=None, logprobs_mode="anything").assert_logprobs_are_the_models_own()
+
+
+def test_the_serving_config_pins_raw_logprobs():
+    from common.config import serving_config
+
+    generation = serving_config()["generation"]
+    assert generation["logprobs_mode"] == "raw_logprobs"
+    assert generation["structured_outputs"] is True

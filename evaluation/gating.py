@@ -68,6 +68,7 @@ GATING_METRICS: dict[str, Direction] = {
     "ece_confidence": "lower_is_better",
     "confusable_misattribution_rate": "lower_is_better",
     "false_null_rate": "lower_is_better",
+    "lossrun_totals_reconciliation_rate": "higher_is_better",
 }
 
 #: Gating under arch v2.1 §15.2, but **not enforced yet** — nothing produces
@@ -84,14 +85,35 @@ PENDING_GATING_METRICS: dict[str, str] = {
     "list_field_precision": "row alignment (§15.1 Hungarian matching) — not written",
     "page_selection_recall": "serving page_select task (§7b) — metric written, needs the "
                              "selected/provenance pages in eval metadata",
-    "lossrun_totals_reconciliation_rate": "calibration.reconciliation — WRITTEN; needs the "
-                                          "lossrun_rows total/subtotal rows plumbed through "
-                                          "the serving path (§7b)",
     "hallucination_rate": "metric written; needs the OCR text of the pages that were sent "
                           "carried through eval metadata (§15.2)",
     "auto_accept_error_rate": "calibration.thresholds — WRITTEN; needs the calibrator set and "
                               "threshold set applied on the serving path (§5.4)",
 }
+
+#: Metrics that only exist when the eval set contains the relevant documents.
+#: Their absence means **not applicable**, not "not measured" — an ACORD-only
+#: eval set has nothing to say about Loss Run reconciliation, and blocking on it
+#: would make the gate a statement about the eval set's composition.
+#:
+#: Deliberately narrow, because it is otherwise a loophole: a conditional metric
+#: is exempt ONLY from the "was it measured" requirement. When it IS present it
+#: faces the same floor and the same non-inferiority test as any other. Adding a
+#: metric here because it is inconvenient to produce would be the v1 mistake in
+#: reverse — a gate that passes by no longer looking.
+CONDITIONAL_METRICS: frozenset[str] = frozenset({
+    # Only Loss Runs have claim rows and printed totals.
+    "lossrun_totals_reconciliation_rate",
+    # Only routed Policies exercise page selection.
+    "page_selection_recall",
+})
+
+#: NOT conditional, deliberately: image_only_accuracy, scanned_accuracy and
+#: ocr_arbitration_accuracy. They look like subset metrics, but §6 REQUIRES the
+#: corpus and the golden eval set to cover all three modality regimes — so an
+#: eval run that produced none of them has a defective eval set, and that is
+#: worth blocking on. Exempting them would let the eval set quietly stop
+#: covering the no-OCR production path while the gate kept passing.
 
 #: Absolute floors (arch v2.1 §0d, pilot-exit column). The single source of
 #: targets: §16.3's pilot criteria reference the same table. Production values
@@ -105,6 +127,7 @@ PILOT_FLOORS: dict[str, float] = {
     "doc_type_classifier_accuracy": 0.95,
     "lob_detection_accuracy": 0.85,
     "confusable_misattribution_rate": 0.05,
+    "lossrun_totals_reconciliation_rate": 0.80,
 }
 
 #: Non-inferiority margins in absolute units (arch v2.1 §15.5). Per metric,
@@ -125,6 +148,7 @@ NON_INFERIORITY_DELTA: dict[str, float] = {
     "ece_confidence": 0.010,
     "confusable_misattribution_rate": 0.010,
     "false_null_rate": 0.010,
+    "lossrun_totals_reconciliation_rate": 0.015,
 }
 DEFAULT_DELTA = 0.015
 
@@ -363,10 +387,15 @@ def promotion_gate(
         result.verdicts.append(verdict)
 
         if verdict.unmeasured:
-            if require_all_measured:
+            if require_all_measured and name not in CONDITIONAL_METRICS:
                 _block(result, name,
                        f"{name} was not measured. A metric that was not measured has not "
                        "passed — treating its absence as success is how a regression ships.")
+            elif name in CONDITIONAL_METRICS:
+                log.info(
+                    "%s is not applicable to this eval set — no document produced it. That is "
+                    "not a pass, it is a statement about which documents were scored.", name,
+                )
             continue
         if not verdict.meets_floor:
             _block(result, name,
