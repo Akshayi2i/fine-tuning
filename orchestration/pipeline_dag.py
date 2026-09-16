@@ -159,6 +159,20 @@ class StageContext:
     #: one that loads and reads badly (arch v2.1 §13a).
     fp8_verified: bool = False
 
+    #: ``{serving_format: {"calibration": [(features, correct)], "threshold": [...]}}``
+    #: from the two halves of the validation split (arch v2.1 §8.2). A ``"*"``
+    #: key applies to every format — useful only before quantization exists,
+    #: because a calibrator fitted on bf16 is wrong for FP8.
+    calibration_samples: dict[str, Any] = field(default_factory=dict)
+
+    #: The release this cycle produces. Everything gated, promoted and served is
+    #: addressed by it (arch v2.1 §12.3).
+    release_id: str = ""
+
+    # -- fitted during the run ---------------------------------------------
+    calibrators: dict[str, Any] = field(default_factory=dict)
+    thresholds: dict[str, Any] = field(default_factory=dict)
+
     # -- accumulated state -------------------------------------------------
     results: dict[str, StageResult] = field(default_factory=dict)
     manifests: dict[str, Any] = field(default_factory=dict)
@@ -941,16 +955,15 @@ def stage_merge(ctx: StageContext) -> StageResult:
 def _is_quantized(ctx: StageContext) -> bool:
     if ctx.skip_quantize:
         return True
-    # Every target, not just the first. Checking doc_types[0] alone reported a
-    # quantize run that died partway as complete, and stage_push then published
-    # GGUF paths for doc types that were never quantized.
-    targets: list[str | None] = [None] if ctx.foundation_only else list(ctx.doc_types)
-    if not targets:
-        return False
+    # ONE model under arch v2.1 §4.1, so one set of formats — not one per
+    # document type. bf16 is the merged model itself and is never exported, so a
+    # bf16-only cycle has nothing to check and is complete once merge is.
+    quantized = [f for f in ctx.formats if f != "bf16"]
+    if not quantized:
+        return True
     return all(
-        ctx.volume.exists(paths.staging_quantized_model_dir(ctx.out_version, fmt, doc_type))
-        for doc_type in targets
-        for fmt in ctx.formats
+        ctx.volume.exists(paths.staging_quantized_model_dir(ctx.out_version, fmt))
+        for fmt in quantized
     )
 
 
@@ -1005,6 +1018,96 @@ def stage_quantize(ctx: StageContext) -> StageResult:
         "quantize", "completed", f"formats {ctx.formats}",
         {"produced": produced, "quant_threshold_results": validation},
     )
+
+
+# --------------------------------------------------------------------------
+# Stage 9 — calibrate (package)
+# --------------------------------------------------------------------------
+
+
+def stage_calibrate(ctx: StageContext) -> StageResult:
+    """Fit confidence calibrators and review thresholds, per serving format.
+
+    The stage v1 did not have. Without it the serving path has no calibrated
+    confidence at all — it reads a raw aggregate and compares it to a hardcoded
+    0.70, which is a guess wearing a decimal point (arch v2.1 §5.4).
+
+    **Per serving format, always.** Quantization moves the logprob distribution,
+    so a calibrator fitted on bf16 reports confidence for a distribution FP8 does
+    not produce. Sharing one across formats is not an optimisation, it is a
+    silently wrong number.
+
+    **Two halves of validation, never one.** Calibrators are fitted on the
+    calibration half and thresholds chosen on the threshold half (§8.2). The
+    calibrator has already been pulled toward the errors in its own half, so a
+    threshold chosen there prices risk the model has already been shown — the
+    difference between a guarantee and a hope.
+    """
+    from calibration.feature_calibrator import fit_calibrators
+    from calibration.thresholds import auto_accept_error_rate, fit_thresholds
+
+    if not ctx.calibration_samples:
+        # Honest rather than silent: without labelled validation features there
+        # is nothing to fit, and shipping an uncalibrated release means every
+        # field routes to review. That is a correct outcome, and an operator
+        # should know it happened.
+        return StageResult(
+            "calibrate", "skipped",
+            "no labelled validation features supplied, so no calibrator or threshold could be "
+            "fitted. Every field will route to review until one is.",
+            {"calibrated_formats": [], "unenforced_types": []},
+        )
+
+    fitted: dict[str, Any] = {}
+    for fmt in ctx.formats:
+        samples: dict[str, Any] = (
+            ctx.calibration_samples.get(fmt) or ctx.calibration_samples.get("*") or {}
+        )
+        if not samples:
+            log.warning(
+                "no calibration samples for %s, so it ships uncalibrated and every field of "
+                "every type routes to review. A format served without its own calibrator "
+                "reports confidence for a distribution it does not produce (arch v2.1 §5.3).",
+                fmt,
+            )
+            continue
+
+        calibrators = fit_calibrators(
+            samples.get("calibration", []), release_id=ctx.release_id, serving_format=fmt
+        )
+        scored_by_type: dict[str, list[tuple[float, bool]]] = {}
+        for features, was_correct in samples.get("threshold", []):
+            confidence = calibrators.predict(features)
+            if confidence is not None:
+                scored_by_type.setdefault(features.field_type, []).append(
+                    (confidence, was_correct)
+                )
+
+        thresholds = fit_thresholds(
+            scored_by_type, release_id=ctx.release_id, serving_format=fmt
+        )
+        ctx.client.write_json(
+            paths.release_calibrators(ctx.release_id, fmt, ctx.tenant_id),
+            {"calibrators": calibrators.as_dict(), "thresholds": thresholds.as_dict()},
+        )
+        ctx.calibrators[fmt] = calibrators
+        ctx.thresholds[fmt] = thresholds
+        fitted[fmt] = {
+            "unenforced_types": thresholds.unenforced_types,
+            "guarantees": thresholds.guarantees(),
+            # The gating metric: the rate of wrong values that reached a user
+            # without a human looking (arch v2.1 §15.2).
+            "auto_accept_error_rate": round(
+                auto_accept_error_rate(scored_by_type, thresholds), 4
+            ),
+        }
+
+    detail = "; ".join(
+        f"{fmt}: {len(body['guarantees'])} field type(s), "
+        f"auto-accept error {body['auto_accept_error_rate']:.2%}"
+        for fmt, body in sorted(fitted.items())
+    ) or "nothing fitted"
+    return StageResult("calibrate", "completed", detail, {"by_format": fitted})
 
 
 # --------------------------------------------------------------------------
@@ -1128,7 +1231,7 @@ def stage_push(ctx: StageContext) -> StageResult:
         )
 
     return StageResult(
-        "push", "completed",
+        "package", "completed",
         f"pushed {len(pushed)} artifact location(s), published {len(published)} manifest(s)"
         + (f", cleared {cleared} staged path(s)" if cleared else ""),
         {"pushed": pushed, "published": published, "staging_cleared": cleared},
@@ -1184,12 +1287,21 @@ STAGES: tuple[Stage, ...] = (
     # Between training and the gate: the gate scores what ships, so what ships
     # has to be chosen first (arch v2.1 §11.2).
     Stage(6, "checkpoint_eval", "finetune", True, stage_checkpoint_eval, None),
-    Stage(7, "evaluation_gate", "finetune", True, stage_evaluation_gate, None),
-    Stage(8, "merge", "finetune", True, stage_merge, _is_merged),
-    Stage(9, "quantize", "package", True, stage_quantize, _is_quantized),
-    Stage(10, "push", "package", False, stage_push, None),
-    Stage(11, "serving", "deploy-endpoint", False, stage_deploy, None),
-    Stage(12, "feedback_loop", "extract", False, stage_feedback, None),
+    Stage(7, "merge", "finetune", True, stage_merge, _is_merged),
+    Stage(8, "quantize", "package", True, stage_quantize, _is_quantized),
+    # Calibrate BEFORE the gate: the gate reads auto_accept_error_rate, which is
+    # the rate of wrong values that reached a user without a human looking — and
+    # that number does not exist until thresholds are chosen (arch v2.1 §5.4).
+    Stage(9, "calibrate", "package", True, stage_calibrate, None),
+    # The gate moved AFTER merge, quantize and calibrate (arch v2.1 §13). Under
+    # v1 it ran before merge, so it scored the bare adapter — not the merged
+    # model, and certainly not the merged model in each serving format.
+    # Quantization degrades exactly what was fine-tuned in, so an FP8 release
+    # inherits nothing from bf16's result.
+    Stage(10, "evaluation_gate", "package", True, stage_evaluation_gate, None),
+    Stage(11, "package", "package", False, stage_push, None),
+    Stage(12, "serving", "deploy-endpoint", False, stage_deploy, None),
+    Stage(13, "feedback_loop", "extract", False, stage_feedback, None),
 )
 
 STAGE_BY_NAME: dict[str, Stage] = {s.name: s for s in STAGES}
@@ -1248,7 +1360,25 @@ def run_stages(ctx: StageContext, stages: Sequence[Stage], *, command: str = "fi
     stores fail transiently. A **blocked** gate is never retried: a retry loop
     around the gate would be an override path with extra steps.
     """
+    # `package` operates on what `finetune` staged, so a reclaimed volume is a
+    # precondition failure for the whole command. Checked here rather than inside
+    # a stage: --skip-quantize turned the first stage into a no-op, and the check
+    # disappeared with it.
     report = RunReport(command=command, version=ctx.out_version)
+    if command == "package" and stages:
+        try:
+            assert_staged(ctx)
+        except PipelineError as exc:
+            # Reported, not raised: the operator should get the same rendered
+            # remediation as any other failure rather than a traceback. Attached
+            # to the first stage, because that is where the work would have
+            # started and where `--from-stage` will resume.
+            result = StageResult(stages[0].name, "failed", str(exc))
+            ctx.results[stages[0].name] = result
+            report.results.append(result)
+            report.failed_at = stages[0].name
+            log.error("%s", exc)
+            return report
 
     for stage in stages:
         if _already_complete(stage, ctx):

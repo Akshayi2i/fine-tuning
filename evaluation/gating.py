@@ -542,5 +542,19 @@ def apply_to_manifest(result: GateResult, manifest: Any, *, gated_against: str |
     ]
     if gated_against:
         manifest.promotion.gated_against = gated_against
+
+    # A run that never finished is not "evaluated". `launch_and_record` marks a
+    # crashed run failed precisely so the registry never claims weights it never
+    # wrote — and under arch v2.1 §13 the gate runs AFTER training, so writing
+    # "evaluated" unconditionally resurrected a dead run into a publishable one.
+    # The metrics being gated in that case came from somewhere else entirely.
+    if getattr(manifest, "status", None) == "failed":
+        log.warning(
+            "not marking %s evaluated: the run is recorded as failed, so its weights were "
+            "never written and whatever was scored did not come from them.",
+            getattr(manifest, "run_id", "<unknown>"),
+        )
+        return manifest
+
     manifest.status = "evaluated"
     return manifest

@@ -30,7 +30,7 @@ auto-accepted money fields, with 95% confidence"*.
 from __future__ import annotations
 
 import logging
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -240,7 +240,7 @@ class ThresholdSet:
 
 
 def fit_thresholds(
-    scored_by_type: dict[str, Sequence[tuple[float, bool]]],
+    scored_by_type: Mapping[str, Sequence[tuple[float, bool]]],
     *,
     release_id: str,
     serving_format: str,
@@ -263,7 +263,7 @@ def fit_thresholds(
 
 
 def auto_accept_error_rate(
-    scored_by_type: dict[str, Sequence[tuple[float, bool]]],
+    scored_by_type: Mapping[str, Sequence[tuple[float, bool]]],
     thresholds: ThresholdSet,
 ) -> float:
     """The error rate among fields the thresholds would auto-accept.

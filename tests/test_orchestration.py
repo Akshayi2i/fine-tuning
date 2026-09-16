@@ -177,20 +177,39 @@ def test_every_stage_is_owned_by_exactly_one_command():
     finetune = {s.name for s in FINETUNE_STAGES}
     package = {s.name for s in PACKAGE_STAGES}
     assert not finetune & package
-    assert len(STAGES) == 12
+    assert len(STAGES) == 13
 
 
 def test_stage_numbers_match_the_architecture_order():
-    assert [s.number for s in STAGES] == list(range(1, 13))
+    assert [s.number for s in STAGES] == list(range(1, 14))
 
 
-def test_checkpoint_selection_runs_between_training_and_the_gate():
-    """The gate scores what ships, so what ships has to be chosen first
-    (arch v2.1 §11.2)."""
+def test_the_stage_order_matches_the_architecture():
+    """arch v2.1 §13. Two orderings carry real meaning:
+
+    Selection precedes merge, because the gate scores what ships and what ships
+    has to be chosen first (§11.2). And the gate follows merge, quantize AND
+    calibrate — under v1 it ran before merge, so it scored the bare adapter
+    rather than the merged model in each serving format, and it could not read
+    auto_accept_error_rate at all because no threshold had been chosen.
+    """
     order = [s.name for s in STAGES]
     assert order.index("training") < order.index("checkpoint_eval")
-    assert order.index("checkpoint_eval") < order.index("evaluation_gate")
-    assert order.index("evaluation_gate") < order.index("merge")
+    assert order.index("checkpoint_eval") < order.index("merge")
+    assert order.index("merge") < order.index("quantize")
+    assert order.index("quantize") < order.index("calibrate")
+    assert order.index("calibrate") < order.index("evaluation_gate")
+    assert order.index("evaluation_gate") < order.index("package")
+
+
+def test_finetune_ends_at_merge_and_package_owns_the_gate():
+    """The command boundary moved with the gate (arch v2.1 §13c): `finetune`
+    produces artifacts, `package` judges and publishes them."""
+    finetune = [s.name for s in STAGES if s.command == "finetune"]
+    package = [s.name for s in STAGES if s.command == "package"]
+
+    assert finetune[-1] == "merge"
+    assert package == ["quantize", "calibrate", "evaluation_gate", "package"]
 
 
 def test_from_stage_resumes_mid_pipeline():
@@ -203,7 +222,7 @@ def test_from_stage_on_all_carries_through_into_package():
     """Resuming at merge must still package afterwards — stopping at the end of
     finetune would leave the artifacts staged and the operator none the wiser."""
     resumed = [s.name for s in stages_from("merge", "all")]
-    assert resumed == ["merge", "quantize", "push"]
+    assert resumed == ["merge", "quantize", "calibrate", "evaluation_gate", "package"]
 
 
 def test_unknown_stage_names_the_valid_ones():
@@ -309,7 +328,14 @@ def test_the_unified_run_produces_one_merged_model(client, controller):
 # --------------------------------------------------------------------------
 
 
-def test_a_regression_stops_finetune_before_merge(client, controller):
+def test_a_regression_stops_the_release_not_the_build(client, controller):
+    """Under v1 the gate ran before merge, so a regression stopped the build. It
+    now runs AFTER merge, quantize and calibrate (arch v2.1 §13), because the
+    gate scores the merged model in each serving format — not the bare adapter.
+
+    So merging still happens. What a regression stops is the RELEASE: nothing is
+    packaged, nothing is published, and the staged artifacts sit on a volume that
+    will be reclaimed."""
     seed_corpus(client)
     regressed = {**PASSING_METRICS, "list_field_recall": 0.60}
     ctx = make_context(
@@ -317,12 +343,12 @@ def test_a_regression_stops_finetune_before_merge(client, controller):
         baseline_metrics=dict(PASSING_METRICS),
         metrics_provider=lambda _ctx: regressed,
     )
-    report = run_stages(ctx, stages_for("finetune"), command="finetune")
+    report = run_stages(ctx, stages_for("all"), command="all")
 
     assert report.blocked_at == "evaluation_gate"
     assert report.exit_code == 1
-    assert "merge" not in ctx.results
-    assert not ctx.volume.exists(paths.staging_merged_model_dir("v1", "policy"))
+    assert "merge" in ctx.results, "the gate scores the merged model, so merge precedes it"
+    assert "package" not in ctx.results, "a blocked release is never packaged"
 
 
 def test_the_block_names_the_metric_and_its_delta(client, controller):
@@ -332,7 +358,7 @@ def test_the_block_names_the_metric_and_its_delta(client, controller):
         baseline_metrics=dict(PASSING_METRICS),
         metrics_provider=lambda _ctx: {**PASSING_METRICS, "lob_detection_accuracy": 0.55},
     )
-    report = run_stages(ctx, stages_for("finetune"), command="finetune")
+    report = run_stages(ctx, stages_for("all"), command="all")
     blocked = report.results[-1]
 
     assert "lob_detection_accuracy" in blocked.detail
@@ -351,7 +377,7 @@ def test_the_block_records_the_evidence_not_just_the_verdict(client, controller)
         baseline_metrics=dict(PASSING_METRICS),
         metrics_provider=lambda _ctx: {**PASSING_METRICS, "lob_detection_accuracy": 0.55},
     )
-    run_stages(ctx, stages_for("finetune"), command="finetune")
+    run_stages(ctx, stages_for("all"), command="all")
 
     decision = client.read_json(paths.gate_decision("v1"))
     verdict = next(v for v in decision["verdicts"] if v["name"] == "lob_detection_accuracy")
@@ -370,7 +396,10 @@ def test_all_never_reaches_package_on_a_failed_gate(client, controller):
     report = run_stages(ctx, stages_for("all"), command="all")
 
     ran = {r.name for r in report.results}
-    assert "quantize" not in ran and "push" not in ran
+    # Quantize and calibrate run BEFORE the gate now: the gate reads
+    # auto_accept_error_rate, which does not exist until thresholds are chosen.
+    assert "quantize" in ran and "calibrate" in ran
+    assert "package" not in ran, "nothing is packaged past a failed gate"
     assert report.blocked_at == "evaluation_gate"
 
 
@@ -380,7 +409,7 @@ def test_an_unmeasured_metric_blocks_rather_than_passing(client, controller):
     partial = {k: v for k, v in PASSING_METRICS.items() if k != "scanned_accuracy"}
     ctx = make_context(client, controller, baseline_metrics=dict(PASSING_METRICS),
                        metrics_provider=lambda _ctx: partial)
-    report = run_stages(ctx, stages_for("finetune"), command="finetune")
+    report = run_stages(ctx, stages_for("all"), command="all")
     assert report.blocked_at == "evaluation_gate"
 
 
@@ -416,7 +445,7 @@ def test_no_stage_function_accepts_an_override_parameter():
 def test_the_gate_needs_a_metrics_provider_rather_than_assuming_a_pass(client, controller):
     seed_corpus(client)
     ctx = make_context(client, controller, metrics_provider=None)
-    report = run_stages(ctx, stages_for("finetune"), command="finetune")
+    report = run_stages(ctx, stages_for("all"), command="all")
     assert report.failed_at == "evaluation_gate"
     assert "metrics nobody measured" in report.results[-1].detail
 
@@ -431,7 +460,7 @@ def test_the_gate_reads_an_existing_eval_report_when_no_provider_is_given(client
     client.write_json(paths.eval_report("v1"), {"gate_metrics": dict(PASSING_METRICS)})
 
     ctx = make_context(client, controller, metrics_provider=None)
-    report = run_stages(ctx, stages_for("finetune"), command="finetune")
+    report = run_stages(ctx, stages_for("all"), command="all")
     assert report.ok, report.render()
 
 
@@ -445,7 +474,7 @@ def test_the_baseline_comes_from_the_promoted_version_s_own_report(client, contr
 
     seed_corpus(client)
     first = make_context(client, controller, out_version="v1")
-    run_stages(first, stages_for("finetune"), command="finetune")
+    run_stages(first, stages_for("all"), command="all")
     mark_promoted(get("extractor-v1", client), client, promoted_by="test")
     client.write_json(paths.eval_report("v1"), {"gate_metrics": dict(PASSING_METRICS)})
 
@@ -560,7 +589,7 @@ def test_package_pushes_all_three_artifact_classes_and_publishes(client, control
     report = run_stages(package_ctx, stages_for("package"), command="package")
     assert report.ok, report.render()
 
-    pushed = package_ctx.results["push"].data["pushed"]
+    pushed = package_ctx.results["package"].data["pushed"]
     assert any(k.startswith("adapter:") for k in pushed)
     assert any(k.startswith("merged:") for k in pushed)
     assert any(k.startswith("quantized:") for k in pushed)
@@ -631,7 +660,10 @@ def test_package_fails_loudly_with_remediation_when_nothing_is_staged(client, co
     ctx = make_context(client, controller, skip_quantize=True)
     report = run_stages(ctx, stages_for("package"), command="package")
 
-    assert report.failed_at == "push"
+    # The FIRST stage of package, not the last: the remediation is about a
+    # reclaimed volume, and discovering it after quantize, calibrate and the gate
+    # have run wastes the whole command to say something knowable up front.
+    assert report.failed_at == "quantize"
     detail = report.results[-1].detail
     assert "not on the staging volume" in detail
     assert "--from-stage merge" in detail and "--push-adapters" in detail
@@ -827,7 +859,7 @@ def _promote_foundation(client: BlobClient, controller: RunPodController, versio
     from registry_utils.write_run_manifest import mark_promoted
 
     ctx = make_context(client, controller, out_version=version)
-    report = run_stages(ctx, stages_for("finetune"), command="finetune")
+    report = run_stages(ctx, stages_for("all"), command="all")
     assert report.ok, report.render()
 
     # Gate first, then promote — the order a real cycle uses. `mark_promoted`
@@ -900,7 +932,7 @@ def test_a_minor_bump_does_not_trigger_the_cascade(client, controller):
     _promote_foundation(client, controller, "v1")
 
     ctx = make_context(client, controller, out_version="v1.1")
-    report = run_stages(ctx, stages_for("finetune"), command="finetune")
+    report = run_stages(ctx, stages_for("all"), command="all")
     assert report.ok, report.render()
 
 
@@ -913,7 +945,7 @@ def test_a_major_bump_blocks_until_dependent_adapters_are_revalidated(client, co
     _graduate_adapter(client, "policy", "v1")
 
     ctx = make_context(client, controller, out_version="v2")
-    report = run_stages(ctx, stages_for("finetune"), command="finetune")
+    report = run_stages(ctx, stages_for("all"), command="all")
 
     assert report.blocked_at == "evaluation_gate"
     detail = report.results[-1].detail
@@ -935,7 +967,7 @@ def test_the_cascade_clears_once_every_dependent_has_passed(client, controller):
 
     ctx = make_context(client, controller, out_version="v2",
                        revalidation_evidence=dict.fromkeys(dependents, True))
-    report = run_stages(ctx, stages_for("finetune"), command="finetune")
+    report = run_stages(ctx, stages_for("all"), command="all")
     assert report.ok, report.render()
 
 
@@ -953,7 +985,7 @@ def test_partial_revalidation_still_blocks(client, controller):
     partial[dependents[0]] = False
 
     ctx = make_context(client, controller, out_version="v2", revalidation_evidence=partial)
-    report = run_stages(ctx, stages_for("finetune"), command="finetune")
+    report = run_stages(ctx, stages_for("all"), command="all")
     assert report.blocked_at == "evaluation_gate"
     assert dependents[0] in report.results[-1].detail
 
@@ -1101,3 +1133,120 @@ def test_the_selection_is_recorded_where_a_later_review_can_read_it(client, cont
     record = client.read_json(paths.checkpoint_selection("v1"))
     assert record["selected"].endswith("checkpoint-100")
     assert record["selection_metric"] == "field_normalized_match"
+
+
+# --------------------------------------------------------------------------
+# The calibrate stage (arch v2.1 §13 stage 9)
+# --------------------------------------------------------------------------
+
+def _calibration_samples(n: int = 400, correct_rate: float = 0.8):
+    """Labelled validation features, split into the two halves of §8.2."""
+    import random
+
+    from calibration.features import build_features
+
+    rng = random.Random(17)
+
+    def half(seed_offset: int):
+        out = []
+        for i in range(n):
+            correct = rng.random() < correct_rate
+            logprobs = [-0.05 - rng.random() * 0.1] * 3 if correct else [-2.0 - rng.random()] * 3
+            out.append((
+                build_features(
+                    field_path="policy_number", value=f"WC-{i + seed_offset}",
+                    logprobs=logprobs, document={},
+                    page_text=f"WC-{i + seed_offset}" if correct else "nothing",
+                ),
+                correct,
+            ))
+        return out
+
+    return {"calibration": half(0), "threshold": half(10_000)}
+
+
+def test_calibration_fits_per_serving_format(client, controller):
+    """Quantization moves the logprob distribution, so a calibrator fitted on
+    bf16 reports confidence for a distribution FP8 does not produce. Sharing one
+    is not an optimisation, it is a silently wrong number (arch v2.1 §5.3)."""
+    seed_corpus(client)
+    ctx = make_context(
+        client, controller,
+        release_id="release-2026.11.1",
+        calibration_samples={"bf16": _calibration_samples()},
+    )
+    report = run_stages(ctx, stages_for("all"), command="all")
+
+    assert report.ok, report.render()
+    assert "bf16" in ctx.calibrators and "bf16" in ctx.thresholds
+
+    stored = client.read_json(paths.release_calibrators("release-2026.11.1", "bf16"))
+    assert stored["calibrators"]["serving_format"] == "bf16"
+    assert stored["thresholds"]["fitted_on"].startswith("validation threshold half")
+
+
+def test_a_release_with_no_labelled_features_ships_uncalibrated_and_says_so(client, controller):
+    """Honest rather than silent: without labelled validation features there is
+    nothing to fit, every field routes to review, and an operator should know
+    that happened rather than discover it in the review queue."""
+    seed_corpus(client)
+    ctx = make_context(client, controller, release_id="release-2026.11.1")
+    report = run_stages(ctx, stages_for("all"), command="all")
+
+    calibrate = ctx.results["calibrate"]
+    assert calibrate.status == "skipped"
+    assert "route to review" in calibrate.detail
+    assert report.ok, "an uncalibrated release is a degraded one, not a failed one"
+
+
+def test_the_calibration_stage_reports_its_guarantee(client, controller):
+    """v1 used 0.70 for every field, marked "tunable". It was never tuned and
+    could not be, because nothing measured what error rate it bought."""
+    seed_corpus(client)
+    ctx = make_context(
+        client, controller,
+        release_id="release-2026.11.1",
+        calibration_samples={"bf16": _calibration_samples()},
+    )
+    run_stages(ctx, stages_for("all"), command="all")
+
+    body = ctx.results["calibrate"].data["by_format"]["bf16"]
+    assert "auto_accept_error_rate" in body
+    assert any("at most" in g or "routed to review" in g for g in body["guarantees"])
+
+
+# --------------------------------------------------------------------------
+# What the reordering exposed
+# --------------------------------------------------------------------------
+
+def test_a_failed_run_is_not_resurrected_by_the_gate():
+    """The gate runs AFTER training now (arch v2.1 §13), so apply_to_manifest
+    was writing "evaluated" over a run recorded as failed — turning a pod that
+    OOM'd at step 40 into a publishable release. Whatever was scored in that case
+    did not come from those weights, because they were never written."""
+    from evaluation.gating import apply_to_manifest, promotion_gate
+
+    class _Promotion:
+        beat_previous_on_all_gates = None
+        failed_gates: list = []
+        gated_against = None
+
+    class _Manifest:
+        run_id = "extractor-v1"
+        promotion = _Promotion()
+        status = "failed"
+
+    manifest = apply_to_manifest(promotion_gate(dict(PASSING_METRICS), None), _Manifest())
+    assert manifest.status == "failed", "a run that never wrote weights cannot be evaluated"
+
+
+def test_the_staging_precondition_survives_skip_quantize(client, controller):
+    """`package` operates on what `finetune` staged, so a reclaimed volume is a
+    precondition failure for the whole command. Checking it inside the first
+    stage meant --skip-quantize turned that stage into a no-op and the check
+    disappeared with it."""
+    ctx = make_context(client, controller, skip_quantize=True)
+    report = run_stages(ctx, stages_for("package"), command="package")
+
+    assert report.failed_at == "quantize"
+    assert "not on the staging volume" in report.results[-1].detail
