@@ -18,11 +18,32 @@ vLLM multi-LoRA hot-swap                SPEC_11's serving design. If it fails, s
                                         per-type models instead
 MinerU on CUDA                          the whole data pipeline; GPU is the default mode
 llama.cpp mmproj for Qwen3-VL           whether GGUF export can produce a model that can
-                                        see. Until then, quantization stays deferred
+                                        see. Optional edge export only under arch v2.1 §13a
+merger / aligner module names           the freeze flags and any vision LoRA target (§9a). A
+                                        wrong name does not raise — it silently trains or
+                                        freezes nothing
+visual tokens per page                  every sequence cap in §7a. Measured through the real
+                                        image processor, not derived from an assumed patch
+                                        geometry
+peak VRAM per task cap                  the §14 pod-class table and whether the 32k cap fits
+                                        on one 80GB card (§9.3)
+sequence parallelism + memory flags     the §9.3 escape hatch, and use_logits_to_keep /
+                                        padding-free / freeze_aligner from §11.1
+vLLM structured outputs                 whether schema validity is guaranteed at decode
+                                        time (§13)
+raw logprobs under constraint           whether confidence features see the model's own
+                                        distribution or the post-mask one (§5.1). If masked,
+                                        every calibrator is fitted on an artefact
+FP8 export (llm-compressor)             the v2.1 default serving format (§13a)
+MinerU determinism                      whether the OCR pin actually makes a corpus
+                                        reproducible (§8a)
 ======================================  ===================================================
 
 **Every check is independent and none aborts the run.** A spike that stops at the
 first failure tells you one thing; this tells you all of them in one pod-hour.
+
+Items map to arch v2.1 §16.0, which is explicit that nothing is annotated at
+scale until they are confirmed on the pinned versions.
 
     pip install -e ".[data,train,serve]"        # expect flash-attn to be the hard part
     python scripts/phase0_spike.py --pdf sample.pdf --out spike_report.json
@@ -271,6 +292,261 @@ def check_llama_cpp_mmproj(r: Result) -> None:
     )
 
 
+def check_merger_module_names(r: Result) -> None:
+    """The exact module names the freeze flags and any vision LoRA must reference.
+
+    arch v2.1 §9a specifies ``freeze_vit`` and ``freeze_aligner`` and names a patch
+    merger plus DeepStack mergers. A wrong name does not raise — PEFT attaches LoRA
+    to nothing and training proceeds silently without the target, and a freeze flag
+    that matches nothing silently trains what it was meant to hold still.
+
+    Read from the safetensors index rather than by instantiating the model: the
+    parameter names are what matters and the index is a single small file.
+    """
+    import json as _json
+
+    from huggingface_hub import hf_hub_download
+
+    index = hf_hub_download(MODEL_ID, "model.safetensors.index.json")
+    keys = list(_json.loads(Path(index).read_text(encoding="utf-8"))["weight_map"])
+    r.data["parameter_count"] = len(keys)
+
+    def prefixes(needle: str) -> list[str]:
+        found = set()
+        for k in keys:
+            if needle in k:
+                parts = k.split(".")
+                hit = next(i for i, p in enumerate(parts) if needle in p)
+                found.add(".".join(parts[: hit + 1]))
+        return sorted(found)
+
+    r.data["merger_modules"] = prefixes("merger")
+    r.data["aligner_modules"] = prefixes("aligner")
+    r.data["visual_roots"] = sorted({k.split(".")[0] for k in keys if k.startswith(("visual", "vision"))})
+    r.data["decoder_targets_present"] = sorted(
+        t for t in ("q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj")
+        if any(f".{t}." in k for k in keys)
+    )
+
+    connector = r.data["merger_modules"] + r.data["aligner_modules"]
+    r.ok = bool(connector) and len(r.data["decoder_targets_present"]) == 7
+    r.detail = (
+        f"connector modules {connector}; visual roots {r.data['visual_roots']}; "
+        f"all 7 decoder targets present"
+        if r.ok else
+        f"connector={connector or 'NONE FOUND'} decoder_targets="
+        f"{r.data['decoder_targets_present']} — do not ship a freeze flag or LoRA target "
+        "naming a module that is not in this list"
+    )
+
+
+def check_visual_token_geometry(r: Result) -> None:
+    """How many visual tokens a page actually costs, measured not assumed.
+
+    Every sequence cap in arch §7a is derived from this number, and the v1 caps
+    were set from an assumed patch geometry. Measured through the real image
+    processor, so patch size, spatial merge and any smart-resize rounding are all
+    included rather than modelled.
+    """
+    from PIL import Image
+    from transformers import AutoProcessor
+
+    processor = AutoProcessor.from_pretrained(MODEL_ID, trust_remote_code=True)
+    image_processor = getattr(processor, "image_processor", processor)
+    merge = int(getattr(image_processor, "merge_size", 2))
+    patch = int(getattr(image_processor, "patch_size", 14))
+    r.data["patch_size"] = patch
+    r.data["merge_size"] = merge
+    r.data["px_per_token"] = patch * merge
+
+    # US Letter at three candidate pixel budgets, portrait.
+    measured = {}
+    for label, max_pixels in (("0.26M_thumbnail", 262_144), ("1.64M", 1_638_400),
+                              ("2.48M", 2_483_712), ("3.24M", 3_240_000)):
+        image = Image.new("RGB", (1384, 1792), "white")
+        out = image_processor(images=image, max_pixels=max_pixels, return_tensors="pt")
+        grid = out["image_grid_thw"][0].tolist()          # [t, h, w] in patches
+        tokens = (grid[0] * grid[1] * grid[2]) // (merge * merge)
+        measured[label] = {"grid_thw": grid, "tokens_per_page": tokens}
+    r.data["per_page"] = measured
+
+    extract = measured["2.48M"]["tokens_per_page"]
+    r.data["three_page_lossrun_tokens"] = extract * 3
+    r.ok = extract > 0
+    r.detail = (
+        f"{patch}px patches x{merge} merge = {patch * merge}px per token; "
+        f"at 2.48M max_pixels a US-Letter page costs {extract:,} visual tokens "
+        f"({extract * 3:,} for three). Set the §7a caps from this table."
+    )
+
+
+def check_peak_vram_per_cap(r: Result) -> None:
+    """Peak allocation over one forward/backward at each task cap (arch §9.3).
+
+    The v1 pod-class table was arithmetic. This replaces it with a measurement, and
+    it is the number that decides whether a cap fits on one 80GB card.
+    """
+    import torch
+
+    if not torch.cuda.is_available():
+        r.ok = None
+        r.detail = "no CUDA device — cannot measure"
+        return
+
+    from transformers import AutoConfig, AutoModelForCausalLM
+
+    config = AutoConfig.from_pretrained(MODEL_ID, trust_remote_code=True)
+    text_config = getattr(config, "text_config", config)
+    model = AutoModelForCausalLM.from_config(
+        text_config, torch_dtype=torch.bfloat16, trust_remote_code=True
+    ).cuda()
+    model.gradient_checkpointing_enable()
+    model.train()
+
+    measured = {}
+    for cap in (4_096, 12_288, 20_480, 24_576, 32_768):
+        torch.cuda.empty_cache()
+        torch.cuda.reset_peak_memory_stats()
+        try:
+            ids = torch.randint(0, 1000, (1, cap), device="cuda")
+            out = model(input_ids=ids, labels=ids)
+            out.loss.backward()
+            measured[cap] = round(torch.cuda.max_memory_allocated() / 1e9, 1)
+            model.zero_grad(set_to_none=True)
+        except torch.cuda.OutOfMemoryError:
+            measured[cap] = "OOM"
+        except Exception as exc:  # noqa: BLE001
+            measured[cap] = f"error: {type(exc).__name__}"
+    r.data["peak_gb_by_cap"] = measured
+    r.data["note"] = (
+        "language tower only, no vision encoder and no use_logits_to_keep — a floor, not the "
+        "full training footprint. Re-measure through ms-swift for the real number."
+    )
+    r.ok = any(isinstance(v, float) for v in measured.values())
+    r.detail = f"peak GB by sequence cap: {measured}"
+
+
+def check_sequence_parallel(r: Result) -> None:
+    """ms-swift sequence parallelism — the escape hatch before any ZeRO-3 config."""
+    import shutil
+
+    if shutil.which("swift") is None:
+        r.ok = False
+        r.detail = "the `swift` CLI is not on PATH"
+        return
+    out = subprocess.run(["swift", "sft", "--help"], capture_output=True, text=True, timeout=120)
+    help_text = (out.stdout + out.stderr).lower()
+    flags = {
+        "sequence_parallel_size": "sequence_parallel" in help_text,
+        "use_logits_to_keep": "logits_to_keep" in help_text,
+        "padding_free": "padding_free" in help_text,
+        "freeze_aligner": "freeze_aligner" in help_text,
+    }
+    r.data["flags"] = flags
+    missing = [k for k, v in flags.items() if not v]
+    r.ok = not missing
+    r.detail = (
+        "ms-swift exposes sequence parallelism, use_logits_to_keep, padding-free and freeze_aligner"
+        if r.ok else f"ms-swift does not expose {missing} — arch §9.3 and §11.1 depend on these"
+    )
+
+
+def check_structured_outputs(r: Result) -> None:
+    """vLLM structured decoding against a SPEC_00 schema (arch §13)."""
+    import vllm
+
+    r.data["vllm"] = vllm.__version__
+    try:
+        from vllm.sampling_params import GuidedDecodingParams  # noqa: F401
+        r.data["guided_decoding_params"] = True
+    except ImportError:
+        r.data["guided_decoding_params"] = False
+    from vllm import SamplingParams
+
+    fields = set(getattr(SamplingParams, "__dataclass_fields__", {}))
+    r.data["sampling_fields"] = sorted(f for f in fields if "guided" in f or "structur" in f)
+    r.ok = r.data["guided_decoding_params"] or bool(r.data["sampling_fields"])
+    r.detail = (
+        f"structured outputs available ({r.data['sampling_fields'] or 'GuidedDecodingParams'}) — "
+        "measure schema compile time and throughput on the real SPEC_00 schemas next"
+        if r.ok else
+        "no structured-output surface found; schema validity cannot be guaranteed at decode time"
+    )
+
+
+def check_raw_logprobs(r: Result) -> None:
+    """``logprobs_mode: raw_logprobs`` must survive structured decoding (arch §5.1).
+
+    Constrained decoding masks invalid tokens. If the returned logprobs are the
+    post-mask distribution, every confidence feature is computed on a distribution
+    the model did not produce, and the calibrator is fitted on an artefact.
+    """
+    from vllm import SamplingParams
+
+    fields = set(getattr(SamplingParams, "__dataclass_fields__", {}))
+    r.data["has_logprobs"] = "logprobs" in fields
+    try:
+        from vllm.config import ModelConfig
+
+        model_fields = set(getattr(ModelConfig, "__dataclass_fields__", {}))
+        r.data["logprobs_mode_supported"] = "logprobs_mode" in model_fields
+    except Exception:  # noqa: BLE001
+        r.data["logprobs_mode_supported"] = False
+    r.ok = r.data["has_logprobs"]
+    r.detail = (
+        f"logprobs available; logprobs_mode field {'present' if r.data['logprobs_mode_supported'] else 'ABSENT'} "
+        "— confirm on a live server that values are pre-mask before fitting any calibrator"
+    )
+
+
+def check_fp8_export(r: Result) -> None:
+    """llm-compressor FP8 with the vision tower and lm_head excluded (arch §13a)."""
+    try:
+        import llmcompressor
+
+        r.data["llmcompressor"] = getattr(llmcompressor, "__version__", "installed")
+    except ImportError as exc:
+        r.ok = False
+        r.detail = f"llm-compressor not importable ({exc}); FP8 is the v2.1 serving format — add it to [serve]"
+        return
+    try:
+        from llmcompressor.modifiers.quantization import QuantizationModifier  # noqa: F401
+
+        r.data["quantization_modifier"] = True
+    except ImportError:
+        r.data["quantization_modifier"] = False
+    r.ok = r.data["quantization_modifier"]
+    r.detail = (
+        "llm-compressor exposes QuantizationModifier — run a real FP8 export with "
+        "ignore=['visual.*','lm_head'] and load it in vLLM next"
+        if r.ok else "llm-compressor is installed but QuantizationModifier is missing"
+    )
+
+
+def check_mineru_determinism(pdf: Path):
+    """Same PDF twice on the same GPU must give byte-identical markdown (arch §8a).
+
+    The model learns how MinerU formats its output, so nondeterminism is training
+    noise that no seed controls and no manifest records.
+    """
+
+    def _check(r: Result) -> None:
+        first, first_seconds = _mineru(pdf)
+        second, _ = _mineru(pdf)
+        r.data["chars"] = len(first)
+        r.data["seconds_first_run"] = round(first_seconds, 1)
+        r.data["identical"] = first == second
+        r.ok = r.data["identical"]
+        r.detail = (
+            f"two runs produced identical markdown ({len(first):,} chars)"
+            if r.ok else
+            "TWO RUNS DIFFERED — the OCR pin in the corpus manifest does not make the corpus "
+            "reproducible; find the nondeterminism before building a corpus"
+        )
+
+    return _check
+
+
 # --------------------------------------------------------------------------
 # Report
 # --------------------------------------------------------------------------
@@ -327,10 +603,25 @@ def main(argv: list[str] | None = None) -> int:
             check_vllm_multi_lora),
         run("llama_cpp_mmproj", "whether GGUF export can produce a model that can see",
             check_llama_cpp_mmproj),
+        # --- arch v2.1 §16.0 additions ---------------------------------------
+        run("merger_module_names", "the freeze flags and any vision LoRA target (§9a)",
+            check_merger_module_names),
+        run("visual_token_geometry", "every sequence cap in §7a", check_visual_token_geometry),
+        run("peak_vram_per_cap", "the pod-class table in §14 and whether 32k fits on one card (§9.3)",
+            check_peak_vram_per_cap),
+        run("sequence_parallel_and_memory_flags", "the §9.3 escape hatch and the §11.1 memory settings",
+            check_sequence_parallel),
+        run("vllm_structured_outputs", "whether schema validity is guaranteed at decode time (§13)",
+            check_structured_outputs),
+        run("raw_logprobs_under_constraint", "whether confidence features are computed on the "
+            "model's own distribution (§5.1)", check_raw_logprobs),
+        run("fp8_export", "the v2.1 default serving format (§13a)", check_fp8_export),
     ]
 
     if args.pdf and not args.skip_mineru:
         results.append(run("mineru_cuda", "the whole data pipeline", check_mineru_gpu(args.pdf)))
+        results.append(run("mineru_determinism", "whether the OCR pin makes the corpus reproducible (§8a)",
+                           check_mineru_determinism(args.pdf)))
         # No device-parity check: OCR is GPU-only, so there is no second device
         # whose output could differ. What was a measurement is now a constraint.
     else:
