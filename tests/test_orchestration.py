@@ -246,6 +246,42 @@ def test_finetune_runs_ingest_through_merge(client, controller):
     assert ctx.volume.exists(paths.staging_merged_model_dir("v1", None))
 
 
+def test_training_reads_exactly_the_files_the_dataset_build_writes(client, controller):
+    """The dataset stage wrote {doc_type}/{split}.jsonl while training read
+    train/epoch_N.jsonl and val/val.jsonl, which nothing wrote. Every module was
+    self-consistent and the suite stayed green; only the real run would fail."""
+    from registry_utils.models import DataStats
+    from training.train import train
+
+    seed_corpus(client)
+    ctx = make_context(client, controller)
+    report = run_stages(ctx, stages_for("finetune"), command="finetune")
+    assert report.ok, report.render()
+
+    swift, _ = train(
+        corpus_version=ctx.corpus, out_version="v9", client=client,
+        corpus_manifest=client.read_json(paths.corpus_manifest(ctx.corpus, ctx.tenant_id)),
+        data_stats=DataStats(train_examples=1, val_examples=1, test_examples=1),
+        dry_run=True, tenant_id=ctx.tenant_id,
+    )
+    read = list(swift.args["dataset"]) + list(swift.args["val_dataset"])
+    missing = [path for path in read if not client.exists(path)]
+    assert not missing, f"training reads {missing}, which the dataset build never wrote"
+
+
+def test_the_dataset_build_assigns_families_before_splitting(client, controller):
+    """assign_groups existed and nothing called it, so every document was its own
+    group and the group-aware split was a per-document split under another name."""
+    seed_corpus(client)
+    ctx = make_context(client, controller)
+    report = run_stages(ctx, stages_for("finetune"), command="finetune")
+    assert report.ok, report.render()
+
+    assert ctx.grouping, "the dataset build recorded no grouping at all"
+    for doc_type, grouping in ctx.grouping.items():
+        assert grouping["documents"] >= 1, doc_type
+
+
 def test_finetune_writes_a_blob_manifest_while_weights_stay_staged(client, controller):
     """The volume is working storage with no durability guarantee. Without this
     rule a reclaimed volume means a training run that left no trace (SPEC_13 §3)."""

@@ -31,6 +31,8 @@ Layer 1   PyTorch + Transformers + PEFT + bitsandbytes + Accelerate/DeepSpeed
 
 ## Deliverables
 
+> **Epochs are files, and ms-swift runs one pass over them** (arch v2.1 §6.1). `training/train.py` passes the first `num_train_epochs` of `corpus/{tenant}/v{n}/train/epoch_{1..4}.jsonl` as `dataset` and sets ms-swift's **`num_train_epochs: 1`**. Each file already holds every train document once in that epoch's modality draw, so the concatenation *is* the N-epoch run; also telling ms-swift N looped the N files N times — nine passes for a "3 epoch" run. The manifest records the logical count. Fewer epoch files than epochs is refused. The corpus is read for `--tenant`, never silently from the default tenant.
+
 ### 1. `training/train_foundation.py`
 Entrypoint that:
 - Pulls the base model and the corpus version from Blob (SPEC_02).

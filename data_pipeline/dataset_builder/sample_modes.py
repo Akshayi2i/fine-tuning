@@ -38,6 +38,13 @@ log = logging.getLogger(__name__)
 #: Always materialized, whatever a given run uses (arch v2.1 §6.1).
 EPOCH_FILES = 4
 
+#: Below this many draws the mix check only warns. A regime's realised share has
+#: standard deviation sqrt(p(1-p)/n), at most 0.5/sqrt(n); a three-sigma swing
+#: stays inside a 5-point tolerance only from n = 900. At pilot volume (30 train
+#: documents x 4 epochs = 120 draws) sigma is ~4.6 points, so an enforced check
+#: would fail correct corpora routinely and teach everyone to ignore it.
+MIN_DRAWS_FOR_MIX_CHECK = 900
+
 
 class ModeSamplingError(RuntimeError):
     """Raised when a mode draw cannot be made or is not usable."""
@@ -159,6 +166,7 @@ def assert_mix_is_close(
     *,
     tolerance: float = 0.05,
     mix: dict[str, float] | None = None,
+    minimum_draws: int = MIN_DRAWS_FOR_MIX_CHECK,
 ) -> None:
     """Assert the realised mix is near the target (arch §6).
 
@@ -169,6 +177,17 @@ def assert_mix_is_close(
     sampling noise and teach everyone to ignore it.
     """
     target = mix or MODALITY_MIX
+    draws = len(assignment.draws)
+    if draws < minimum_draws:
+        # Reported, not silently skipped: an unenforced check that looks enforced
+        # is worse than one that says it is not running.
+        log.warning(
+            "%d modality draws is below the %d needed for a %.0f%% tolerance to hold against "
+            "ordinary sampling noise; the mix check is not enforced at this size. Realised: %s",
+            draws, minimum_draws, tolerance * 100,
+            {k: round(v, 3) for k, v in assignment.realised_mix().items()},
+        )
+        return
     realised = assignment.realised_mix()
     off = {
         mode: (round(realised[mode], 3), target.get(mode, 0.0))

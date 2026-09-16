@@ -142,11 +142,23 @@ def build_training_config(
 
     Both come from the same source so the manifest describes what actually ran,
     rather than what a YAML file happened to say afterwards.
+
+    ``corpus_paths`` are the materialized epoch files, in order. The run reads the
+    first ``num_train_epochs`` of them **once each** — see the epoch comment
+    below for why ms-swift is told one epoch.
     """
     base = base_model_config()
     cfg = training_config(config_name)
     lora, opt, batch = cfg["lora"], cfg["optimization"], cfg["batch"]
     evaluation, memory = cfg["evaluation"], cfg.get("memory", {})
+
+    epochs = int(opt["num_train_epochs"])
+    if len(corpus_paths) < epochs:
+        raise TrainingError(
+            f"the config asks for {epochs} epochs but only {len(corpus_paths)} epoch file(s) were "
+            "given. Each epoch is its own file with its own modality draw (arch v2.1 §6.1); "
+            "reusing a file would show every document in the same regime twice."
+        )
 
     target_modules = list(lora["target_modules"])
     if lora.get("include_vision_projector", False):
@@ -161,7 +173,10 @@ def build_training_config(
         "model_type": "qwen3-vl-8b-instruct",
         "model_id_or_path": base["model"]["model_id"],
         "model_revision": base["model"]["revision"],
-        "dataset": corpus_paths,
+        # The first N epoch files, read once each. Each file already holds every
+        # train document exactly once, in that epoch's modality draw, so the
+        # concatenation IS an N-epoch run.
+        "dataset": list(corpus_paths[:epochs]),
         "output_dir": output_dir,
         "train_type": "lora",
         "lora_rank": lora["rank"],
@@ -180,7 +195,11 @@ def build_training_config(
         # steps rounds to zero warmup, and the first optimizer step then lands at
         # full learning rate on a freshly-initialised adapter.
         "warmup_steps": opt["warmup_steps"],
-        "num_train_epochs": opt["num_train_epochs"],
+        # One pass over the concatenated epoch files, never N. Telling ms-swift
+        # N here as well loops the N files N times — nine passes for a "3 epoch"
+        # run, the inflation per-epoch sampling exists to remove. The logical
+        # epoch count is recorded on the manifest below.
+        "num_train_epochs": 1,
         "optim": opt["optim"],
         "weight_decay": opt["weight_decay"],
         "max_grad_norm": opt["max_grad_norm"],
@@ -313,6 +332,7 @@ def train(
     deepspeed: str | None = None,
     continue_from: str | None = None,
     dry_run: bool = False,
+    tenant_id: str | None = None,
 ) -> tuple[SwiftConfig, RunManifest]:
     """Configure and launch the unified extractor run.
 
@@ -324,6 +344,8 @@ def train(
             that never happened. ``assert_checkpoint_path`` refuses the run-id
             shape rather than letting it through.
         dry_run: assemble and record everything without launching.
+        tenant_id: whose corpus to read. Omitting it reads the default tenant's
+            files, which for any other tenant do not exist — or worse, do.
     """
     validate_all(require_pinned_revision=not dry_run)
 
@@ -331,8 +353,10 @@ def train(
     # treat the validation split as training data and then carve its own eval
     # split out of the union, so the selected checkpoint was chosen on documents
     # the model had memorised — and the promotion gate read that number.
-    corpus_paths = [paths.corpus_epoch_file(corpus_version, epoch) for epoch in (1, 2, 3, 4)]
-    val_paths = [paths.corpus_eval_split(corpus_version, "val")]
+    corpus_paths = [
+        paths.corpus_epoch_file(corpus_version, epoch, tenant_id) for epoch in (1, 2, 3, 4)
+    ]
+    val_paths = [paths.corpus_eval_split(corpus_version, "val", tenant_id)]
     staging = paths.staging_adapter_dir("foundation", out_version)
 
     if continue_from:
@@ -349,9 +373,6 @@ def train(
     # Only the epochs this run uses. Four files are always materialized because
     # the §11a sweep tests up to four passes (§6.1), and a sweep that regenerates
     # its own data is not comparing what it thinks it is.
-    epochs = int(recorded.epochs)
-    swift.args["dataset"] = corpus_paths[:epochs]
-
     manifest = build_manifest(
         run_id=f"extractor-{out_version}",
         corpus_version=corpus_version,
@@ -389,6 +410,22 @@ def assert_checkpoint_path(continue_from: str) -> None:
             "trains from base while the manifest records a lineage that never happened. "
             "Pass the staged checkpoint directory instead."
         )
+
+
+def count_examples(bucket: Any) -> int:
+    """Sum a ``{doc_type: {mode: count}}`` bucket from the corpus manifest.
+
+    The manifest nests counts by type and modality. ``int()`` on that dict is a
+    TypeError, which is how the CLI used to fail before training started.
+    """
+    if not isinstance(bucket, dict):
+        return 0
+    return sum(
+        count
+        for modes in bucket.values()
+        if isinstance(modes, dict)
+        for count in modes.values()
+    )
 
 
 def launch_and_record(
@@ -443,11 +480,12 @@ def main(argv: Iterable[str] | None = None) -> int:  # pragma: no cover - thin C
     parser.add_argument("--train-vit", action="store_true", help="the §3 escalation; LoRA-on-ViT")
     parser.add_argument("--continue-from", default=None, help="a checkpoint DIRECTORY, not a run-id")
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--tenant", default=None, help="whose corpus to read; defaults from env")
     args = parser.parse_args(list(argv) if argv is not None else None)
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
     client = BlobClient()
-    corpus_manifest = client.read_json(paths.corpus_manifest(args.corpus))
+    corpus_manifest = client.read_json(paths.corpus_manifest(args.corpus, args.tenant))
     counts = corpus_manifest.get("example_counts", {})
     train(
         corpus_version=args.corpus,
@@ -455,14 +493,15 @@ def main(argv: Iterable[str] | None = None) -> int:  # pragma: no cover - thin C
         client=client,
         corpus_manifest=corpus_manifest,
         data_stats=DataStats(
-            train_examples=int(counts.get("train", 0)),
-            val_examples=int(counts.get("val", 0)),
-            test_examples=int(counts.get("test", 0)),
+            train_examples=count_examples(counts.get("train")),
+            val_examples=count_examples(counts.get("val")),
+            test_examples=count_examples(counts.get("test")),
         ),
         train_vit=args.train_vit,
         deepspeed=args.deepspeed,
         continue_from=args.continue_from,
         dry_run=args.dry_run,
+        tenant_id=args.tenant,
     )
     return 0
 

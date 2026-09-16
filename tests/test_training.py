@@ -28,6 +28,9 @@ from training.vit_gate import (
     summarise_error_mix,
 )
 
+#: The four materialized epoch files, as the dataset build writes them.
+EPOCH_PATHS = [f"corpus/default/v1/train/epoch_{i}.jsonl" for i in (1, 2, 3, 4)]
+
 # A toy sequence: 10 prompt tokens, then 6 assistant tokens.
 INPUT_IDS = list(range(100, 116))
 ASSISTANT_START, ASSISTANT_END = 10, 16
@@ -359,7 +362,7 @@ def test_training_is_one_unified_run_on_a_bf16_base():
     LoRA per request, so v1's Foundation + per-type stack could never both be
     active — it was unservable, not merely awkward."""
     swift, recorded = T.build_training_config(
-        corpus_paths=["corpus/default/v1/train/epoch_1.jsonl"], output_dir="/tmp/out"
+        corpus_paths=EPOCH_PATHS, output_dir="/tmp/out"
     )
     assert swift.args["train_type"] == "lora"
     assert swift.args["quantization_bit"] == 0
@@ -374,7 +377,7 @@ def test_both_the_vit_and_the_mergers_are_frozen():
     LoRA in vLLM is experimental with known mixed-adapter batching risks, and
     arbitration is learned in the DECODER, where image tokens and OCR text tokens
     attend to each other — the mergers never see OCR text (arch v2.1 §9a)."""
-    swift, recorded = T.build_training_config(corpus_paths=["x"], output_dir="/tmp/out")
+    swift, recorded = T.build_training_config(corpus_paths=EPOCH_PATHS, output_dir="/tmp/out")
 
     assert swift.args["freeze_vit"] is True
     assert swift.args["freeze_aligner"] is True
@@ -389,7 +392,7 @@ def test_the_memory_settings_that_make_the_largest_cap_affordable_reach_the_trai
     """Without use_logits_to_keep the LM head produces a 151k-vocabulary
     distribution at every position of a 32k sequence, which dominates activation
     memory on its own (arch v2.1 §9.3)."""
-    swift, _ = T.build_training_config(corpus_paths=["x"], output_dir="/tmp/out")
+    swift, _ = T.build_training_config(corpus_paths=EPOCH_PATHS, output_dir="/tmp/out")
 
     assert swift.args["use_logits_to_keep"] is True
     assert swift.args["padding_free"] is True
@@ -401,7 +404,7 @@ def test_max_length_is_the_largest_task_cap():
     """ms-swift takes ONE max_length and the corpus interleaves every task, so
     anything smaller would truncate the longest one rather than reject it — and a
     clipped assistant span trains the model to stop early (arch v2.1 §7a)."""
-    swift, recorded = T.build_training_config(corpus_paths=["x"], output_dir="/tmp/out")
+    swift, recorded = T.build_training_config(corpus_paths=EPOCH_PATHS, output_dir="/tmp/out")
     largest = T.corpus_max_length()
 
     assert swift.args["max_length"] == largest
@@ -413,7 +416,7 @@ def test_warmup_reaches_the_trainer_in_steps_not_as_a_ratio():
     """At pilot volume a 0.03 ratio over a handful of steps rounds to zero, and
     the first optimizer step lands at full learning rate on a freshly-initialised
     adapter (arch v2.1 §11.1)."""
-    swift, _ = T.build_training_config(corpus_paths=["x"], output_dir="/tmp/out")
+    swift, _ = T.build_training_config(corpus_paths=EPOCH_PATHS, output_dir="/tmp/out")
 
     assert swift.args["warmup_steps"] >= 1
     assert "warmup_ratio" not in swift.args
@@ -422,11 +425,11 @@ def test_warmup_reaches_the_trainer_in_steps_not_as_a_ratio():
 def test_deepspeed_is_absent_unless_asked_for():
     """Under LoRA, ZeRO-2 shards ~1.5GB of adapter optimizer state and is close
     to a no-op. Sequence parallelism is the first reach for VRAM (§9.3)."""
-    without, _ = T.build_training_config(corpus_paths=["x"], output_dir="/tmp/out")
+    without, _ = T.build_training_config(corpus_paths=EPOCH_PATHS, output_dir="/tmp/out")
     assert "deepspeed" not in without.args
 
     with_zero, _ = T.build_training_config(
-        corpus_paths=["x"], output_dir="/tmp/out", deepspeed="zero3"
+        corpus_paths=EPOCH_PATHS, output_dir="/tmp/out", deepspeed="zero3"
     )
     assert with_zero.args["deepspeed"].endswith("zero3.json")
 
@@ -440,7 +443,7 @@ def test_four_bit_is_a_live_flag_not_a_hardcoded_constant(monkeypatch):
     quantized = {**base, "quantization": {**base["quantization"], "load_in_4bit": True}}
     monkeypatch.setattr(T, "base_model_config", lambda: quantized)
 
-    swift, recorded = T.build_training_config(corpus_paths=["x"], output_dir="/tmp/out")
+    swift, recorded = T.build_training_config(corpus_paths=EPOCH_PATHS, output_dir="/tmp/out")
 
     assert swift.args["quantization_bit"] == 4
     assert swift.args["bnb_4bit_quant_type"] == "nf4"
@@ -467,24 +470,34 @@ def test_training_the_vit_is_recorded_as_lora_never_full_fine_tune():
     """The §3 escalation adds a ViT LoRA. Full fine-tuning risks the pretrained
     document/OCR capability the image-only path relies on."""
     swift, recorded = T.build_training_config(
-        corpus_paths=["x"], output_dir="/tmp/out", train_vit=True
+        corpus_paths=EPOCH_PATHS, output_dir="/tmp/out", train_vit=True
     )
     assert swift.args["freeze_vit"] is False
     assert recorded.vit_trainable is True
     assert recorded.vit_method == "lora"
 
 
-def test_the_run_reads_every_epoch_file_the_config_asks_for():
-    """Four epoch files are always materialized because the §11a sweep tests up
-    to four passes, but a 3-epoch run must read three — reading all four would
-    make it a 4-epoch run whose manifest says 3 (arch v2.1 §6.1)."""
-    swift, recorded = T.build_training_config(
-        corpus_paths=[f"corpus/default/v1/train/epoch_{i}.jsonl" for i in (1, 2, 3, 4)],
-        output_dir="/tmp/out",
-    )
-    # build_training_config takes what it is given; `train` trims to the epoch
-    # count. Assert the contract both halves depend on.
-    assert recorded.epochs <= 4
+def test_the_run_reads_one_file_per_epoch_once_each():
+    """Four epoch files are materialized, and a 3-epoch run reads three of them
+    ONCE. Passing num_train_epochs=3 as well made ms-swift loop the three files
+    three times — nine passes, recorded as three (arch v2.1 §6.1)."""
+    swift, recorded = T.build_training_config(corpus_paths=EPOCH_PATHS, output_dir="/tmp/out")
+
+    assert swift.args["dataset"] == EPOCH_PATHS[: recorded.epochs]
+    assert swift.args["num_train_epochs"] == 1
+    assert recorded.epochs == 3
+
+
+def test_fewer_epoch_files_than_epochs_is_refused():
+    with pytest.raises(T.TrainingError, match="epoch file"):
+        T.build_training_config(corpus_paths=EPOCH_PATHS[:2], output_dir="/tmp/out")
+
+
+def test_manifest_example_counts_are_summed_not_cast():
+    """The corpus manifest nests counts by type and mode; int() on that is a
+    TypeError, which is how the training CLI failed before it started."""
+    assert T.count_examples({"policy": {"image_only": 3, "ocr_plus_image": 5}, "acord": {"x": 2}}) == 10
+    assert T.count_examples(None) == 0
 
 
 def test_the_validation_split_never_enters_the_training_set():
@@ -493,7 +506,7 @@ def test_the_validation_split_never_enters_the_training_set():
     checkpoint was chosen on documents the model had memorised — and the
     promotion gate read that number."""
     swift, _ = T.build_training_config(
-        corpus_paths=["corpus/default/v1/train/epoch_1.jsonl"],
+        corpus_paths=EPOCH_PATHS,
         val_paths=["corpus/default/v1/val/val.jsonl"],
         output_dir="/tmp/out",
     )
@@ -505,7 +518,7 @@ def test_explicit_evaluation_settings_win_over_the_early_stopping_defaults():
     """The helper is unpacked FIRST so the explicit keys win. Unpacking it last
     silently overrode this config's metric_for_best_model and
     load_best_model_at_end with the helper's own defaults."""
-    swift, _ = T.build_training_config(corpus_paths=["x"], output_dir="/tmp/out")
+    swift, _ = T.build_training_config(corpus_paths=EPOCH_PATHS, output_dir="/tmp/out")
 
     assert swift.args["metric_for_best_model"] == "eval_loss"
     assert swift.args["greater_is_better"] is False
@@ -516,7 +529,7 @@ def test_checkpoint_selection_does_not_happen_here():
     """Field F1 needs generation, which the training loop's eval does not do
     efficiently for a VLM. Loss selects for EARLY STOPPING only; a separate vLLM
     job selects what ships (arch v2.1 §11.2)."""
-    swift, _ = T.build_training_config(corpus_paths=["x"], output_dir="/tmp/out")
+    swift, _ = T.build_training_config(corpus_paths=EPOCH_PATHS, output_dir="/tmp/out")
     assert swift.args["save_total_limit"] >= 4, (
         "checkpoint_eval scores the last 3 plus the best-loss checkpoint; fewer "
         "retained would discard a candidate before it is scored"

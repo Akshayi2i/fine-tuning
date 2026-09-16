@@ -20,10 +20,11 @@ from data_pipeline.corpus_manifest import (
     count_confusable_examples,
 )
 from data_pipeline.dataset_builder.build_jsonl import (
+    CorpusBuildError,
     SourceDocument,
     build_corpus,
     expand_document,
-    sample_to_target_mix,
+    train_rows_by_epoch,
     write_jsonl,
 )
 from data_pipeline.dataset_builder.noisy_ocr_augment import corrupt_ocr
@@ -248,17 +249,29 @@ def test_rebuild_with_the_same_seed_is_byte_identical():
     assert first == second
 
 
-def test_sampling_moves_the_mix_toward_the_target():
+def test_every_epoch_file_holds_every_train_document_exactly_once():
+    """The concatenated epoch files are the whole run. A document missing from
+    one, or in one twice, trains on something the epoch count does not describe."""
     docs = _documents(30)
     assignment = assign_splits({"policy": [d.source_id for d in docs]})
-    sampled = sample_to_target_mix(build_corpus(docs, assignment))
+    built = build_corpus(docs, assignment)
 
-    train = [r for r in sampled.rows_by_split["train"]]
-    share = {
-        mode: sum(1 for r in train if r["modality_mode"] == mode) / len(train)
-        for mode in MODALITY_MODES
-    }
-    assert share["ocr_plus_image"] > share["image_only"] > share["noisy_ocr_image"]
+    by_epoch = train_rows_by_epoch(built)
+    train_ids = {r["source_id"] for r in built.rows_by_split["train"]}
+    assert sorted(by_epoch) == [1, 2, 3, 4]
+    for rows in by_epoch.values():
+        assert sorted(r["source_id"] for r in rows) == sorted(train_ids)
+
+
+def test_an_epoch_missing_a_document_is_refused():
+    docs = _documents(30)
+    assignment = assign_splits({"policy": [d.source_id for d in docs]})
+    built = build_corpus(docs, assignment)
+    dropped = next(r for r in built.rows_by_split["train"] if r["epoch"] == 2)
+    built.rows_by_split["train"].remove(dropped)
+
+    with pytest.raises(CorpusBuildError, match="epoch 2"):
+        train_rows_by_epoch(built)
 
 
 def test_val_and_test_keep_all_three_variants():
@@ -266,7 +279,7 @@ def test_val_and_test_keep_all_three_variants():
     population, not a sample of it."""
     docs = _documents(30)
     assignment = assign_splits({"policy": [d.source_id for d in docs]})
-    sampled = sample_to_target_mix(build_corpus(docs, assignment))
+    sampled = build_corpus(docs, assignment)
 
     for split in ("val", "test"):
         rows = sampled.rows_by_split[split]
@@ -865,3 +878,16 @@ def test_a_long_policy_is_thumbnailed_in_chunks():
     assert len(chunks) == 4
     assert chunks[0][0] == 1 and chunks[-1][-1] == 200
     assert sum(len(c) for c in chunks) == 200
+
+
+def test_train_documents_get_one_row_per_epoch_not_one_per_regime():
+    """v1 expanded every train document into all three regimes, so a 3-epoch run
+    was nine passes. There is no longer any path that does that for train."""
+    docs = _documents(30)
+    assignment = assign_splits({"policy": [d.source_id for d in docs]})
+    built = build_corpus(docs, assignment)
+
+    per_doc: dict[str, int] = {}
+    for row in built.rows_by_split["train"]:
+        per_doc[row["source_id"]] = per_doc.get(row["source_id"], 0) + 1
+    assert per_doc and set(per_doc.values()) == {4}

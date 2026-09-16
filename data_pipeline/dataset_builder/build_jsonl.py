@@ -1,7 +1,12 @@
 """Compile documents into chat-format JSONL training rows (SPEC_05, arch §6, §7).
 
-Split first, expand second. Each source document becomes **three** rows — one per
-modality regime — inside whichever split the document was already assigned to.
+Split first, expand second, inside whichever split the document was already
+assigned to:
+
+* **train** — one row per epoch, each in that epoch's sampled modality regime
+  (arch v2.1 §6.1), written as ``train/epoch_1..4.jsonl``;
+* **val / test** — three rows, one per regime, so image-only and noisy-OCR
+  accuracy are measured on the full eval population.
 
 The rows are built through :func:`inference_core.input_builder.build_training_row`,
 which is the same function the serving path uses to assemble a request. That is
@@ -17,9 +22,9 @@ from collections import Counter
 from dataclasses import dataclass, field
 from typing import Any
 
-from common.constants import MODALITY_MIX, MODALITY_MODES
+from common.constants import MODALITY_MODES
 from data_pipeline.dataset_builder.noisy_ocr_augment import corrupt_ocr_pages
-from data_pipeline.dataset_builder.sample_modes import ModeAssignment, sample_modes
+from data_pipeline.dataset_builder.sample_modes import EPOCH_FILES, ModeAssignment, sample_modes
 from data_pipeline.dataset_builder.split_groups import (
     GroupSplitAssignment,
     assert_no_leakage,
@@ -153,13 +158,13 @@ def build_corpus(
     """Compile every document into its split's rows, then assert no leakage.
 
     ``mode_assignment`` carries the per-document, per-epoch modality draw
-    (arch v2.1 §6.1). Without one the v1 behaviour applies — all three regimes
-    for every document — which is retained only so the val and test paths and the
-    older tests keep working; a real train build always passes one.
+    (arch v2.1 §6.1). Without one, it is drawn here over the **train** documents
+    with the same seed. Train always gets one row per epoch; there is no path
+    that expands a train document into all three regimes.
     """
     result = BuildResult(rows_by_split={"train": [], "val": [], "test": []})
     if mode_assignment is None:
-        mode_assignment = sample_modes([d.source_id for d in documents], seed=seed)
+        mode_assignment = sample_modes(train_source_ids(documents, assignment), seed=seed)
 
     for document in documents:
         try:
@@ -171,7 +176,7 @@ def build_corpus(
         # Train draws ONE mode per epoch (§6.1); val and test keep all three so
         # image-only and noisy-OCR accuracy are measured on the full eval
         # population rather than a sample of it.
-        if split == "train" and mode_assignment is not None:
+        if split == "train":
             epoch_modes = tuple(
                 mode_assignment.mode_for(document.source_id, e)
                 for e in range(1, mode_assignment.epochs + 1)
@@ -189,7 +194,7 @@ def build_corpus(
         # Train rows are stamped with the epoch they belong to, so the corpus can
         # be written as epoch_1..4.jsonl and a run reproduced from the files
         # alone rather than from a sampler behaving identically at training time.
-        if split == "train" and mode_assignment is not None:
+        if split == "train":
             for epoch, row in enumerate(rows, start=1):
                 row["epoch"] = epoch
 
@@ -217,116 +222,54 @@ def build_corpus(
     return result
 
 
-def assert_modality_mix(result: BuildResult, *, tolerance: float = 0.02) -> None:
-    """Assert the realised modality mix matches the target (arch §6).
+def train_source_ids(
+    documents: list[SourceDocument], assignment: GroupSplitAssignment
+) -> list[str]:
+    """The documents that will be sampled into epochs.
 
-    Checked on the **train split**, because that is the only split
-    :func:`sample_to_target_mix` samples — val and test deliberately keep all
-    three variants of every document so image-only and noisy-OCR accuracy are
-    measured on the full eval population rather than a sample. Asserting the
-    corpus-wide mix against 50/20/30 would therefore fail on a correct corpus.
-
-    A silently wrong mix changes what the model learns about arbitration and
-    about the no-OCR pathway, and produces no other symptom — no error, no
-    metric movement, nothing in a loss curve. This is the only thing that
-    notices.
+    Drawing modes for val and test documents too would not change their rows —
+    they take all three regimes — but it would put their draws into the realised
+    mix that the mix check reads, measuring something other than what trains.
     """
-    total = sum(result.modality_counts.values())
-    if not total:
-        raise CorpusBuildError("corpus is empty")
-
-    missing = set(MODALITY_MODES) - set(result.modality_counts)
-    if missing:
-        raise CorpusBuildError(
-            f"corpus contains no {sorted(missing)} rows. Each regime teaches something specific: "
-            "image_only satisfies the no-OCR production pathway, noisy_ocr_image teaches "
-            "image-over-OCR arbitration (arch §6)."
-        )
-
-    train = result.rows_by_split.get("train") or []
-    if not train:
-        return  # nothing sampled yet; the shape check above is all that applies
-
-    # One row is worth 1/n of the mix, so below n = 1/tolerance the target is
-    # arithmetically unreachable and the check would fail on a correct corpus.
-    # At 2% that is 50 rows — well under a real corpus and well over a fixture
-    # set. Reported rather than silently skipped: an unenforced check that looks
-    # enforced is how the previous version of this function passed a 96/2/2 mix.
-    minimum = int(round(1 / tolerance)) if tolerance else 0
-    if len(train) < minimum:
-        log.warning(
-            "train split has %d rows, so the %.0f%% modality tolerance is unreachable "
-            "(one row is %.1f%% of the mix) — the ratio check is not enforced at this size. "
-            "It applies from %d rows.",
-            len(train), tolerance * 100, 100 / len(train), minimum,
-        )
-        return
-
-    counts = Counter(row["modality_mode"] for row in train)
-    realised = {mode: counts.get(mode, 0) / len(train) for mode in MODALITY_MODES}
-    drifted = {
-        mode: (share, MODALITY_MIX[mode])
-        for mode, share in realised.items()
-        if abs(share - MODALITY_MIX[mode]) > tolerance
-    }
-    if drifted:
-        detail = "; ".join(
-            f"{mode}: {got:.1%} against a {want:.0%} target"
-            for mode, (got, want) in sorted(drifted.items())
-        )
-        raise CorpusBuildError(
-            f"the train split's modality mix is off target by more than {tolerance:.0%} — {detail}. "
-            f"({len(train)} rows.) The 50/20/30 split is what teaches the model to arbitrate "
-            "between OCR and image and to work without OCR at all; a corpus that drifts from it "
-            "trains a different behaviour and reports nothing."
-        )
+    found = []
+    for document in documents:
+        try:
+            if assignment.split_of(document.family) == "train":
+                found.append(document.source_id)
+        except Exception:  # noqa: BLE001 - unassigned documents are reported by build_corpus
+            continue
+    return found
 
 
-def sample_to_target_mix(
-    result: BuildResult,
-    *,
-    seed: int = 42,
-    target: dict[str, float] | None = None,
-) -> BuildResult:
-    """Down-sample rows so the realised mix approaches the arch §6 target.
+def train_rows_by_epoch(
+    result: BuildResult, epochs: int = EPOCH_FILES
+) -> dict[int, list[dict[str, Any]]]:
+    """Split the train rows into one list per epoch file.
 
-    Expansion produces an even 1/3 split; the target is 50/20/30. Sampling is
-    per-split and seeded, and **train is the only split sampled** — val and test
-    keep all three variants for every document, so image-only and noisy-OCR
-    accuracy can be measured on the full eval population rather than a sample.
+    Every epoch file must hold every train document exactly once. A document
+    missing from an epoch, or present twice, means the run trains on something
+    other than what the manifest's epoch count says, so that is refused here
+    rather than discovered in a loss curve.
     """
-    import random
+    by_epoch: dict[int, list[dict[str, Any]]] = {e: [] for e in range(1, epochs + 1)}
+    for row in result.rows_by_split.get("train", []):
+        epoch = row.get("epoch")
+        if epoch not in by_epoch:
+            raise CorpusBuildError(
+                f"train row for {row.get('source_id')!r} has epoch {epoch!r}; expected 1-{epochs}. "
+                "Every train row belongs to exactly one epoch file (arch v2.1 §6.1)."
+            )
+        by_epoch[epoch].append(row)
 
-    target = target or MODALITY_MIX
-    sampled = BuildResult(
-        rows_by_split={s: list(rows) for s, rows in result.rows_by_split.items()},
-        modality_counts=Counter(),
-        corruption_details=dict(result.corruption_details),
-        skipped=list(result.skipped),
-    )
-
-    train_rows = sampled.rows_by_split.get("train", [])
-    if train_rows:
-        by_mode: dict[str, list[dict[str, Any]]] = {}
-        for row in train_rows:
-            by_mode.setdefault(row["modality_mode"], []).append(row)
-
-        # Size the corpus by whichever regime is most constrained by its target.
-        total = min(
-            int(len(rows) / target[mode]) for mode, rows in by_mode.items() if target.get(mode)
-        )
-        rng = random.Random(seed)
-        kept: list[dict[str, Any]] = []
-        for mode, rows in sorted(by_mode.items()):
-            wanted = max(1, int(round(total * target.get(mode, 0))))
-            ordered = sorted(rows, key=lambda r: r["source_id"])
-            kept.extend(ordered if wanted >= len(ordered) else rng.sample(ordered, wanted))
-        sampled.rows_by_split["train"] = sorted(kept, key=lambda r: (r["source_id"], r["modality_mode"]))
-
-    for rows in sampled.rows_by_split.values():
-        for row in rows:
-            sampled.modality_counts[row["modality_mode"]] += 1
-    return sampled
+    expected = sorted({row["source_id"] for rows in by_epoch.values() for row in rows})
+    for epoch, rows in by_epoch.items():
+        ids = sorted(row["source_id"] for row in rows)
+        if ids != expected:
+            raise CorpusBuildError(
+                f"epoch {epoch} does not hold every train document exactly once "
+                f"({len(ids)} rows for {len(expected)} documents)."
+            )
+    return by_epoch
 
 
 def write_jsonl(rows: list[dict[str, Any]]) -> str:

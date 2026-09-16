@@ -30,8 +30,9 @@ Until resolved: the corpus manifest records `deidentified: false` and `image_red
 
 **Whichever is chosen, one rule holds:** de-identification must be **consistent across the OCR text, the page image, and the target JSON**. Any inconsistency between input and target teaches the model to hallucinate.
 
-### 2. `data_pipeline/dataset_builder/split_train_val_test.py`
-- **Split at `source_id` level BEFORE any modality expansion** (arch §8, master §10). Because each source PDF generates 3 JSONL rows, splitting *after* expansion would put the same document in both `train` and `val`/`test` under a different modality mode — data leakage that inflates eval metrics without reflecting real generalization.
+### 2. `data_pipeline/dataset_builder/split_groups.py`
+- **Split at GROUP level, BEFORE task and modality expansion** (arch v2.1 §8.2). The dataset stage first assigns every document a family `group_id` with `data_pipeline/ingestion/dedup_and_group.py`, within its doc type, from: the source checksum OCR recorded (`ocr_meta.source_checksum` — the dataset build may not read `raw-documents/`), a MinHash over the OCR text, and the declared carrier + `template_id` + insured. Splitting per document would put one renewal of an account in `train` and the next in `test`, and eval would measure template memorisation.
+- **Not yet computed:** the page-1 layout perceptual hash. No image-hash dependency is installed, so same-template documents with different text group only through a declared `template_id`.
 - Ratio scales with per-type volume (arch §8), configurable, seeded, logged:
 
 | Volume per doc type | Split | Note |
@@ -46,8 +47,9 @@ Until resolved: the corpus manifest records `deidentified: false` and `image_red
 - **Splitting is tenant-scoped** — never build a split spanning tenants.
 
 ### 3. Modality expansion — `data_pipeline/dataset_builder/build_jsonl.py`
-*(`expand_document` and `sample_to_target_mix`, not a separate `modality_dropout.py`: expansion and JSONL assembly share the split assignment and the row builder, and splitting them across two modules would mean passing that state between them for no gain.)*
-- For each `source_id`, generate the 3 modality variants at the mix ratios **50 / 20 / 30** (arch §6). Each variant becomes one JSONL row **in the split its `source_id` already landed in**.
+- **Train: one row per document per epoch** (arch v2.1 §6.1). `sample_modes` draws each train document's regime for each of the 4 epochs, seeded, against the **50 / 20 / 30** target. It is the only sampling step: v1's `sample_to_target_mix` down-sampler is gone, because running it over epoch rows would drop documents from epochs.
+- **Val / test: all 3 variants** per document, so image-only and noisy-OCR accuracy are measured on the full eval population.
+- The mix check (`assert_mix_is_close`, 5-point tolerance) is enforced from **900 draws**; below that it warns. At pilot volume (30 train docs × 4 epochs = 120 draws) one regime's share has a ~4.6-point standard deviation, so an enforced check would fail correct corpora.
 - `image_only` rows omit the OCR text block entirely and use the image-only system prompt — the explicit "no OCR provided" declaration, not a silently missing field (arch §6).
 - `noisy_ocr_image` rows use the **same instruction as `ocr_plus_image`** — the noise lives in the data, not the prompt.
 
@@ -62,7 +64,7 @@ Orchestrates: for each tenant, split, and doc_type, assemble chat-format rows us
 - `user` = image block(s) (+ OCR text unless `image_only`). **Multi-page documents produce multiple ordered `image` blocks + concatenated OCR text in one example.**
 - `assistant` = golden JSON string, including `line_of_business`.
 - Carry `doc_type`, `acord_form`, `modality_mode`, `source_id`, `tenant_id`, `split`, `deidentified` on every row.
-- Write `corpus/{tenant_id}/v{n}/{doc_type}/{train,val,test}.jsonl` to Blob.
+- Write `corpus/{tenant_id}/v{n}/train/epoch_{1..4}.jsonl` and `corpus/{tenant_id}/v{n}/{val,test}/{val,test}.jsonl` to Blob — all doc types together, because one adapter trains on every type (§8.1). These are exactly the paths `training/train.py` reads; `tests/test_orchestration.py` asserts that on a real build. Every epoch file holds every train document exactly once (`train_rows_by_epoch` refuses otherwise).
 - Reference images/OCR by Blob URI or a training-time-resolvable path (document the choice; it must resolve identically inside a RunPod pod).
 
 **Required edge cases the corpus must actually contain (arch §7)** — assert coverage and report counts in the manifest:

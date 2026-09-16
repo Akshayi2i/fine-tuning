@@ -168,6 +168,8 @@ class StageContext:
     #: The release this cycle produces. Everything gated, promoted and served is
     #: addressed by it (arch v2.1 §12.3).
     release_id: str = ""
+    #: Family grouping evidence per doc type, from the dataset build (arch v2.1 §8.2).
+    grouping: dict[str, Any] = field(default_factory=dict)
 
     # -- fitted during the run ---------------------------------------------
     calibrators: dict[str, Any] = field(default_factory=dict)
@@ -432,8 +434,79 @@ def load_labeled_documents(ctx: StageContext) -> list[Any]:
                 tenant_id=ctx.tenant_id,
                 field_provenance=metadata.get("field_provenance", {}),
                 is_scanned=bool(ocr_meta.get("failed_pages")),
+                carrier=_declared_carrier(label),
+                synthetic=bool(metadata.get("synthetic", False)),
             ))
+    ctx.grouping = assign_document_groups(ctx, documents)
     return documents
+
+
+def _declared_carrier(label: dict[str, Any]) -> str | None:
+    """The carrier the label names. ACORD 25 lists insurers instead; its first
+    one is the carrier the certificate is primarily about."""
+    carrier = label.get("carrier")
+    if isinstance(carrier, str) and carrier.strip():
+        return carrier
+    insurers = label.get("insurers")
+    if isinstance(insurers, list) and insurers and isinstance(insurers[0], dict):
+        name = insurers[0].get("name")
+        if isinstance(name, str) and name.strip():
+            return name
+    return None
+
+
+def assign_document_groups(ctx: StageContext, documents: list[Any]) -> dict[str, Any]:
+    """Stamp every document with its family ``group_id`` (arch v2.1 §8.2).
+
+    Without this every document is its own group, the group-aware split is a
+    per-document split under another name, and templates and renewals span train
+    and test — the leakage the split exists to prevent, invisible in every metric.
+
+    Grouped within a doc type: ``GroupRecord`` and the split are per type, so a
+    group spanning two types would be split independently in each.
+
+    Evidence used: the source file's SHA-256 (as OCR recorded it), a MinHash over the OCR text, and the
+    declared carrier + template + insured. The page-1 layout hash is not computed
+    — no image-hash dependency is installed — so same-template documents with
+    different text group only through a declared template id.
+    """
+    from data_pipeline.ingestion.dedup_and_group import DocumentFingerprint, assign_groups, minhash
+
+    reports: dict[str, Any] = {}
+    by_type: dict[str, list[Any]] = {}
+    for document in documents:
+        by_type.setdefault(document.doc_type, []).append(document)
+
+    for doc_type, members in sorted(by_type.items()):
+        fingerprints = []
+        for document in members:
+            # The checksum OCR recorded, not the raw metadata: raw-documents/ holds
+            # unredacted PII and the dataset build is not allowed to read it (§18a).
+            ocr_meta = ctx.client.read_json(
+                paths.ocr_meta(doc_type, document.source_id, ctx.tenant_id)
+            )
+            metadata_key = paths.label_metadata(doc_type, document.source_id, ctx.tenant_id)
+            metadata = ctx.client.read_json(metadata_key) if ctx.client.exists(metadata_key) else {}
+            text = "\n".join(document.ocr_pages)
+            fingerprints.append(DocumentFingerprint(
+                source_id=document.source_id,
+                doc_type=doc_type,
+                # No recorded checksum means no exact-duplicate evidence, not a
+                # shared one: the source_id stands in so it matches nothing else.
+                content_sha256=(
+                    ocr_meta.get("source_checksum") or f"unrecorded:{document.source_id}"
+                ),
+                layout_phash=None,
+                minhash=minhash(text),
+                carrier=document.carrier,
+                template_id=metadata.get("template_id"),
+                account=document.golden_label.get("insured_name"),
+            ))
+        report = assign_groups(fingerprints)
+        for document in members:
+            document.group_id = report.group_of[document.source_id]
+        reports[doc_type] = report.as_dict()
+    return reports
 
 
 def _is_corpus_built(ctx: StageContext) -> bool:
@@ -449,11 +522,12 @@ def stage_dataset_build(ctx: StageContext) -> StageResult:
     """
     from data_pipeline.corpus_manifest import build_manifest
     from data_pipeline.dataset_builder.build_jsonl import (
-        assert_modality_mix,
         build_corpus,
-        sample_to_target_mix,
+        train_rows_by_epoch,
+        train_source_ids,
         write_jsonl,
     )
+    from data_pipeline.dataset_builder.sample_modes import assert_mix_is_close, sample_modes
     from data_pipeline.dataset_builder.split_groups import GroupRecord, assign_group_splits
 
     documents = load_labeled_documents(ctx)
@@ -484,21 +558,24 @@ def stage_dataset_build(ctx: StageContext) -> StageResult:
 
     by_type = {dt: sorted(v.values(), key=lambda r: r.group_id) for dt, v in records.items()}
     assignment = assign_group_splits(by_type, seed=ctx.seed)
-    built = build_corpus(documents, assignment, seed=ctx.seed)
-    # Expansion produces an even third of each regime; the arch §6 target is
-    # 50/20/30, and sampling train is what reaches it. Val and test keep all
-    # three variants so image-only accuracy is measured on the full population.
-    built = sample_to_target_mix(built, seed=ctx.seed)
-    assert_modality_mix(built)
+    # One modality draw per train document per epoch (arch v2.1 §6.1). This is
+    # the only sampling step: v1's down-sampler discarded rows to fix a 33/33/33
+    # expansion, and running it over epoch rows would drop documents from epochs.
+    modes = sample_modes(train_source_ids(documents, assignment), seed=ctx.seed)
+    assert_mix_is_close(modes)
+    built = build_corpus(documents, assignment, seed=ctx.seed, mode_assignment=modes)
 
-    for doc_type in sorted(by_type):
-        for split, rows in sorted(built.rows_by_split.items()):
-            subset = [r for r in rows if r["doc_type"] == doc_type]
-            if subset:
-                ctx.client.write_text(
-                    paths.corpus_split(ctx.corpus, doc_type, split, ctx.tenant_id),
-                    write_jsonl(subset),
-                )
+    # Written where training reads them: one file per epoch, one per eval split,
+    # all doc types together — one adapter trains on every type (§8.1).
+    for epoch, rows in train_rows_by_epoch(built).items():
+        ctx.client.write_text(
+            paths.corpus_epoch_file(ctx.corpus, epoch, ctx.tenant_id), write_jsonl(rows)
+        )
+    for split in ("val", "test"):
+        ctx.client.write_text(
+            paths.corpus_eval_split(ctx.corpus, split, ctx.tenant_id),
+            write_jsonl(built.rows_by_split.get(split, [])),
+        )
 
     first = documents[0]
     ocr_environment = ctx.client.read_json(
@@ -529,6 +606,8 @@ def stage_dataset_build(ctx: StageContext) -> StageResult:
             "documents": len(documents),
             "coverage_warnings": list(coverage.warnings),
             "confusable_example_count": coverage.confusable_example_count,
+            "grouping": ctx.grouping,
+            "modality_draws": modes.as_dict(),
         },
     )
 
@@ -558,14 +637,14 @@ def stage_training(ctx: StageContext) -> StageResult:
     §4.2 graduation gate, trained on the MERGED foundation and never stacked.
     """
     from registry_utils.models import DataStats
-    from training.train import train
+    from training.train import count_examples, train
 
     corpus_manifest = ctx.client.read_json(paths.corpus_manifest(ctx.corpus, ctx.tenant_id))
     counts = corpus_manifest.get("example_counts", {})
     data_stats = DataStats(
-        train_examples=_count_rows(counts.get("train")),
-        val_examples=_count_rows(counts.get("val")),
-        test_examples=_count_rows(counts.get("test")),
+        train_examples=count_examples(counts.get("train")),
+        val_examples=count_examples(counts.get("val")),
+        test_examples=count_examples(counts.get("test")),
         modality_mix=corpus_manifest.get("modality_mix", {}),
         lob_coverage=corpus_manifest.get("lob_coverage", {}),
         alias_coverage=corpus_manifest.get("alias_coverage", {}),
@@ -582,6 +661,7 @@ def stage_training(ctx: StageContext) -> StageResult:
             data_stats=data_stats,
             train_vit=ctx.train_vit,
             dry_run=ctx.dry_run,
+            tenant_id=ctx.tenant_id,
         )
         # Keyed "foundation" so the gate, the cascade query and the ViT gate keep
         # reading one well-known key. The run_type on the manifest says what it
@@ -608,18 +688,6 @@ def stage_training(ctx: StageContext) -> StageResult:
             "run_type": manifest.run_type,
             "push_adapters": ctx.push_adapters,
         },
-    )
-
-
-def _count_rows(bucket: Any) -> int:
-    """Sum a nested ``{doc_type: {mode: count}}`` bucket from the corpus manifest."""
-    if not isinstance(bucket, dict):
-        return 0
-    return sum(
-        count
-        for modes in bucket.values()
-        if isinstance(modes, dict)
-        for count in modes.values()
     )
 
 

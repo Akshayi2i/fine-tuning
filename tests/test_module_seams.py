@@ -198,7 +198,7 @@ def test_the_trainer_honours_its_yaml_over_the_helper_defaults():
     from training import train as T
 
     swift, _ = T.build_training_config(
-        corpus_paths=["c/train/epoch_1.jsonl"], val_paths=["c/val/val.jsonl"], output_dir="/o")
+        corpus_paths=[f"c/train/epoch_{i}.jsonl" for i in (1, 2, 3, 4)], val_paths=["c/val/val.jsonl"], output_dir="/o")
 
     evaluation = training_config("unified")["evaluation"]
     for key in ("metric_for_best_model", "load_best_model_at_end"):
@@ -217,7 +217,7 @@ def test_the_trainer_does_not_train_on_its_validation_split():
     from training.train import build_training_config
 
     swift, _ = build_training_config(
-        corpus_paths=["corpus/default/v1/train/epoch_1.jsonl"],
+        corpus_paths=[f"corpus/default/v1/train/epoch_{i}.jsonl" for i in (1, 2, 3, 4)],
         val_paths=["corpus/default/v1/val/val.jsonl"], output_dir="/o")
 
     assert not set(swift.args["dataset"]) & set(swift.args["val_dataset"])
