@@ -1,0 +1,77 @@
+# Sequence cap per task (arch v2.1 §7a).
+#
+# Imported by dataset build, training AND serving, same as vision.yaml.
+#
+# WHY THESE ARE PER TASK: v1 used one cap of 8192 for everything. At the v1
+# resolution a single US-Letter page costs roughly 2,400 visual tokens, so 8192
+# could not hold a one-page ACORD with its schema, its image, its OCR text and
+# its output - and the canonical three-page Loss Run in §7 overflowed before a
+# single OCR token was added. Nothing detected it, because nothing compared image
+# tokens against the cap. `cap_check.py` now does, and REJECTS rather than
+# truncating: a truncated Loss Run trains the model to omit claim rows.
+#
+# Each cap below is composition + headroom, not a round number:
+#   schema tokens + (pages x visual tokens) + OCR text + output
+#
+# TODO Phase 0 (spike item 4): confirm from the measured 99th percentile over 20
+# documents per type. These are derived from the vision.yaml budgets; if the
+# measured geometry differs, both files move together.
+
+defaults:
+  max_seq_len: 24576
+  # Output is reserved, never borrowed from. The assistant span is the one thing
+  # that must never be truncated - a clipped JSON output is an unparseable
+  # training target and a silently short extraction at serving time.
+  max_output_tokens: 2048
+
+tasks:
+  classify:
+    max_seq_len: 4096
+    max_output_tokens: 128
+    composition: "page 1 thumbnail (~256) + enum schema + short JSON answer"
+
+  page_select:
+    max_seq_len: 20480
+    max_output_tokens: 512
+    composition: "<=60 thumbnails (~256 each) + page list output"
+    note: "policies over 60 pages are thumbnailed in chunks of 60 and the selections unioned"
+
+  extract:
+    max_seq_len: 24576
+    max_output_tokens: 2048
+    composition: "schema 2-5k + <=4 pages x ~2.4k + OCR text + output <=2k"
+    note: "ACORD default: all pages of the form in one call"
+
+    # Extraction is ONE task - the model is conditioned on doc_type through the
+    # prompt, not routed to a different task. What changes per type is the
+    # budget: a routed policy sends up to 6 pages against an ACORD's 4, and its
+    # schema is larger. Modelled as an override so `extract` stays one task in
+    # the corpus, the prompt and the metrics.
+    by_doc_type:
+      policy:
+        max_seq_len: 32768
+        max_output_tokens: 3072
+        composition: "schema 3-6k + <=6 routed pages x ~2.4k + OCR text + output <=3k"
+        note: >
+          The largest cap in the system. Phase 0 spike item 5 measures whether it
+          fits on one A100 80GB with gradient checkpointing; if not, ms-swift
+          sequence parallelism over 2 GPUs comes before any ZeRO-3 config.
+
+  lossrun_header:
+    max_seq_len: 12288
+    max_output_tokens: 1024
+    composition: "header schema ~1k + 2 pages + output"
+
+  lossrun_rows:
+    max_seq_len: 20480
+    max_output_tokens: 8192
+    composition: "row schema ~1k + 1-3 window pages + rows output"
+    note: >
+      The window is sized by the planner so estimated output stays under
+      max_output_tokens - this is the one task where OUTPUT, not input, is the
+      binding constraint. Dense pages get a 1-page window for that reason.
+
+  lossrun_totals:
+    max_seq_len: 12288
+    max_output_tokens: 1024
+    composition: "totals schema ~0.5k + last 2 pages + output"

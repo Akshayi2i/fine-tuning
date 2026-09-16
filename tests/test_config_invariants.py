@@ -114,3 +114,91 @@ def test_per_type_adapters_do_not_pin_a_foundation_version():
     against a stale Foundation by a forgotten config edit (arch §12)."""
     for name in ("acord_adapter", "policy_adapter", "lossrun_adapter"):
         assert config.training_config(name)["foundation_version"] is None
+
+
+# --------------------------------------------------------------------------
+# Per-task vision and sequence budgets (arch v2.1 §7a)
+# --------------------------------------------------------------------------
+
+def test_every_task_is_budgeted_in_both_shared_files():
+    """The two files are edited separately and read together. A task present in
+    one and missing from the other resolves to a default chosen for a different
+    shape of input — the silent mismatch these files exist to prevent."""
+    config.assert_task_budgets_are_coherent()
+
+
+def test_thumbnail_tasks_cost_an_order_of_magnitude_less_than_extraction():
+    """classify and page_select recognise layout, not small print. Paying
+    extraction resolution for that is the most wasteful thing this pipeline
+    could do — page_select alone sends up to 60 pages in one call."""
+    thumbnail = config.vision_for_task("classify")["max_pixels"]
+    extraction = config.vision_for_task("extract")["max_pixels"]
+    assert thumbnail * 5 < extraction, (
+        f"classify at {thumbnail:,}px vs extract at {extraction:,}px — a thumbnail task "
+        "budgeted near extraction resolution multiplies the page_select cost by ~10x"
+    )
+
+
+def test_the_output_budget_always_fits_inside_the_cap():
+    """The assistant span is the one part of a sequence that must never be
+    truncated: a clipped JSON target trains the model to stop early, which on a
+    Loss Run means training it to omit claim rows."""
+    from common.tasks import Task
+
+    for task in Task:
+        budget = config.sequence_for_task(str(task))
+        cap, output = int(budget["max_seq_len"]), int(budget["max_output_tokens"])
+        assert output < cap, f"{task} reserves {output} output tokens inside a {cap} cap"
+        assert cap - output > 1024, (
+            f"{task} leaves only {cap - output} tokens for schema, images and OCR text"
+        )
+
+
+def test_lossrun_rows_reserves_the_largest_output_budget():
+    """The one task where OUTPUT, not input, is the binding constraint: the
+    window planner shrinks the page window until the estimated row output fits.
+    If some other task out-reserved it, that planner would be sizing against the
+    wrong limit."""
+    from common.tasks import Task
+
+    rows = int(config.sequence_for_task(str(Task.LOSSRUN_ROWS))["max_output_tokens"])
+    others = {
+        str(t): int(config.sequence_for_task(str(t))["max_output_tokens"])
+        for t in Task if t is not Task.LOSSRUN_ROWS
+    }
+    assert rows > max(others.values()), f"lossrun_rows reserves {rows}, others {others}"
+
+
+def test_an_unknown_task_is_refused_rather_than_silently_defaulted():
+    import pytest
+
+    with pytest.raises(ValueError, match="unknown task"):
+        config.vision_for_task("summarise")
+
+
+def test_the_shared_budgets_are_not_the_v1_single_cap():
+    """v1 used one 8192-token cap for everything. At ~2.4k visual tokens per
+    US-Letter page it could not hold a one-page ACORD with schema, image, OCR and
+    output — and the canonical three-page Loss Run overflowed before a single OCR
+    token was added."""
+    from common.tasks import Task
+
+    caps = {str(t): config.seq_cap_for_task(str(t)) for t in Task}
+    assert len(set(caps.values())) > 1, f"all tasks share one cap: {caps}"
+    assert caps["extract"] > 8192, "extraction still cannot hold a page plus its schema"
+
+
+def test_policy_extraction_gets_a_larger_budget_than_acord():
+    """Extraction is ONE task — the model is conditioned on doc_type through the
+    prompt, not routed elsewhere. What differs is the budget: a routed policy
+    sends up to 6 pages against a larger schema. Modelled as an override so
+    `extract` stays one task in the corpus, the prompt and the metrics."""
+    acord = config.seq_cap_for_task("extract", "acord")
+    policy = config.seq_cap_for_task("extract", "policy")
+    assert policy > acord, f"policy {policy} is not above acord {acord}"
+    assert config.seq_cap_for_task("extract") == acord, "the bare cap is the ACORD default"
+
+
+def test_an_unknown_doc_type_falls_back_to_the_task_budget():
+    """A new document type must not silently inherit Policy's 32k cap."""
+    assert config.seq_cap_for_task("extract", "binder") == config.seq_cap_for_task("extract")

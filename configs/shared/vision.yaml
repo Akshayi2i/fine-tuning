@@ -1,0 +1,60 @@
+# Image budget per task (arch v2.1 §7a).
+#
+# Imported by dataset build, training AND serving. One file, three readers -
+# because a resolution the model never trained at is a correctness bug, not a
+# tuning difference, and two files drifting apart is how that happens.
+#
+# WHY max_pixels AND NOT A LONG-SIDE CAP: a long-side cap gives a landscape page
+# a fraction of the tokens a portrait page gets, for the same document. A pixel
+# budget gives both the same budget. v1 capped the long side at 1792px, which is
+# why Loss Runs printed landscape were quietly cheaper - and worse - than the
+# same table printed portrait.
+#
+# min_pixels exists to stop small scans being UPSCALED into tokens that carry no
+# extra information. An upscaled 200-DPI fax does not become more legible; it
+# just costs more.
+#
+# TODO Phase 0 (spike item 4, `visual_token_geometry`): these budgets are chosen
+# from Qwen3-VL's documented 16px patch / 2x2 merge geometry. The spike measures
+# the real number through the image processor. If it disagrees, the sequence
+# caps in sequence.yaml move with it - they are derived from this table, not set
+# independently.
+
+defaults:
+  # Applied to any task not listed below, so a new task is expensive-but-correct
+  # rather than silently unbudgeted.
+  max_pixels: 2483712
+  min_pixels: 200704            # ~448x448; below this, upscaling starts
+
+tasks:
+  # --- layout recognition only: thumbnails --------------------------------
+  classify:
+    max_pixels: 262144          # ~0.26M, roughly 256 visual tokens per page
+    min_pixels: 50176
+    note: "page 1 only; reads the form's shape, not its small print"
+
+  page_select:
+    max_pixels: 262144          # up to 60 thumbnails in one call - see sequence.yaml
+    min_pixels: 50176
+    note: "needs to see which pages carry field-bearing structure, nothing finer"
+
+  # --- extraction: small print and checkboxes must survive -----------------
+  extract:
+    max_pixels: 2483712         # ~2.48M
+    min_pixels: 200704
+    note: "ACORD checkboxes and policy schedules set this floor"
+
+  lossrun_header:
+    max_pixels: 2483712
+    min_pixels: 200704
+    note: "carrier / insured / policy period block on pages 1-2"
+
+  lossrun_rows:
+    max_pixels: 2483712
+    min_pixels: 200704
+    note: "dense numeric tables; the densest input in the corpus"
+
+  lossrun_totals:
+    max_pixels: 2483712
+    min_pixels: 200704
+    note: "printed totals on the last pages"

@@ -30,6 +30,13 @@ CONFIG_DIR = ROOT / "configs"
 BASE_MODEL_CONFIG = CONFIG_DIR / "base_model.yaml"
 SERVING_CONFIG = CONFIG_DIR / "inference" / "vllm_serving.yaml"
 
+#: Read by dataset build, training and serving alike (arch v2.1 §7a). One file
+#: per dimension rather than one block per stage, because the failure mode of two
+#: stages disagreeing is a model served a distribution it never trained on — and
+#: nothing downstream reports that as anything but degraded accuracy.
+SHARED_VISION_CONFIG = CONFIG_DIR / "shared" / "vision.yaml"
+SHARED_SEQUENCE_CONFIG = CONFIG_DIR / "shared" / "sequence.yaml"
+
 
 class ConfigError(RuntimeError):
     """Raised on a missing config, a missing required env var, or a broken invariant."""
@@ -79,11 +86,130 @@ def env(name: str, default: str | None = None, *, required: bool = False) -> str
     return value
 
 
+@lru_cache(maxsize=1)
+def shared_vision_config() -> dict[str, Any]:
+    return load_yaml(SHARED_VISION_CONFIG)
+
+
+@lru_cache(maxsize=1)
+def shared_sequence_config() -> dict[str, Any]:
+    return load_yaml(SHARED_SEQUENCE_CONFIG)
+
+
+def vision_for_task(task: str) -> dict[str, Any]:
+    """The pixel budget for one task (arch v2.1 §7a).
+
+    ``max_pixels`` rather than a long-side cap, so a landscape page and a
+    portrait page of the same document get the same budget. Under v1's long-side
+    cap a landscape Loss Run was quietly cheaper — and read worse — than the same
+    table printed portrait.
+
+    An unlisted task falls back to ``defaults``, which is the extraction budget:
+    a new task is then expensive but correct, rather than silently unbudgeted.
+    """
+    from common.tasks import parse
+
+    config = shared_vision_config()
+    resolved = dict(config.get("defaults", {}))
+    resolved.update(config.get("tasks", {}).get(str(parse(task)), {}))
+    if "max_pixels" not in resolved:
+        raise ConfigError(
+            f"no max_pixels for task {task!r} and no defaults block in {SHARED_VISION_CONFIG.name}"
+        )
+    return resolved
+
+
+def sequence_for_task(task: str, doc_type: str | None = None) -> dict[str, Any]:
+    """The sequence cap and reserved output budget for one task (arch v2.1 §7a).
+
+    ``max_output_tokens`` is reserved, never borrowed from. The assistant span is
+    the one part of a sequence that must never be truncated: a clipped JSON
+    target trains the model to stop early, and on a Loss Run that means training
+    it to omit claim rows.
+
+    ``doc_type`` selects a per-type override where one exists. Extraction is one
+    task — the model is conditioned on the document type through the prompt, not
+    routed to a different task — but a routed policy sends more pages against a
+    larger schema than an ACORD does, so it gets a larger budget.
+    """
+    from common.tasks import parse
+
+    config = shared_sequence_config()
+    resolved = dict(config.get("defaults", {}))
+    per_task = dict(config.get("tasks", {}).get(str(parse(task)), {}))
+    overrides = per_task.pop("by_doc_type", {}) or {}
+    resolved.update(per_task)
+    if doc_type and doc_type in overrides:
+        resolved.update(overrides[doc_type])
+    if "max_seq_len" not in resolved:
+        raise ConfigError(
+            f"no max_seq_len for task {task!r} and no defaults block in {SHARED_SEQUENCE_CONFIG.name}"
+        )
+    return resolved
+
+
+def seq_cap_for_task(task: str, doc_type: str | None = None) -> int:
+    """Just the sequence cap, for callers that do not need the output budget."""
+    return int(sequence_for_task(task, doc_type)["max_seq_len"])
+
+
+def assert_task_budgets_are_coherent() -> None:
+    """Every task must appear in both shared files, with output inside the cap.
+
+    The two files are edited separately and read together. A task present in one
+    and missing from the other resolves to a default that was chosen for a
+    different shape of input — which is exactly the class of silent mismatch
+    these files exist to prevent.
+    """
+    from common.tasks import Task
+
+    vision_tasks = set(shared_vision_config().get("tasks", {}))
+    sequence_tasks = set(shared_sequence_config().get("tasks", {}))
+
+    for task in Task:
+        name = str(task)
+        missing = [
+            f.name for f, present in (
+                (SHARED_VISION_CONFIG, name in vision_tasks),
+                (SHARED_SEQUENCE_CONFIG, name in sequence_tasks),
+            ) if not present
+        ]
+        if missing:
+            raise ConfigError(
+                f"task {name!r} is not budgeted in {missing} — it would fall back to a default "
+                "chosen for a different shape of input (arch v2.1 §7a)."
+            )
+
+    declared = shared_sequence_config().get("tasks", {})
+    for task in Task:
+        name = str(task)
+        # The bare budget, then every per-doc-type override of it — an override
+        # is a whole separate cap, and one that reserves more output than it
+        # allows total would only surface as truncation at build time.
+        variants = [(None, sequence_for_task(name))]
+        variants += [
+            (dt, sequence_for_task(name, dt))
+            for dt in (declared.get(name, {}).get("by_doc_type") or {})
+        ]
+        for doc_type, budget in variants:
+            cap, output = int(budget["max_seq_len"]), int(budget["max_output_tokens"])
+            label = f"{name} ({doc_type})" if doc_type else name
+            if output >= cap:
+                raise ConfigError(
+                    f"task {label!r} reserves {output} output tokens inside a {cap}-token cap, "
+                    "leaving nothing for the schema, the page images or the OCR text."
+                )
+
+
 def resolution_cap_px() -> int:
     """The image long-side cap, validated against the architecture's range.
 
     Image token count is a direct function of page resolution, making this the
     single biggest cost and latency lever (arch §11).
+
+    **Superseded by** :func:`vision_for_task` (arch v2.1 §7a). Kept because the
+    v1 OCR and inference paths still read a single long-side cap; they move to
+    per-task pixel budgets in a later phase, and this goes with them.
     """
     cap = int(base_model_config().get("vision", {}).get("max_image_long_side_px", DEFAULT_RESOLUTION_CAP_PX))
     low, high = RESOLUTION_CAP_RANGE_PX
@@ -144,6 +270,7 @@ def validate_all(*, require_pinned_revision: bool = False) -> None:
     """
     resolution_cap_px()
     assert_resolution_parity()
+    assert_task_budgets_are_coherent()
     for name in ("foundation", "acord_adapter", "policy_adapter", "lossrun_adapter"):
         assert_effective_batch(training_config(name))
     if require_pinned_revision:
