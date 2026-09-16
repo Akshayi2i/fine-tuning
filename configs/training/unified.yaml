@@ -1,0 +1,134 @@
+# The unified extractor LoRA (arch v2.1 §4.1, §9.4, §11.1).
+#
+# ONE adapter, trained on ALL document types and ALL tasks together. The task,
+# document type and schema are always in the prompt, so the model is never
+# guessing which output to produce, and cross-type interference is controlled by
+# conditioning rather than by separate weights.
+#
+# WHY NOT v1's Foundation + per-type stack: vLLM applies ONE LoRA per request,
+# so a Foundation LoRA and a per-type LoRA cannot both be active. The v1 topology
+# was unservable - not slow, not awkward, unservable. A merged unified model has
+# no such limit.
+#
+# It also fits the data. At 25-30 documents per type, separate per-type adapters
+# would memorise their own training documents; the shared skills - insurance
+# terminology, table and checkbox reading, image-over-OCR arbitration, JSON
+# discipline - are learned once here instead of three times badly.
+#
+# Per-type adapters return only through the §4.2 graduation gate: >= 500 labeled
+# documents of that type AND a measured >2pp win outside the paired-bootstrap
+# 95% CI. Even then they train on the MERGED foundation, decoder-only, one LoRA
+# per request - never stacked. See per_type_adapter.yaml.
+
+run_type: unified
+
+lora:
+  rank: 64
+  alpha: 128
+
+  # 0.10 at pilot scale, 0.05 at >= 200 documents per type. A rank-64 adapter on
+  # ~25 documents per type will memorise them at 0.05; the higher rate is the
+  # cheapest regularisation available and costs nothing once data arrives.
+  dropout: 0.10
+  bias: "none"
+
+  # Attention and MLP projections in every LANGUAGE-MODEL decoder layer. The
+  # mergers are NOT targeted (arch v2.1 §9a) - a reversal of v1, which appended
+  # "merger" to this list.
+  #
+  # Two reasons. Tower and connector LoRA in vLLM is experimental with known
+  # mixed-adapter batching risks, so an adapter targeting them may not serve the
+  # way it trained. And image-vs-OCR arbitration is learned HERE, in the decoder,
+  # where image tokens and OCR text tokens attend to each other - the mergers only
+  # map visual features and never see OCR text at all.
+  #
+  # Vision-module LoRA is ablation-driven (§9a) and, if it ever runs, is merged
+  # into the base rather than hot-swapped.
+  target_modules: ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]
+  include_vision_projector: false
+
+  # Off by default; on for the rank sweep only (§11a), so the learning rate
+  # transfers across ranks instead of needing a re-sweep at every rank.
+  use_rslora: false
+
+optimization:
+  # 1e-4 at both scales. v1 ran the Foundation at 2e-4, which is aggressive for
+  # ~25 documents per type and a rank-64 adapter.
+  learning_rate: 1.0e-4
+  lr_scheduler_type: "cosine"
+
+  # Steps, not a ratio. At pilot volume a 0.03 ratio over a handful of steps
+  # rounds to zero warmup, and the first optimizer step lands at full learning
+  # rate on a freshly-initialised adapter.
+  warmup_steps: 10
+
+  # DOCUMENT passes (arch v2.1 §6.1). Each document appears once per epoch with
+  # its modality regime resampled, so 3 here is 3 passes - not the 9 that v1's
+  # three-rows-per-document expansion produced under the same number.
+  num_train_epochs: 3
+
+  optim: "adamw_torch"
+  adam_beta1: 0.9
+  adam_beta2: 0.999
+  adam_epsilon: 1.0e-8
+
+  # 0.0, not 0.01. Weight decay on a low-rank adapter pulls B toward zero, which
+  # is where it starts - so it is a shrinkage prior on the update itself, not the
+  # regularisation it is on a full fine-tune. Dropout does that job here.
+  weight_decay: 0.0
+  max_grad_norm: 1.0
+
+batch:
+  per_device_train_batch_size: 1
+
+  # 8 at pilot (was 32). With ~25 documents per type an effective batch of 32 is
+  # most of an epoch in one step, so a run sees a handful of updates and the
+  # cosine schedule never gets anywhere.
+  gradient_accumulation_steps: 8
+  effective_batch_size: 8
+  gradient_checkpointing: true
+  bf16: true
+
+memory:
+  # Logits for the assistant positions only, instead of a 151k-vocabulary
+  # distribution over every position in a 32k sequence. At the largest task cap
+  # this is the difference between fitting on one 80GB card and not (§9.3).
+  use_logits_to_keep: true
+
+  # No memory spent on padding, and sequences of similar length batched together
+  # so a 4k classify example is not padded to a 32k policy extraction.
+  padding_free: true
+  length_grouped_sampling: true
+
+evaluation:
+  # Validation LOSS during training - field F1 needs generation, which the
+  # training loop's eval does not do efficiently for a VLM. Checkpoint selection
+  # is a separate vLLM job that generates on validation (§11.2), so loss here is
+  # for early stopping only and never selects what ships.
+  eval_strategy: "steps"
+  eval_steps: 50
+  save_strategy: "steps"
+  save_steps: 50
+
+  # The last 3 checkpoints plus the best-loss one are what checkpoint_eval
+  # generates over, so fewer than 4 would discard a candidate before it is scored.
+  save_total_limit: 4
+
+  load_best_model_at_end: true
+  metric_for_best_model: "eval_loss"
+  greater_is_better: false
+  early_stopping_patience: 3
+
+logging:
+  logging_steps: 10
+  report_to: []
+
+seed: 42
+
+distributed:
+  # Single A100 80GB by default. If a task cap does not fit, ms-swift SEQUENCE
+  # PARALLELISM comes first (§9.3) - DeepSpeed ZeRO is not used unless that is
+  # exhausted too, because under LoRA ZeRO-2 shards ~1.5GB of adapter optimizer
+  # state and is close to a no-op.
+  deepspeed_config: null
+  sequence_parallel_size: 1

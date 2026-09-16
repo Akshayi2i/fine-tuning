@@ -191,6 +191,22 @@ def corpus_split(version: str, doc_type: str, split: str, tenant_id: str | None 
     return _join(corpus_dir(version, tenant_id), _doc_type(doc_type), f"{split}.jsonl")
 
 
+def corpus_eval_split(version: str, split: str, tenant_id: str | None = None) -> str:
+    """``corpus/{tenant}/v{n}/val/val.jsonl`` — one file, not one per doc type.
+
+    Under arch v2.1 §8.1 the corpus is unified: one adapter trains on every
+    document type and every task, so splitting the evaluation files by type would
+    be organising them by a dimension the training run does not have. The
+    per-type ``corpus_split`` remains for the §4.2 graduation path.
+    """
+    if split not in ("val", "test"):
+        raise PathError(
+            f"unknown eval split {split!r}; expected 'val' or 'test'. Training reads epoch "
+            "files (corpus_epoch_file), not a 'train' split file."
+        )
+    return _join(corpus_dir(version, tenant_id), split, f"{split}.jsonl")
+
+
 def corpus_manifest(version: str, tenant_id: str | None = None) -> str:
     """Pins everything the corpus depends on: MinerU version and device, schema
     and prompt-template versions, LoB and alias coverage, de-identification status."""
@@ -261,13 +277,20 @@ def run_manifest(run_id: str, run_type: str, doc_type: str | None = None) -> str
     Written even when the weights are only staged, so a reclaimed volume never
     means a training run that happened and left no trace (master §12a).
     """
-    if run_type == "foundation":
+    # `unified` and `foundation` share the slot deliberately: the v2.1 unified
+    # extractor occupies the same position in the lineage the Foundation did, and
+    # keeping one prefix means query_registry, the cascade query and the ViT gate
+    # keep reading one place across the topology change. The run_type recorded ON
+    # the manifest is what says which it actually is.
+    if run_type in ("unified", "foundation"):
         return _join("registry", "foundation", run_id, "run_manifest.json")
     if run_type == "per_type_adapter":
         if doc_type is None:
             raise PathError("a per-type adapter manifest needs a doc_type")
         return _join("registry", "adapters", _doc_type(doc_type), run_id, "run_manifest.json")
-    raise PathError(f"unknown run_type {run_type!r}; expected 'foundation' or 'per_type_adapter'")
+    raise PathError(
+        f"unknown run_type {run_type!r}; expected 'unified', 'foundation' or 'per_type_adapter'"
+    )
 
 
 def registry_index() -> str:

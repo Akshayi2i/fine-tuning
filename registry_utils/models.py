@@ -22,7 +22,11 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-RunType = Literal["foundation", "per_type_adapter"]
+#: ``unified`` is the arch v2.1 §4.1 default: one adapter across all document
+#: types and all tasks. ``foundation`` and ``per_type_adapter`` remain for the
+#: §4.2 graduation path — and so that manifests written under v1 still load,
+#: which is the whole point of a lineage record.
+RunType = Literal["unified", "foundation", "per_type_adapter"]
 #: ``training`` exists because the manifest is written BEFORE ms-swift is
 #: launched — the run_id has to be reserved and the config recorded even if
 #: the run dies. Without it the pre-launch manifest defaulted to "trained",
@@ -262,8 +266,10 @@ class RunManifest(_Base):
                     "Without it, 'which adapters does this Foundation bump invalidate?' becomes "
                     "a manual audit instead of a query (arch §12)."
                 )
-        if self.run_type == "foundation" and self.doc_type:
-            raise ValueError("a Foundation run spans all doc types and must not name one")
+        if self.run_type in ("unified", "foundation") and self.doc_type:
+            raise ValueError(
+                f"a {self.run_type} run spans all doc types and must not name one"
+            )
         if self.is_sweep_run and not self.sweep_id:
             raise ValueError("a sweep run must carry its sweep_id to be groupable")
         if self.status == "promoted" and not self.promotion.promoted_at:

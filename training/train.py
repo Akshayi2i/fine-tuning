@@ -1,22 +1,29 @@
-"""Foundation LoRA training (SPEC_06, arch §4, §9, §10, §12).
+"""The unified extractor LoRA (arch v2.1 §4.1, §9, §10).
 
 A **thin wrapper**: it assembles an ms-swift configuration and launches it. The
-training loop is TRL's ``SFTTrainer``, which ms-swift constructs — this file
-deliberately contains no optimizer step, no backward pass, and no collator
-(arch §10).
+training loop is ms-swift's own ``Seq2SeqTrainer``, built on the Hugging Face
+Transformers ``Trainer`` — this file deliberately contains no optimizer step, no
+backward pass and no collator (arch v2.1 §10).
 
-What it *does* own is the policy the trainer cannot enforce for itself:
+*(TRL is installed as an ms-swift dependency for its RLHF trainers. It is not the
+SFT loop used here — the v1 documentation said it was, and that was wrong.)*
 
-* **Trains on the mixed corpus** — all document types, all three modality
-  regimes. That mix is what makes the Foundation learn shared behaviour:
-  insurance terminology, table and checkbox reading, OCR-versus-image
-  arbitration, JSON discipline, and the canonical field mapping.
-* **ViT frozen**, and when escalated it is a LoRA on the ViT, never a full
-  fine-tune (arch §3).
-* **Major expansion retrains from the HF base**, because continuing on top of a
-  previous LoRA compounds drift across cycles (arch §12).
-* **Writes a run manifest to Blob** even though the weights stay staged, so a
-  reclaimed volume never means a training run that left no trace.
+**One run, not four.** v1 trained a Foundation LoRA and then a per-type LoRA for
+each document type, stacked on top. That topology is unservable: vLLM applies one
+LoRA per request, so the two could never both be active. It also did not fit the
+data — at 25-30 documents per type a rank-16 adapter memorises its own training
+set. So: one adapter, every document type, every task, conditioned by the prompt.
+
+What this file owns is the policy the trainer cannot enforce for itself:
+
+* **ViT and mergers frozen.** ``freeze_vit`` and ``freeze_aligner``, and the
+  merger is not a LoRA target. Arbitration is learned in the decoder, where image
+  tokens and OCR text tokens attend to each other; the mergers never see OCR text.
+* **One max_length across a mixed-task corpus**, taken from the largest task cap,
+  because ms-swift takes a single value and the corpus interleaves a 4k classify
+  example with a 32k policy extraction.
+* **A manifest written before launch**, so a pod that dies at step 40 leaves a
+  record rather than nothing.
 """
 
 from __future__ import annotations
@@ -30,8 +37,13 @@ from typing import Any
 
 from artifact_registry import paths
 from artifact_registry.blob_client import BlobClient
-from common.config import base_model_config, training_config, validate_all
-from common.constants import ACTIVE_DOC_TYPES
+from common.config import (
+    base_model_config,
+    sequence_for_task,
+    training_config,
+    validate_all,
+)
+from common.tasks import Task
 from registry_utils.models import (
     Artifacts,
     DataStats,
@@ -40,11 +52,7 @@ from registry_utils.models import (
     TrainingConfig,
 )
 from registry_utils.write_run_manifest import capture_git_commit, is_dirty_worktree, write_manifest
-from training.base_precision import (
-    manifest_descriptor,
-    swift_quantization_args,
-    technique,
-)
+from training.base_precision import manifest_descriptor, swift_quantization_args, technique
 from training.callbacks.early_stopping import swift_early_stopping_args
 
 log = logging.getLogger(__name__)
@@ -67,7 +75,7 @@ class SwiftConfig:
     #: Rendered as ``--flag true`` / ``--flag false`` rather than as a bare
     #: presence flag. ms-swift parses these with HfArgumentParser, which accepts
     #: an explicit value — and dropping a False was silently disabling every
-    #: option whose correct value is False: ``freeze_vit=False`` (so ``--train-vit``
+    #: option whose correct value is False: ``freeze_vit=False`` (so the flag
     #: never reached the trainer while the manifest recorded that it had),
     #: ``bnb_4bit_use_double_quant``, ``load_best_model_at_end``.
     BOOL_FLAGS = ("true", "false")
@@ -93,14 +101,42 @@ class SwiftConfig:
         return argv
 
 
-def build_swift_config(
+def corpus_max_length() -> int:
+    """The single ``max_length`` for a mixed-task corpus.
+
+    ms-swift takes one value and the corpus interleaves every task, so this is
+    the **largest** per-task cap (arch v2.1 §7a). Taking anything smaller would
+    truncate the longest task rather than reject it, and a clipped assistant span
+    trains the model to stop early.
+
+    It is the cap that decides whether a run fits on one 80GB card, which is why
+    ``use_logits_to_keep`` and padding-free batching are not optional here.
+    """
+    from common.config import shared_sequence_config
+
+    declared = shared_sequence_config().get("tasks", {})
+    caps: list[int] = []
+    for task in Task:
+        name = str(task)
+        caps.append(int(sequence_for_task(name)["max_seq_len"]))
+        # Per-doc-type overrides are separate caps, not variations on one.
+        # Iterating only the bare tasks gave 24576 while the policy extraction
+        # override is 32768, so every routed policy would have been TRUNCATED —
+        # which is the exact failure the §7a caps exist to prevent.
+        for doc_type in (declared.get(name, {}).get("by_doc_type") or {}):
+            caps.append(int(sequence_for_task(name, doc_type)["max_seq_len"]))
+    return max(caps)
+
+
+def build_training_config(
     *,
     corpus_paths: list[str],
     output_dir: str,
     val_paths: list[str] | None = None,
     train_vit: bool = False,
-    deepspeed: str = "zero2",
+    deepspeed: str | None = None,
     resume_from: str | None = None,
+    config_name: str = "unified",
 ) -> tuple[SwiftConfig, TrainingConfig]:
     """Assemble the ms-swift arguments and the manifest's record of them.
 
@@ -108,37 +144,42 @@ def build_swift_config(
     rather than what a YAML file happened to say afterwards.
     """
     base = base_model_config()
-    cfg = training_config("foundation")
-    lora, opt, batch, evaluation = cfg["lora"], cfg["optimization"], cfg["batch"], cfg["evaluation"]
-
-    model_id = base["model"]["model_id"]
-    revision = base["model"]["revision"]
+    cfg = training_config(config_name)
+    lora, opt, batch = cfg["lora"], cfg["optimization"], cfg["batch"]
+    evaluation, memory = cfg["evaluation"], cfg.get("memory", {})
 
     target_modules = list(lora["target_modules"])
-    if lora.get("include_vision_projector", True):
-        # The projector is where image evidence fuses with language — the locus
-        # of OCR-versus-image arbitration, and the highest-leverage target after
-        # the decoder itself (arch §9a).
+    if lora.get("include_vision_projector", False):
+        # Off by default under v2.1 §9a. Reachable only through the vision
+        # ablation, and a vision-module LoRA is merged into the base rather than
+        # hot-swapped — tower/connector LoRA in vLLM is experimental.
         target_modules.append("merger")
+
+    max_length = corpus_max_length()
 
     args: dict[str, Any] = {
         "model_type": "qwen3-vl-8b-instruct",
-        "model_id_or_path": model_id,
-        "model_revision": revision,
+        "model_id_or_path": base["model"]["model_id"],
+        "model_revision": base["model"]["revision"],
         "dataset": corpus_paths,
         "output_dir": output_dir,
-        "sft_type": "lora",
+        "train_type": "lora",
         "lora_rank": lora["rank"],
         "lora_alpha": lora["alpha"],
         "lora_dropout": lora["dropout"],
         "lora_target_modules": target_modules,
+        "use_rslora": bool(lora.get("use_rslora", False)),
         # bf16 frozen base by default; 4-bit NF4 only when the config asks for it
-        # (arch §9). One helper for both trainers so they cannot disagree.
+        # (arch §9). One helper shared with any future trainer so they cannot
+        # disagree about how the base is held.
         **swift_quantization_args(base),
         "attn_impl": base["attention"]["attn_implementation"],
         "learning_rate": opt["learning_rate"],
         "lr_scheduler_type": opt["lr_scheduler_type"],
-        "warmup_ratio": opt["warmup_ratio"],
+        # Steps, not a ratio: at pilot volume a 0.03 ratio over a handful of
+        # steps rounds to zero warmup, and the first optimizer step then lands at
+        # full learning rate on a freshly-initialised adapter.
+        "warmup_steps": opt["warmup_steps"],
         "num_train_epochs": opt["num_train_epochs"],
         "optim": opt["optim"],
         "weight_decay": opt["weight_decay"],
@@ -147,43 +188,51 @@ def build_swift_config(
         "gradient_accumulation_steps": batch["gradient_accumulation_steps"],
         "gradient_checkpointing": batch["gradient_checkpointing"],
         "bf16": batch["bf16"],
-        "max_length": base["sequence"]["max_seq_len"],
+        "max_length": max_length,
+        # The three settings that make the largest task cap affordable (§9.3).
+        # Without use_logits_to_keep the LM head produces a 151k-vocabulary
+        # distribution at every position of a 32k sequence, which dominates
+        # activation memory on its own.
+        "use_logits_to_keep": bool(memory.get("use_logits_to_keep", True)),
+        "padding_free": bool(memory.get("padding_free", True)),
+        "length_grouped_sampling": bool(memory.get("length_grouped_sampling", True)),
+        # Frozen, both of them (arch v2.1 §9.4). `train_vit` is the §3 escalation
+        # and remains LoRA-on-ViT, never a full fine-tune.
+        "freeze_vit": not train_vit,
+        "freeze_aligner": True,
         "eval_strategy": evaluation["eval_strategy"],
         "eval_steps": evaluation["eval_steps"],
         "save_steps": evaluation["save_steps"],
         "save_total_limit": evaluation["save_total_limit"],
-        # These come from the helper above, which now receives them from the
-        # YAML. Setting them here as well and letting the helper's unpack
-        # override them is the ordering bug that was fixed in train_adapter and
-        # missed here — the same fixed-one-of-two mistake as the val-leak.
-        # Configured in YAML and previously read by nothing, so a run trained
-        # every step regardless of a field-F1 plateau. `swift_early_stopping_args`
-        # is the single definition of these; calling it keeps the callback's
-        # contract and the launched run in agreement.
+        # Unpacked FIRST so the explicit keys above win. Unpacking it last
+        # silently overrode this config's metric_for_best_model and
+        # load_best_model_at_end with the helper's own defaults.
         **swift_early_stopping_args(
-            int(evaluation.get("early_stopping_patience", 2)),
+            int(evaluation.get("early_stopping_patience", 3)),
             metric_for_best_model=evaluation["metric_for_best_model"],
-            greater_is_better=bool(evaluation.get("greater_is_better", True)),
+            greater_is_better=bool(evaluation.get("greater_is_better", False)),
             load_best_model_at_end=bool(evaluation["load_best_model_at_end"]),
         ),
         "logging_steps": cfg["logging"]["logging_steps"],
         "seed": cfg["seed"],
-        "deepspeed": f"configs/deepspeed/{deepspeed}.json",
-        # Frozen by default. When escalated it is LoRA-on-ViT: full fine-tuning
-        # risks the pretrained document/OCR capability the image-only pathway
-        # depends on (arch §3).
-        "freeze_vit": not train_vit,
     }
+
+    distributed = cfg.get("distributed", {})
+    if deepspeed:
+        args["deepspeed"] = f"configs/deepspeed/{deepspeed}.json"
+    if int(distributed.get("sequence_parallel_size", 1)) > 1:
+        # Reached before any ZeRO config when a task cap does not fit (§9.3).
+        args["sequence_parallel_size"] = distributed["sequence_parallel_size"]
     if val_paths:
         args["val_dataset"] = val_paths
     if resume_from:
         args["resume_from_checkpoint"] = resume_from
 
     recorded = TrainingConfig(
-        # Derived from the config that actually ran, never defaulted. These
-        # three used to carry "QLoRA"/NF4/paged-8bit defaults on the model, so a
-        # bf16 run that did not pass them recorded a technique it never used —
-        # in the one record the whole reproducibility story rests on.
+        # Derived from the config that actually ran, never defaulted. These three
+        # carried QLoRA/NF4/paged-8bit defaults on the model, so a bf16 run that
+        # did not pass them recorded a technique it never used — in the one
+        # record the whole reproducibility story rests on.
         technique=technique(base),
         base_quantization=manifest_descriptor(base),
         lora_rank=lora["rank"],
@@ -192,7 +241,7 @@ def build_swift_config(
         bias=lora["bias"],
         learning_rate=opt["learning_rate"],
         lr_scheduler=opt["lr_scheduler_type"],
-        warmup_ratio=opt["warmup_ratio"],
+        warmup_ratio=0.0,
         epochs=opt["num_train_epochs"],
         optimizer=opt["optim"],
         adam_beta1=opt["adam_beta1"],
@@ -209,7 +258,7 @@ def build_swift_config(
         vit_trainable=train_vit,
         vit_method="lora" if train_vit else "frozen",
         resolution_cap_px=base["vision"]["max_image_long_side_px"],
-        max_seq_len=base["sequence"]["max_seq_len"],
+        max_seq_len=max_length,
         seed=cfg["seed"],
     )
     return SwiftConfig(args), recorded
@@ -235,7 +284,7 @@ def build_manifest(
 
     return RunManifest(
         run_id=run_id,
-        run_type="foundation",
+        run_type="unified",
         continued_from=continued_from,
         dependencies=Dependencies(
             base_model=f"{base['model_id']}@{base['revision']}",
@@ -249,10 +298,11 @@ def build_manifest(
         training_config=training_cfg,
         data_stats=data_stats,
         artifacts=Artifacts(status="staged", staging_path=staging_path),
+        status="training",
     )
 
 
-def train_foundation(
+def train(
     *,
     corpus_version: str,
     out_version: str,
@@ -260,43 +310,35 @@ def train_foundation(
     corpus_manifest: dict[str, Any],
     data_stats: DataStats,
     train_vit: bool = False,
-    deepspeed: str = "zero2",
+    deepspeed: str | None = None,
     continue_from: str | None = None,
     dry_run: bool = False,
 ) -> tuple[SwiftConfig, RunManifest]:
-    """Configure and launch a Foundation run.
+    """Configure and launch the unified extractor run.
 
     Args:
         continue_from: **a filesystem checkpoint path**, not a registry run-id.
-            It goes straight to ms-swift's `resume_from_checkpoint`, which reads
-            a directory — passing a run-id like "foundation-v3" produced a run
-            that silently trained from base while its manifest recorded a
-            lineage that never happened. `assert_checkpoint_path` refuses the
-            run-id shape rather than letting it through.
-            Continue on top of an existing Foundation rather than
-            retraining from the HF base. Permitted for a **minor patch** only,
-            and it marks the manifest so the promotion gate demands cross-type
-            regression evidence before promoting (arch §12).
+            It goes straight to ms-swift's ``resume_from_checkpoint``, which reads
+            a directory — passing a run-id like ``extractor-v3`` produced a run
+            that silently trained from base while its manifest recorded a lineage
+            that never happened. ``assert_checkpoint_path`` refuses the run-id
+            shape rather than letting it through.
         dry_run: assemble and record everything without launching.
     """
     validate_all(require_pinned_revision=not dry_run)
 
     # Train and val are kept apart. Passing both to `--dataset` made ms-swift
     # treat the validation split as training data and then carve its own eval
-    # split out of the union, so `metric_for_best_model` selected on documents
+    # split out of the union, so the selected checkpoint was chosen on documents
     # the model had memorised — and the promotion gate read that number.
-    corpus_paths = [
-        paths.corpus_split(corpus_version, doc_type, "train") for doc_type in ACTIVE_DOC_TYPES
-    ]
-    val_paths = [
-        paths.corpus_split(corpus_version, doc_type, "val") for doc_type in ACTIVE_DOC_TYPES
-    ]
+    corpus_paths = [paths.corpus_epoch_file(corpus_version, epoch) for epoch in (1, 2, 3, 4)]
+    val_paths = [paths.corpus_eval_split(corpus_version, "val")]
     staging = paths.staging_adapter_dir("foundation", out_version)
 
     if continue_from:
         assert_checkpoint_path(continue_from)
 
-    swift, recorded = build_swift_config(
+    swift, recorded = build_training_config(
         corpus_paths=corpus_paths,
         val_paths=val_paths,
         output_dir=staging,
@@ -304,21 +346,14 @@ def train_foundation(
         deepspeed=deepspeed,
         resume_from=continue_from,
     )
-
-    if train_vit:
-        log.warning(
-            "ViT training is enabled. This must be a LoRA on the vision encoder, never a full "
-            "fine-tune, and it should only follow a gate decision of 'fire' (arch §3)."
-        )
-    if continue_from:
-        log.warning(
-            "continuing from %s rather than retraining from base. Permitted for a minor patch, "
-            "but promotion will require cross-type regression evidence — continued training "
-            "compounds drift across cycles (arch §12).", continue_from,
-        )
+    # Only the epochs this run uses. Four files are always materialized because
+    # the §11a sweep tests up to four passes (§6.1), and a sweep that regenerates
+    # its own data is not comparing what it thinks it is.
+    epochs = int(recorded.epochs)
+    swift.args["dataset"] = corpus_paths[:epochs]
 
     manifest = build_manifest(
-        run_id=f"foundation-{out_version}",
+        run_id=f"extractor-{out_version}",
         corpus_version=corpus_version,
         corpus_manifest=corpus_manifest,
         training_cfg=recorded,
@@ -326,54 +361,33 @@ def train_foundation(
         staging_path=staging,
         continued_from=continue_from,
     )
-    # `training`, not `trained`: nothing has run yet. The manifest is written
-    # first only to reserve the run_id and capture the config.
-    manifest.status = "training"
     write_manifest(manifest, client)
 
     if dry_run:
-        log.info("dry run — configuration assembled and manifest written, nothing launched")
+        log.info("dry run — configuration recorded, nothing launched")
         return swift, manifest
 
-    launch_and_record(swift, manifest, client)
+    manifest = launch_and_record(swift, manifest, client)
     return swift, manifest
 
 
-#: What a registry run-id looks like: `foundation-v3`, `acord-v2`. A value of
-#: this shape passed as a checkpoint path is a mistake every time.
-#: The run-ids this codebase actually generates: dotted versions
-#: (`foundation-v2.1`, which paths.py explicitly accepts) and the
-#: `{doc_type}-adapter-v{n}` form train_adapter emits. Requiring an
-#: undotted single-lineage id let every real adapter id and every point
-#: release past the guard, into ms-swift as resume_from_checkpoint, where
-#: it found no directory, trained from base, and recorded a lineage that
-#: never happened.
-RUN_ID_SHAPE = re.compile(
-    r"^(foundation|policy|lossrun|acord)(-adapter)?-v\d+(\.\d+)*$", re.IGNORECASE
-)
+#: A registry run-id, which is exactly what must NOT be passed as a checkpoint.
+_RUN_ID_SHAPE = re.compile(r"^(extractor|foundation|[a-z]+-adapter)-v[\d.]+$")
 
 
 def assert_checkpoint_path(continue_from: str) -> None:
     """Refuse a registry run-id where a checkpoint directory is required.
 
-    `continue_from` reaches ms-swift as `resume_from_checkpoint`, which wants a
-    directory on disk. A run-id looks close enough to be passed by mistake, and
-    the failure is silent in the worst way: ms-swift finds no checkpoint, trains
-    from base, and the manifest records `continued_from` — a lineage that did
-    not happen, which is then read as evidence when deciding what regression
-    testing a promotion needs.
+    ms-swift's ``resume_from_checkpoint`` reads a directory. Handed a run-id it
+    finds nothing, trains from base, and the manifest records a lineage that
+    never happened — a run that claims to continue v2 while being v1 again.
     """
-    if RUN_ID_SHAPE.match(continue_from.strip()):
+    if _RUN_ID_SHAPE.match(continue_from.strip().rstrip("/").split("/")[-1]) and "/" not in continue_from:
         raise TrainingError(
-            f"--continue-from takes a checkpoint DIRECTORY, not the registry run-id "
-            f"{continue_from!r}. Resolve the run-id to its staging or published path first "
-            "(artifact_registry.resolve_model_version), then pass that. A run-id here trains "
-            "from base while the manifest records a lineage that never happened."
-        )
-    if "://" in continue_from:
-        raise TrainingError(
-            f"--continue-from takes a local checkpoint directory, not the URI {continue_from!r}. "
-            "ms-swift reads it from disk; pull the checkpoint to the staging volume first."
+            f"--continue-from got {continue_from!r}, which is a registry run-id, not a "
+            "checkpoint path. ms-swift resumes from a DIRECTORY; given a run-id it silently "
+            "trains from base while the manifest records a lineage that never happened. "
+            "Pass the staged checkpoint directory instead."
         )
 
 
@@ -384,11 +398,11 @@ def launch_and_record(
 ) -> RunManifest:
     """Run training, then record what actually happened.
 
-    The manifest is written before this is called — the run_id has to be
-    reserved and the configuration captured even for a run that dies. But
-    "written" is not "trained": the status stays ``training`` until ms-swift
-    returns, and becomes ``failed`` if it does not, so the registry never claims
-    weights that a crashed run never wrote.
+    The manifest is written before this is called — the run_id has to be reserved
+    and the configuration captured even for a run that dies. But "written" is not
+    "trained": the status stays ``training`` until ms-swift returns, and becomes
+    ``failed`` if it does not, so the registry never claims weights that a
+    crashed run never wrote.
     """
     try:
         launch(config)
@@ -403,16 +417,18 @@ def launch_and_record(
 
 
 def launch(config: SwiftConfig) -> None:
-    """Launch ms-swift. The training loop lives there, not here (arch §10)."""
+    """Launch ms-swift. The training loop lives there, not here (arch v2.1 §10)."""
     import shutil
     import subprocess
 
     if shutil.which("swift") is None:
         raise TrainingError(
-            "the `swift` CLI is not on PATH. ms-swift is the Layer-3 entrypoint (arch §10); "
+            "the `swift` CLI is not on PATH. ms-swift is the Layer-3 entrypoint (arch v2.1 §10); "
             'install the [train] extra on the pod: pip install -e ".[train]"\n'
             "If ms-swift turns out to lack a Qwen3-VL capability this needs, the documented "
-            "fallback is invoking TRL SFTTrainer directly — a contingency, not a parallel option."
+            "fallback is a framework migration to TRL SFTTrainer — including re-implementing "
+            "the template, collator and masking against the §10.2 parity tests. A contingency, "
+            "not a layer swap."
         )
     argv = config.to_cli()
     log.info("launching: %s", " ".join(argv))
@@ -420,33 +436,28 @@ def launch(config: SwiftConfig) -> None:
 
 
 def main(argv: Iterable[str] | None = None) -> int:  # pragma: no cover - thin CLI
-    parser = argparse.ArgumentParser(description="Train the Foundation LoRA")
+    parser = argparse.ArgumentParser(description="Train the unified extractor LoRA")
     parser.add_argument("--corpus", required=True)
     parser.add_argument("--out-version", required=True)
-    parser.add_argument("--deepspeed", choices=["zero2", "zero3"], default="zero2")
-    parser.add_argument("--train-vit", action="store_true",
-                        help="escalate to a ViT LoRA — only after a gate decision of 'fire'")
-    parser.add_argument("--continue-from", default=None,
-                        help="minor patch only; promotion then requires cross-type regression evidence")
+    parser.add_argument("--deepspeed", default=None, choices=[None, "zero2", "zero3"])
+    parser.add_argument("--train-vit", action="store_true", help="the §3 escalation; LoRA-on-ViT")
+    parser.add_argument("--continue-from", default=None, help="a checkpoint DIRECTORY, not a run-id")
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args(list(argv) if argv is not None else None)
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
     client = BlobClient()
     corpus_manifest = client.read_json(paths.corpus_manifest(args.corpus))
-
-    train_foundation(
+    counts = corpus_manifest.get("example_counts", {})
+    train(
         corpus_version=args.corpus,
         out_version=args.out_version,
         client=client,
         corpus_manifest=corpus_manifest,
         data_stats=DataStats(
-            train_examples=corpus_manifest.get("total_rows", 0),
-            val_examples=0, test_examples=0,
-            lob_coverage=corpus_manifest.get("lob_coverage", {}),
-            alias_coverage=corpus_manifest.get("alias_coverage", {}),
-            confusable_example_count=corpus_manifest.get("confusable_example_count", 0),
-            deidentified=corpus_manifest.get("deidentified", False),
+            train_examples=int(counts.get("train", 0)),
+            val_examples=int(counts.get("val", 0)),
+            test_examples=int(counts.get("test", 0)),
         ),
         train_vit=args.train_vit,
         deepspeed=args.deepspeed,

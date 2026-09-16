@@ -501,26 +501,26 @@ def stage_dataset_build(ctx: StageContext) -> StageResult:
 
 
 def _is_trained(ctx: StageContext) -> bool:
-    staged = ctx.volume.exists(paths.staging_adapter_dir("foundation", ctx.out_version))
-    if ctx.foundation_only:
-        return staged
-    return staged and all(
-        ctx.volume.exists(paths.staging_adapter_dir("doc_type", ctx.out_version, dt))
-        for dt in ctx.doc_types
-    )
+    """One adapter on the volume is a complete training stage (arch v2.1 §4.1).
+
+    v1 also required one staged adapter per document type, because a run was not
+    finished until the whole fan-out was. There is no fan-out now.
+    """
+    return ctx.volume.exists(paths.staging_adapter_dir("foundation", ctx.out_version))
 
 
 def stage_training(ctx: StageContext) -> StageResult:
-    """Foundation first, then one adapter run per document type, **sequentially**.
+    """ONE unified extractor run (arch v2.1 §4.1).
 
-    A per-type adapter cannot start before the Foundation it sits on has trained
-    and been recorded, because it is trained *on top of* those weights (arch §12).
-    Parallelising the fan-out would mean adapters built on a Foundation that does
-    not exist yet.
+    v1 trained a Foundation and then fanned out one adapter per document type,
+    sequentially, because each sat on top of the Foundation's weights. That
+    topology is gone: vLLM applies one LoRA per request, so a Foundation LoRA and
+    a per-type LoRA could never both be active on the same call — the stack was
+    unservable, not merely awkward. Per-type adapters return only through the
+    §4.2 graduation gate, trained on the MERGED foundation and never stacked.
     """
     from registry_utils.models import DataStats
-    from training.train_adapter import train_adapter
-    from training.train_foundation import train_foundation
+    from training.train import train
 
     corpus_manifest = ctx.client.read_json(paths.corpus_manifest(ctx.corpus, ctx.tenant_id))
     counts = corpus_manifest.get("example_counts", {})
@@ -535,9 +535,8 @@ def stage_training(ctx: StageContext) -> StageResult:
         tenant_ids=[paths._tenant(ctx.tenant_id)],
     )
 
-    trained: list[str] = []
-    with ctx.controller.session_pod("train_foundation", gpu_class=ctx.gpu_class):
-        _swift, foundation_manifest = train_foundation(
+    with ctx.controller.session_pod("train", gpu_class=ctx.gpu_class):
+        _swift, manifest = train(
             corpus_version=ctx.corpus,
             out_version=ctx.out_version,
             client=ctx.client,
@@ -546,38 +545,31 @@ def stage_training(ctx: StageContext) -> StageResult:
             train_vit=ctx.train_vit,
             dry_run=ctx.dry_run,
         )
-        ctx.manifests["foundation"] = foundation_manifest
+        # Keyed "foundation" so the gate, the cascade query and the ViT gate keep
+        # reading one well-known key. The run_type on the manifest says what it
+        # actually is; this is the slot, not the claim.
+        ctx.manifests["foundation"] = manifest
+        # The staging volume is where merge, quantize and push look for the
+        # weights. Without this mark the artifacts exist and the pipeline cannot
+        # find them.
         ctx.volume.mark(paths.staging_adapter_dir("foundation", ctx.out_version))
-        trained.append("foundation")
-
-        if not ctx.foundation_only:
-            for doc_type in ctx.doc_types:
-                _cfg, manifest = train_adapter(
-                    doc_type,
-                    corpus_version=ctx.corpus,
-                    out_version=ctx.out_version,
-                    client=ctx.client,
-                    corpus_manifest=corpus_manifest,
-                    data_stats=data_stats,
-                    foundation_version=foundation_manifest.run_id,
-                    dry_run=ctx.dry_run,
-                )
-                ctx.manifests[doc_type] = manifest
-                ctx.volume.mark(paths.staging_adapter_dir("doc_type", ctx.out_version, doc_type))
-                trained.append(doc_type)
 
     if ctx.push_adapters:
-        # Belt and braces: the adapters are tens of MB, so pushing them now costs
+        # Belt and braces: the adapter is tens of MB, so pushing it now costs
         # little and means a reclaimed volume loses only the merged model.
-        for name in trained:
-            kind: paths.AdapterKind = "foundation" if name == "foundation" else "doc_type"
-            blob_dir = paths.adapter_dir(kind, ctx.out_version, None if name == "foundation" else name)
-            ctx.client.write_json(f"{blob_dir}/adapter_placeholder.json", {"staged_copy_of": name})
+        blob_dir = paths.adapter_dir("foundation", ctx.out_version)
+        ctx.client.write_json(
+            f"{blob_dir}/adapter_placeholder.json", {"staged_copy_of": manifest.run_id}
+        )
 
     return StageResult(
         "training", "completed",
-        f"trained {', '.join(trained)} (foundation first, adapters sequentially)",
-        {"trained": trained, "push_adapters": ctx.push_adapters},
+        f"trained {manifest.run_id} on {data_stats.train_examples} examples",
+        {
+            "runs": [manifest.run_id],
+            "run_type": manifest.run_type,
+            "push_adapters": ctx.push_adapters,
+        },
     )
 
 
@@ -647,7 +639,10 @@ def foundation_upgrade_work_list(ctx: StageContext) -> CascadeWorkList:
     """The dependent-adapter re-validation list for a Foundation major bump."""
     from registry_utils.query_registry import adapters_depending_on, latest_promoted
 
-    previous = latest_promoted(ctx.client, "foundation")
+    # "unified" under arch v2.1 §4.1. A graduated per-type adapter (§4.2) still
+    # records the unified run it was trained on as its foundation_version, so the
+    # dependency-upgrade rule is unchanged — only the run_type it looks for moved.
+    previous = latest_promoted(ctx.client, "unified")
     work = CascadeWorkList(previous_foundation=previous)
     if not is_major_bump(previous, ctx.out_version):
         return work
@@ -699,10 +694,13 @@ def default_baseline_metrics(ctx: StageContext) -> dict[str, Any] | None:
     """
     from registry_utils.query_registry import latest_promoted
 
-    promoted = latest_promoted(ctx.client, "foundation")
+    promoted = latest_promoted(ctx.client, "unified")
     if not promoted:
         return None
-    key = paths.eval_report(promoted.replace("foundation-", ""))
+    # Strip whichever lineage prefix the run id carries. A run id is
+    # "<lineage>-<version>" and eval reports are keyed by version alone, so
+    # hardcoding one prefix broke the moment the lineage was renamed.
+    key = paths.eval_report(promoted.rsplit("-", 1)[-1])
     if not ctx.client.exists(key):
         log.warning(
             "promoted version %s has no eval report at %s, so this candidate is gated as a first "
@@ -742,11 +740,11 @@ def stage_evaluation_gate(ctx: StageContext) -> StageResult:
         from registry_utils.query_registry import get as get_manifest
 
         try:
-            foundation = get_manifest(f"foundation-{ctx.out_version}", ctx.client)
+            foundation = get_manifest(f"extractor-{ctx.out_version}", ctx.client)
             ctx.manifests["foundation"] = foundation
         except (RegistryQueryError, KeyError, FileNotFoundError) as exc:
             raise PipelineError(
-                f"no run manifest for foundation-{ctx.out_version}, so the gate cannot tell "
+                f"no run manifest for extractor-{ctx.out_version}, so the gate cannot tell "
                 "whether this Foundation continued from a previous checkpoint — and a continued "
                 "one must show cross-type regression evidence before promotion (arch §12). "
                 f"Re-run training for this version rather than gating blind ({exc})."
@@ -811,31 +809,34 @@ def stage_evaluation_gate(ctx: StageContext) -> StageResult:
 
 
 def _is_merged(ctx: StageContext) -> bool:
-    targets = [None] if ctx.foundation_only else list(ctx.doc_types)
-    return all(ctx.volume.exists(paths.staging_merged_model_dir(ctx.out_version, dt)) for dt in targets)
+    """One merged model is a complete merge stage (arch v2.1 §4.1)."""
+    return ctx.volume.exists(paths.staging_merged_model_dir(ctx.out_version, None))
 
 
 def stage_merge(ctx: StageContext) -> StageResult:
-    """PEFT ``merge_and_unload()`` — Foundation first, then the per-type LoRA."""
+    """PEFT ``merge_and_unload()`` — ONE adapter into the bf16 base.
+
+    v1 merged Foundation first and then the per-type LoRA on top, producing one
+    model per document type. There is one adapter now (arch v2.1 §4.1), so there
+    is one merge and one model. A graduated per-type adapter (§4.2) is never
+    merged: it is applied at serving time on top of these merged weights, one
+    LoRA per request.
+    """
     from common.config import base_model_config
     from postprocessing.merge_adapter import merge, plan_merge
 
     base = base_model_config()["model"]
-    targets: list[str | None] = [None] if ctx.foundation_only else list(ctx.doc_types)
-    merged: list[str] = []
-    for doc_type in targets:
-        plan = plan_merge(
-            base_model=f"{base['model_id']}@{base['revision']}",
-            foundation_version=ctx.out_version,
-            out_version=ctx.out_version,
-            doc_type=doc_type,
-            dtype=ctx.dtype,  # type: ignore[arg-type]
-        )
-        output = merge(plan, dry_run=ctx.dry_run)
-        ctx.volume.mark(output)
-        merged.append(doc_type or "unified")
+    plan = plan_merge(
+        base_model=f"{base['model_id']}@{base['revision']}",
+        foundation_version=ctx.out_version,
+        out_version=ctx.out_version,
+        doc_type=None,
+        dtype=ctx.dtype,  # type: ignore[arg-type]
+    )
+    output = merge(plan, dry_run=ctx.dry_run)
+    ctx.volume.mark(output)
 
-    return StageResult("merge", "completed", f"merged {', '.join(merged)}", {"merged": merged})
+    return StageResult("merge", "completed", "merged unified", {"merged": ["unified"]})
 
 
 # --------------------------------------------------------------------------
@@ -935,31 +936,30 @@ def stage_push(ctx: StageContext) -> StageResult:
     assert_staged(ctx)
     pushed: dict[str, str] = {}
 
-    kinds: list[tuple[paths.AdapterKind, str | None]] = [("foundation", None)]
-    if not ctx.foundation_only:
-        kinds += [("doc_type", dt) for dt in ctx.doc_types]
+    # ONE adapter and ONE merged model (arch v2.1 §4.1). v1 fanned this out per
+    # document type; that topology is gone, because vLLM applies one LoRA per
+    # request and a Foundation plus a per-type adapter could never both be
+    # active. A graduated per-type adapter (§4.2) is published by its own run,
+    # not by this one.
+    #
+    # Through the SPEC_02 §3 helper's path, never assembled here. The only place
+    # that built these inline is the place that published a Foundation against
+    # paths that were never produced.
+    blob_dir = paths.adapter_dir("foundation", ctx.out_version)
+    ctx.client.write_json(f"{blob_dir}/adapter_config.json", {
+        "version": ctx.out_version, "kind": "foundation", "doc_type": None,
+    })
+    pushed["adapter:unified"] = blob_dir
 
-    for kind, doc_type in kinds:
-        # Through the SPEC_02 §3 helper's path, never assembled here. The only
-        # place that built these inline is the place that published a Foundation
-        # against paths that were never produced.
-        blob_dir = paths.adapter_dir(kind, ctx.out_version, doc_type)
-        ctx.client.write_json(f"{blob_dir}/adapter_config.json", {
-            "version": ctx.out_version, "kind": kind, "doc_type": doc_type,
-        })
-        pushed[f"adapter:{doc_type or 'foundation'}"] = blob_dir
+    merged_dir = paths.merged_model_dir(ctx.out_version)
+    ctx.client.write_json(f"{merged_dir}/config.json", {"dtype": ctx.dtype})
+    pushed["merged:unified"] = merged_dir
 
-    targets: list[str | None] = [None] if ctx.foundation_only else list(ctx.doc_types)
-    for doc_type in targets:
-        merged_dir = paths.merged_model_dir(ctx.out_version, doc_type)
-        ctx.client.write_json(f"{merged_dir}/config.json", {"dtype": ctx.dtype})
-        pushed[f"merged:{doc_type or 'unified'}"] = merged_dir
-
-        if not ctx.skip_quantize:
-            for fmt in ctx.formats:
-                quant_dir = paths.quantized_model_dir(ctx.out_version, fmt, doc_type)
-                ctx.client.write_json(f"{quant_dir}/config.json", {"format": fmt})
-                pushed[f"quantized:{doc_type or 'unified'}:{fmt}"] = quant_dir
+    if not ctx.skip_quantize:
+        for fmt in ctx.formats:
+            quant_dir = paths.quantized_model_dir(ctx.out_version, fmt)
+            ctx.client.write_json(f"{quant_dir}/config.json", {"format": fmt})
+            pushed[f"quantized:unified:{fmt}"] = quant_dir
 
     published: list[str] = []
     for row in list_runs(ctx.client):
@@ -980,24 +980,25 @@ def stage_push(ctx: StageContext) -> StageResult:
             )
             continue
         doc_type = row.get("doc_type")
-        run_kind: paths.AdapterKind = "foundation" if row.get("run_type") == "foundation" else "doc_type"
+        run_kind: paths.AdapterKind = (
+            "doc_type" if row.get("run_type") == "per_type_adapter" else "foundation"
+        )
         manifest = get_manifest(run_id, ctx.client)
         manifest.artifacts.eval_report = paths.eval_report(ctx.out_version)
-        # A Foundation run owns its adapter, but not a merged or quantized
-        # model: in a per-type build those are produced per doc type, and the
-        # doc_type=None "unified" paths only exist under --foundation-only.
-        # Publishing them regardless pointed the manifest at artifacts that were
-        # never built.
-        owns_a_model = run_kind == "doc_type" or ctx.foundation_only
+        # The unified run owns the adapter AND the merged and quantized models —
+        # there is one of each under arch v2.1 §4.1. A graduated per-type adapter
+        # (§4.2) owns only its own weights; it is merged into nothing, because it
+        # is applied at serving time on top of the merged foundation.
+        owns_a_model = run_kind == "foundation"
         mark_published(
             manifest,
             ctx.client,
             adapter_weights=paths.adapter_dir(run_kind, ctx.out_version, doc_type),
             merged_model=(
-                paths.merged_model_dir(ctx.out_version, doc_type) if owns_a_model else None
+                paths.merged_model_dir(ctx.out_version) if owns_a_model else None
             ),
             quantized_model=(
-                paths.quantized_model_dir(ctx.out_version, ctx.formats[0], doc_type)
+                paths.quantized_model_dir(ctx.out_version, ctx.formats[0])
                 if owns_a_model and not ctx.skip_quantize else None
             ),
             quantized_formats=(

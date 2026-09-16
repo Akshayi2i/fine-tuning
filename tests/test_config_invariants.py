@@ -42,9 +42,7 @@ def test_resolution_parity_check_fires_on_mismatch(monkeypatch):
         config.assert_resolution_parity()
 
 
-@pytest.mark.parametrize(
-    "name", ["foundation", "acord_adapter", "policy_adapter", "lossrun_adapter"]
-)
+@pytest.mark.parametrize("name", ["unified"])
 def test_declared_effective_batch_matches_the_arithmetic(name):
     """Otherwise the run manifest records a batch size that was never used."""
     config.assert_effective_batch(config.training_config(name))
@@ -87,20 +85,15 @@ def test_unpinned_base_model_revision_is_detected():
         config.assert_model_revision_pinned()
 
 
-def test_foundation_and_per_type_ranks_match_the_architecture():
-    """Foundation learns broad behaviour; per-type learns only schema mapping."""
-    from common.constants import (
-        FOUNDATION_LORA_ALPHA,
-        FOUNDATION_LORA_RANK,
-        PER_TYPE_LORA_ALPHA,
-        PER_TYPE_LORA_RANK,
-    )
-    foundation = config.training_config("foundation")["lora"]
-    assert (foundation["rank"], foundation["alpha"]) == (FOUNDATION_LORA_RANK, FOUNDATION_LORA_ALPHA)
+def test_the_unified_adapter_is_rank_64():
+    """Rank 64 across all document types and all tasks. v1 also carried rank-16
+    per-type adapters; at 25-30 documents per type those memorised their own
+    training set, and vLLM could not have served them stacked anyway
+    (arch v2.1 §4.1, §9.4)."""
+    from common.constants import FOUNDATION_LORA_ALPHA, FOUNDATION_LORA_RANK
 
-    for name in ("acord_adapter", "policy_adapter", "lossrun_adapter"):
-        per_type = config.training_config(name)["lora"]
-        assert (per_type["rank"], per_type["alpha"]) == (PER_TYPE_LORA_RANK, PER_TYPE_LORA_ALPHA)
+    lora = config.training_config("unified")["lora"]
+    assert (lora["rank"], lora["alpha"]) == (FOUNDATION_LORA_RANK, FOUNDATION_LORA_ALPHA)
 
 
 def test_vit_is_frozen_by_default():
@@ -109,11 +102,12 @@ def test_vit_is_frozen_by_default():
     assert config.base_model_config()["vision"]["train_vit"] is False
 
 
-def test_per_type_adapters_do_not_pin_a_foundation_version():
-    """Resolved at launch from the registry, so an adapter can never be built
-    against a stale Foundation by a forgotten config edit (arch §12)."""
-    for name in ("acord_adapter", "policy_adapter", "lossrun_adapter"):
-        assert config.training_config(name)["foundation_version"] is None
+def test_the_unified_run_pins_no_foundation_version():
+    """There is nothing above it to pin. A graduated per-type adapter (§4.2)
+    resolves its foundation at launch from the registry, so it can never be
+    built against a stale one by a forgotten config edit (arch §12)."""
+    assert config.training_config("unified").get("foundation_version") is None
+    assert config.training_config("unified")["run_type"] == "unified"
 
 
 # --------------------------------------------------------------------------

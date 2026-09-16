@@ -75,7 +75,9 @@ def get(run_id: str, client: BlobClient) -> RunManifest:
     candidates = (
         [paths.run_manifest(run_id, row["run_type"], row.get("doc_type"))]
         if row
-        else [paths.run_manifest(run_id, "foundation")]
+        # "unified" and "foundation" resolve to the same prefix, so this one
+        # candidate covers both lineages when the index has no row yet.
+        else [paths.run_manifest(run_id, "unified")]
         + [
             paths.run_manifest(run_id, "per_type_adapter", dt)
             for dt in ("acord", "policy", "lossrun")

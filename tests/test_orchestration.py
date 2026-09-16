@@ -208,7 +208,7 @@ def test_finetune_runs_ingest_through_merge(client, controller):
     assert report.ok, report.render()
     assert [r.name for r in report.results] == [s.name for s in FINETUNE_STAGES]
     assert ctx.volume.exists(paths.staging_adapter_dir("foundation", "v1"))
-    assert ctx.volume.exists(paths.staging_merged_model_dir("v1", "policy"))
+    assert ctx.volume.exists(paths.staging_merged_model_dir("v1", None))
 
 
 def test_finetune_writes_a_blob_manifest_while_weights_stay_staged(client, controller):
@@ -222,7 +222,7 @@ def test_finetune_writes_a_blob_manifest_while_weights_stay_staged(client, contr
 
     rows = list_runs(client)
     assert rows, "finetune completed without recording a single run manifest"
-    foundation = get("foundation-v1", client)
+    foundation = get("extractor-v1", client)
     assert foundation.artifacts.status == "staged"
     assert foundation.artifacts.staging_path
 
@@ -258,28 +258,34 @@ def test_finetune_with_no_labels_at_all_stops_before_training(client, controller
     assert "human work" in report.results[-1].detail
 
 
-def test_foundation_trains_before_any_adapter(client, controller):
-    """An adapter is trained on top of the Foundation's weights, so a parallel
-    fan-out would build adapters on a model that does not exist yet (arch §12)."""
+def test_training_is_one_run_with_no_per_type_fan_out(client, controller):
+    """vLLM applies ONE LoRA per request, so a Foundation LoRA and a per-type
+    LoRA could never both be active. The v1 topology was not slow or awkward, it
+    was unservable — and at 25-30 documents per type a rank-16 adapter memorised
+    its own training set anyway (arch v2.1 §4.1)."""
     seed_corpus(client)
     ctx = make_context(client, controller)
-    run_stages(ctx, stages_for("finetune"), command="finetune")
-
-    trained = ctx.results["training"].data["trained"]
-    assert trained[0] == "foundation"
-    assert set(trained[1:]) == set(ctx.doc_types)
-
-
-def test_foundation_only_skips_the_per_type_fan_out(client, controller):
-    """At pilot volume a per-type adapter trains on documents the Foundation
-    already saw, so it may add nothing (arch §4)."""
-    seed_corpus(client)
-    ctx = make_context(client, controller, foundation_only=True)
     report = run_stages(ctx, stages_for("finetune"), command="finetune")
 
     assert report.ok, report.render()
-    assert ctx.results["training"].data["trained"] == ["foundation"]
+    runs = ctx.results["training"].data["runs"]
+    assert runs == ["extractor-v1"], f"expected one unified run, got {runs}"
+    assert ctx.results["training"].data["run_type"] == "unified"
+
+
+def test_the_unified_run_produces_one_merged_model(client, controller):
+    """One adapter, one merge. v1 produced a merged model per document type
+    because each carried its own stacked adapter."""
+    seed_corpus(client)
+    ctx = make_context(client, controller)
+    report = run_stages(ctx, stages_for("finetune"), command="finetune")
+
+    assert report.ok, report.render()
     assert ctx.volume.exists(paths.staging_merged_model_dir("v1", None))
+    for doc_type in ctx.doc_types:
+        assert not ctx.volume.exists(paths.staging_merged_model_dir("v1", doc_type)), (
+            f"a per-type merged model was produced for {doc_type}; there is one model now"
+        )
 
 
 # --------------------------------------------------------------------------
@@ -404,7 +410,7 @@ def test_the_baseline_comes_from_the_promoted_version_s_own_report(client, contr
     seed_corpus(client)
     first = make_context(client, controller, out_version="v1")
     run_stages(first, stages_for("finetune"), command="finetune")
-    mark_promoted(get("foundation-v1", client), client, promoted_by="test")
+    mark_promoted(get("extractor-v1", client), client, promoted_by="test")
     client.write_json(paths.eval_report("v1"), {"gate_metrics": dict(PASSING_METRICS)})
 
     probe = make_context(client, controller, out_version="v1.1", baseline_metrics=None)
@@ -492,16 +498,15 @@ def test_package_will_not_publish_a_run_that_never_finished(client, controller):
     run_stages(ctx, stages_for("finetune"), command="finetune")
     _mark_trained(client, "v1")
 
-    # The lossrun adapter died on the pod.
-    crashed = get("lossrun-adapter-v1", client)
+    # The run died on the pod.
+    crashed = get("extractor-v1", client)
     crashed.status = "failed"
     write_manifest(crashed, client)
 
     package_ctx = make_context(client, controller)
-    assert run_stages(package_ctx, stages_for("package"), command="package").ok
+    run_stages(package_ctx, stages_for("package"), command="package")
 
-    assert get("lossrun-adapter-v1", client).artifacts.status == "staged",         "a failed run was published"
-    assert get("policy-adapter-v1", client).artifacts.status == "published",         "the runs that did finish should still publish"
+    assert get("extractor-v1", client).artifacts.status == "staged",         "a failed run was published, advertising a Blob path serving would find empty"
 
 
 def test_package_pushes_all_three_artifact_classes_and_publishes(client, controller):
@@ -526,34 +531,44 @@ def test_package_pushes_all_three_artifact_classes_and_publishes(client, control
 
     from registry_utils.query_registry import get
 
-    foundation = get("foundation-v1", client)
+    foundation = get("extractor-v1", client)
     assert foundation.artifacts.status == "published"
     assert foundation.artifacts.staging_path is None
     assert foundation.artifacts.adapter_weights
 
-    # A Foundation run owns its adapter and nothing else. In a per-type build
-    # the merged and quantized models are produced per doc type, and the
-    # doc_type=None "unified" paths exist only under --foundation-only, so
-    # claiming them here would point the manifest at artifacts never built.
-    assert foundation.artifacts.merged_model is None
-    assert foundation.artifacts.quantized_formats == []
-
-    policy = get("policy-adapter-v1", client)
-    assert policy.artifacts.merged_model
-    assert policy.artifacts.quantized_formats == ["fp16", "q5_k_m"]
+    # The unified run owns the adapter AND the merged and quantized models —
+    # there is one of each under arch v2.1 §4.1. Under v1 it owned only the
+    # adapter, because the merged models were produced per document type by the
+    # per-type runs stacked on top of it.
+    assert foundation.artifacts.merged_model
+    assert foundation.artifacts.quantized_formats == ["fp16", "q5_k_m"]
 
 
-def test_a_foundation_only_build_publishes_the_unified_model(client, controller):
-    """With no per-type adapters the unified paths ARE what was built, so the
-    Foundation run legitimately owns them."""
+def test_no_per_type_run_is_produced_by_a_default_build(client, controller):
+    """A graduated per-type adapter (§4.2) is published by its own run, on its
+    own evidence. A default build produces none."""
+    from registry_utils.query_registry import RegistryQueryError, get
+
     seed_corpus(client)
-    ctx = make_context(client, controller, foundation_only=True)
+    ctx = make_context(client, controller)
+    run_stages(ctx, stages_for("finetune"), command="finetune")
+    run_stages(ctx, stages_for("package"), command="package")
+
+    for doc_type in ctx.doc_types:
+        with pytest.raises(RegistryQueryError):
+            get(f"{doc_type}-adapter-v1", client)
+
+
+def test_a_default_build_publishes_the_unified_model(client, controller):
+    """The unified paths ARE what was built, so the run legitimately owns them."""
+    seed_corpus(client)
+    ctx = make_context(client, controller)
     run_stages(ctx, stages_for("finetune"), command="finetune")
     run_stages(ctx, stages_for("package"), command="package")
 
     from registry_utils.query_registry import get
 
-    foundation = get("foundation-v1", client)
+    foundation = get("extractor-v1", client)
     assert foundation.artifacts.merged_model
     assert foundation.artifacts.quantized_formats == ["fp16", "q5_k_m"]
 
@@ -766,7 +781,11 @@ def test_gate_blocked_is_distinguishable_from_a_failure():
 
 
 def _promote_foundation(client: BlobClient, controller: RunPodController, version: str) -> None:
-    """Run a cycle and promote it, so the next one has something to bump from."""
+    """Run a cycle and promote it, so the next one has something to bump from.
+
+    One run under arch v2.1 §4.1: the unified extractor. v1 promoted a Foundation
+    plus one adapter per document type, a topology vLLM cannot serve.
+    """
     from evaluation.gating import apply_to_manifest, promotion_gate
     from registry_utils.query_registry import get
     from registry_utils.write_run_manifest import mark_promoted
@@ -775,13 +794,69 @@ def _promote_foundation(client: BlobClient, controller: RunPodController, versio
     report = run_stages(ctx, stages_for("finetune"), command="finetune")
     assert report.ok, report.render()
 
+    # Gate first, then promote — the order a real cycle uses. `mark_promoted`
+    # requires the affirmative gate result, so a manifest that was never
+    # evaluated cannot be promoted at all.
     passed = promotion_gate(dict(PASSING_METRICS), None)
-    for run_id in (f"foundation-{version}", *(f"{dt}-adapter-{version}" for dt in ctx.doc_types)):
-        # Gate first, then promote — the order a real cycle uses. `mark_promoted`
-        # now requires the affirmative gate result, so a manifest that was never
-        # evaluated cannot be promoted at all.
-        manifest = apply_to_manifest(passed, get(run_id, client))
-        mark_promoted(manifest, client, promoted_by="test")
+    manifest = apply_to_manifest(passed, get(f"extractor-{version}", client))
+    mark_promoted(manifest, client, promoted_by="test")
+
+
+def _graduate_adapter(client: BlobClient, doc_type: str, foundation_version: str) -> str:
+    """Seed a per-type adapter from the §4.2 graduation path.
+
+    The default topology produces none — that is the point of §4.1 — so the
+    cascade rule has nothing to act on until a type graduates. These tests are
+    about what happens AFTER one does: a graduated adapter trains on the merged
+    foundation weights, so a foundation bump invalidates it exactly as before.
+    """
+    from datetime import UTC, datetime
+
+    from registry_utils.models import (
+        Artifacts,
+        DataStats,
+        Dependencies,
+        Promotion,
+        RunManifest,
+        TrainingConfig,
+    )
+    from registry_utils.write_run_manifest import write_manifest
+
+    run_id = f"{doc_type}-adapter-{foundation_version}"
+    manifest = RunManifest(
+        run_id=run_id,
+        run_type="per_type_adapter",
+        doc_type=doc_type,
+        status="promoted",
+        dependencies=Dependencies(
+            base_model="Qwen/Qwen3-VL-8B-Instruct@abc1234",
+            corpus_version=f"corpus/{foundation_version}",
+            code_git_commit="abc1234",
+            foundation_version=f"extractor-{foundation_version}",
+        ),
+        training_config=TrainingConfig(
+            technique="LoRA", base_quantization="bf16_frozen_base", optimizer="adamw_torch",
+            lora_rank=16, lora_alpha=32, learning_rate=7e-5, epochs=4,
+            gradient_accumulation_steps=8, effective_batch_size=8,
+            target_modules=["q_proj"], resolution_cap_px=1792, max_seq_len=24576, seed=42,
+        ),
+        data_stats=DataStats(train_examples=500, val_examples=80, test_examples=60),
+        artifacts=Artifacts(
+            status="published",
+            adapter_weights=f"adapters/{doc_type}/{foundation_version}/",
+        ),
+        # Set at construction, not after: the manifest refuses a promoted status
+        # with no record of when and by whom, and assignment after the fact
+        # cannot satisfy a model validator.
+        promotion=Promotion(
+            gated_against=None,
+            beat_previous_on_all_gates=True,
+            promoted_by="test",
+            promoted_at=datetime.now(UTC),
+        ),
+    )
+    write_manifest(manifest, client)
+    return run_id
 
 
 def test_a_minor_bump_does_not_trigger_the_cascade(client, controller):
@@ -799,6 +874,7 @@ def test_a_major_bump_blocks_until_dependent_adapters_are_revalidated(client, co
     were never evaluated against the base they now sit on."""
     seed_corpus(client)
     _promote_foundation(client, controller, "v1")
+    _graduate_adapter(client, "policy", "v1")
 
     ctx = make_context(client, controller, out_version="v2")
     report = run_stages(ctx, stages_for("finetune"), command="finetune")
@@ -812,12 +888,14 @@ def test_a_major_bump_blocks_until_dependent_adapters_are_revalidated(client, co
 def test_the_cascade_clears_once_every_dependent_has_passed(client, controller):
     seed_corpus(client)
     _promote_foundation(client, controller, "v1")
+    _graduate_adapter(client, "policy", "v1")
+    _graduate_adapter(client, "lossrun", "v1")
 
     from orchestration.pipeline_dag import foundation_upgrade_work_list
 
     probe = make_context(client, controller, out_version="v2")
     dependents = foundation_upgrade_work_list(probe).dependents
-    assert dependents, "the seeded adapters should depend on foundation-v1"
+    assert dependents, "the graduated adapters should depend on extractor-v1"
 
     ctx = make_context(client, controller, out_version="v2",
                        revalidation_evidence=dict.fromkeys(dependents, True))
@@ -828,6 +906,8 @@ def test_the_cascade_clears_once_every_dependent_has_passed(client, controller):
 def test_partial_revalidation_still_blocks(client, controller):
     seed_corpus(client)
     _promote_foundation(client, controller, "v1")
+    _graduate_adapter(client, "policy", "v1")
+    _graduate_adapter(client, "lossrun", "v1")
 
     from orchestration.pipeline_dag import foundation_upgrade_work_list
 
@@ -845,9 +925,9 @@ def test_partial_revalidation_still_blocks(client, controller):
 @pytest.mark.parametrize(
     ("previous", "candidate", "expected"),
     [
-        ("foundation-v1", "v2", True),
-        ("foundation-v1", "v1.1", False),
-        ("foundation-v2.3", "v3", True),
+        ("extractor-v1", "v2", True),
+        ("extractor-v1", "v1.1", False),
+        ("extractor-v2.3", "v3", True),
         (None, "v1", False),
     ],
 )

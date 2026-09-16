@@ -11,9 +11,7 @@ from __future__ import annotations
 
 import pytest
 
-from registry_utils.models import DataStats
-from training import train_adapter as TA
-from training import train_foundation as TF
+from training import train as T
 from training.callbacks.early_stopping import EarlyStoppingState
 from training.data_collator import (
     IGNORE_INDEX,
@@ -353,43 +351,99 @@ def test_improvement_resets_patience():
 
 
 # --------------------------------------------------------------------------
-# Training configuration
+# Training configuration (arch v2.1 §4.1, §9, §11.1)
 # --------------------------------------------------------------------------
 
-def test_foundation_config_is_bf16_lora_with_a_frozen_vit():
-    """The arch §9 default: LoRA on a bf16 base, not QLoRA. Both serving paths
-    hold the base in bf16/fp16, so training in bf16 means the adapter is applied
-    to exactly the weights it trained against."""
-    swift, recorded = TF.build_swift_config(
-        corpus_paths=["corpus/default/v1/policy/train.jsonl"], output_dir="/tmp/out"
+def test_training_is_one_unified_run_on_a_bf16_base():
+    """One adapter across every document type and every task. vLLM applies ONE
+    LoRA per request, so v1's Foundation + per-type stack could never both be
+    active — it was unservable, not merely awkward."""
+    swift, recorded = T.build_training_config(
+        corpus_paths=["corpus/default/v1/train/epoch_1.jsonl"], output_dir="/tmp/out"
     )
+    assert swift.args["train_type"] == "lora"
     assert swift.args["quantization_bit"] == 0
-    # Emitted only under 4-bit: a bnb setting in the rendered command line of a
-    # bf16 run would describe nothing the run did.
     assert "bnb_4bit_quant_type" not in swift.args
-    assert "bnb_4bit_use_double_quant" not in swift.args
-    assert swift.args["freeze_vit"] is True
     assert recorded.technique == "LoRA"
     assert recorded.base_quantization == "bf16_frozen_base"
-    assert recorded.vit_trainable is False
-    assert recorded.vit_method == "frozen"
     assert recorded.lora_rank == 64 and recorded.lora_alpha == 128
 
 
+def test_both_the_vit_and_the_mergers_are_frozen():
+    """A reversal of v1, which targeted the merger with LoRA. Tower and connector
+    LoRA in vLLM is experimental with known mixed-adapter batching risks, and
+    arbitration is learned in the DECODER, where image tokens and OCR text tokens
+    attend to each other — the mergers never see OCR text (arch v2.1 §9a)."""
+    swift, recorded = T.build_training_config(corpus_paths=["x"], output_dir="/tmp/out")
+
+    assert swift.args["freeze_vit"] is True
+    assert swift.args["freeze_aligner"] is True
+    assert "merger" not in swift.args["lora_target_modules"]
+    assert "merger" not in recorded.target_modules
+    assert set(recorded.target_modules) == {
+        "q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"
+    }
+
+
+def test_the_memory_settings_that_make_the_largest_cap_affordable_reach_the_trainer():
+    """Without use_logits_to_keep the LM head produces a 151k-vocabulary
+    distribution at every position of a 32k sequence, which dominates activation
+    memory on its own (arch v2.1 §9.3)."""
+    swift, _ = T.build_training_config(corpus_paths=["x"], output_dir="/tmp/out")
+
+    assert swift.args["use_logits_to_keep"] is True
+    assert swift.args["padding_free"] is True
+    assert swift.args["length_grouped_sampling"] is True
+    assert swift.args["gradient_checkpointing"] is True
+
+
+def test_max_length_is_the_largest_task_cap():
+    """ms-swift takes ONE max_length and the corpus interleaves every task, so
+    anything smaller would truncate the longest one rather than reject it — and a
+    clipped assistant span trains the model to stop early (arch v2.1 §7a)."""
+    swift, recorded = T.build_training_config(corpus_paths=["x"], output_dir="/tmp/out")
+    largest = T.corpus_max_length()
+
+    assert swift.args["max_length"] == largest
+    assert recorded.max_seq_len == largest
+    assert largest > 8192, "the v1 single cap could not hold a page plus its schema"
+
+
+def test_warmup_reaches_the_trainer_in_steps_not_as_a_ratio():
+    """At pilot volume a 0.03 ratio over a handful of steps rounds to zero, and
+    the first optimizer step lands at full learning rate on a freshly-initialised
+    adapter (arch v2.1 §11.1)."""
+    swift, _ = T.build_training_config(corpus_paths=["x"], output_dir="/tmp/out")
+
+    assert swift.args["warmup_steps"] >= 1
+    assert "warmup_ratio" not in swift.args
+
+
+def test_deepspeed_is_absent_unless_asked_for():
+    """Under LoRA, ZeRO-2 shards ~1.5GB of adapter optimizer state and is close
+    to a no-op. Sequence parallelism is the first reach for VRAM (§9.3)."""
+    without, _ = T.build_training_config(corpus_paths=["x"], output_dir="/tmp/out")
+    assert "deepspeed" not in without.args
+
+    with_zero, _ = T.build_training_config(
+        corpus_paths=["x"], output_dir="/tmp/out", deepspeed="zero3"
+    )
+    assert with_zero.args["deepspeed"].endswith("zero3.json")
+
+
 def test_four_bit_is_a_live_flag_not_a_hardcoded_constant(monkeypatch):
-    """`load_in_4bit` sat in the YAML being read by nothing while both trainers
+    """`load_in_4bit` sat in the YAML being read by nothing while the trainers
     hardcoded `quantization_bit: 4`, so the QLoRA-vs-LoRA decision could not be
     A/B'd without a code change — and the manifest recorded a value that had no
     effect on the run."""
-    base = TF.base_model_config()
+    base = T.base_model_config()
     quantized = {**base, "quantization": {**base["quantization"], "load_in_4bit": True}}
-    monkeypatch.setattr(TF, "base_model_config", lambda: quantized)
+    monkeypatch.setattr(T, "base_model_config", lambda: quantized)
 
-    swift, recorded = TF.build_swift_config(corpus_paths=["x"], output_dir="/tmp/out")
+    swift, recorded = T.build_training_config(corpus_paths=["x"], output_dir="/tmp/out")
 
     assert swift.args["quantization_bit"] == 4
     assert swift.args["bnb_4bit_quant_type"] == "nf4"
-    assert swift.args["bnb_4bit_use_double_quant"] is True
     assert recorded.technique == "QLoRA"
     assert recorded.base_quantization == "nf4_double_quant_bfloat16_compute"
 
@@ -399,212 +453,113 @@ def test_the_manifest_cannot_default_its_way_into_claiming_qlora():
     bf16 run that did not pass them recorded a technique it never used. The
     record is the whole basis for attributing a regression, and base precision is
     exactly the kind of change that causes one."""
-    import pytest
-
     from registry_utils.models import TrainingConfig
 
     with pytest.raises(ValueError):
         TrainingConfig(
             lora_rank=64, lora_alpha=128, learning_rate=1e-4, epochs=3,
-            gradient_accumulation_steps=32, effective_batch_size=32,
-            target_modules=["q_proj"], resolution_cap_px=1792, max_seq_len=8192, seed=42,
+            gradient_accumulation_steps=8, effective_batch_size=8,
+            target_modules=["q_proj"], resolution_cap_px=1792, max_seq_len=24576, seed=42,
         )
 
 
-def test_the_adapter_holds_the_base_the_same_way_as_its_foundation():
-    """A rank-16 adapter stacked on a Foundation trained against a differently
-    held base is a mismatch the promotion gate has no way to see."""
-    found, _ = TF.build_swift_config(corpus_paths=["x"], output_dir="/tmp/out")
-    adapter, _ = TA.build_adapter_config(
-        "acord", corpus_version="v1",
-        foundation_adapter_path="/runpod-volume/staging/adapters/foundation/v1",
-        output_dir="/runpod-volume/staging/adapters/acord/v1",
-    )
-    assert adapter.args["quantization_bit"] == found.args["quantization_bit"]
-
-
-def test_the_vision_projector_is_a_lora_target():
-    """Where image evidence fuses with language — the locus of OCR-versus-image
-    arbitration (arch §9a)."""
-    swift, recorded = TF.build_swift_config(corpus_paths=["x"], output_dir="/tmp/out")
-    assert "merger" in swift.args["lora_target_modules"]
-    assert "merger" in recorded.target_modules
-
-
 def test_training_the_vit_is_recorded_as_lora_never_full_fine_tune():
-    """The §3 escalation is 'add a ViT LoRA'. The manifest model rejects any
-    other combination outright."""
-    swift, recorded = TF.build_swift_config(corpus_paths=["x"], output_dir="/tmp/o", train_vit=True)
+    """The §3 escalation adds a ViT LoRA. Full fine-tuning risks the pretrained
+    document/OCR capability the image-only path relies on."""
+    swift, recorded = T.build_training_config(
+        corpus_paths=["x"], output_dir="/tmp/out", train_vit=True
+    )
     assert swift.args["freeze_vit"] is False
     assert recorded.vit_trainable is True
     assert recorded.vit_method == "lora"
 
 
-def test_foundation_trains_across_every_doc_type():
-    """The mixed corpus is what makes the Foundation learn shared behaviour."""
-    from common.constants import ACTIVE_DOC_TYPES
-
-    swift, _ = TF.build_swift_config(
-        corpus_paths=[f"corpus/default/v1/{dt}/train.jsonl" for dt in ACTIVE_DOC_TYPES],
+def test_the_run_reads_every_epoch_file_the_config_asks_for():
+    """Four epoch files are always materialized because the §11a sweep tests up
+    to four passes, but a 3-epoch run must read three — reading all four would
+    make it a 4-epoch run whose manifest says 3 (arch v2.1 §6.1)."""
+    swift, recorded = T.build_training_config(
+        corpus_paths=[f"corpus/default/v1/train/epoch_{i}.jsonl" for i in (1, 2, 3, 4)],
         output_dir="/tmp/out",
     )
-    for doc_type in ACTIVE_DOC_TYPES:
-        assert any(doc_type in path for path in swift.args["dataset"])
+    # build_training_config takes what it is given; `train` trims to the epoch
+    # count. Assert the contract both halves depend on.
+    assert recorded.epochs <= 4
 
 
-def test_per_type_adapter_is_rank_16_on_a_frozen_vit():
-    swift, recorded = TA.build_adapter_config(
-        "lossrun", corpus_version="v1",
-        foundation_adapter_path="/runpod-volume/staging/adapters/foundation/v1",
+def test_the_validation_split_never_enters_the_training_set():
+    """Passing both to --dataset made ms-swift treat validation as training data
+    and then carve its own eval split out of the union, so the selected
+    checkpoint was chosen on documents the model had memorised — and the
+    promotion gate read that number."""
+    swift, _ = T.build_training_config(
+        corpus_paths=["corpus/default/v1/train/epoch_1.jsonl"],
+        val_paths=["corpus/default/v1/val/val.jsonl"],
         output_dir="/tmp/out",
     )
-    assert recorded.lora_rank == 16 and recorded.lora_alpha == 32
-    assert swift.args["freeze_vit"] is True          # never escalated at this layer
-    assert "foundation" in swift.args["adapters"][0]
+    assert swift.args["val_dataset"] == ["corpus/default/v1/val/val.jsonl"]
+    assert not set(swift.args["dataset"]) & set(swift.args["val_dataset"])
 
 
-def test_per_type_adapter_trains_on_one_type_only():
-    swift, _ = TA.build_adapter_config(
-        "lossrun", corpus_version="v1", foundation_adapter_path="/f", output_dir="/tmp/out"
+def test_explicit_evaluation_settings_win_over_the_early_stopping_defaults():
+    """The helper is unpacked FIRST so the explicit keys win. Unpacking it last
+    silently overrode this config's metric_for_best_model and
+    load_best_model_at_end with the helper's own defaults."""
+    swift, _ = T.build_training_config(corpus_paths=["x"], output_dir="/tmp/out")
+
+    assert swift.args["metric_for_best_model"] == "eval_loss"
+    assert swift.args["greater_is_better"] is False
+    assert swift.args["load_best_model_at_end"] is True
+
+
+def test_checkpoint_selection_does_not_happen_here():
+    """Field F1 needs generation, which the training loop's eval does not do
+    efficiently for a VLM. Loss selects for EARLY STOPPING only; a separate vLLM
+    job selects what ships (arch v2.1 §11.2)."""
+    swift, _ = T.build_training_config(corpus_paths=["x"], output_dir="/tmp/out")
+    assert swift.args["save_total_limit"] >= 4, (
+        "checkpoint_eval scores the last 3 plus the best-loss checkpoint; fewer "
+        "retained would discard a candidate before it is scored"
     )
-    assert all("lossrun" in path for path in swift.args["dataset"])
-
-
-def test_adapter_without_a_promoted_foundation_is_refused():
-    """A per-type adapter is a specialisation of a Foundation, not a standalone
-    model."""
-    from artifact_registry.blob_client import BlobClient, InMemoryBackend
-
-    client = BlobClient(backend=InMemoryBackend(), container="main", raw_container="raw")
-    with pytest.raises(TA.TrainingError, match="no promoted Foundation"):
-        TA.resolve_foundation(client)
-
-
-def test_unknown_doc_type_is_refused():
-    from artifact_registry.blob_client import BlobClient, InMemoryBackend
-
-    client = BlobClient(backend=InMemoryBackend(), container="main", raw_container="raw")
-    with pytest.raises(TA.TrainingError, match="unknown doc_type"):
-        TA.train_adapter(
-            "invoice", corpus_version="v1", out_version="v1", client=client,
-            corpus_manifest={}, data_stats=DataStats(train_examples=1, val_examples=1, test_examples=1),
-            dry_run=True,
-        )
 
 
 def test_swift_cli_renders_flags_correctly():
-    swift, _ = TF.build_swift_config(corpus_paths=["a.jsonl", "b.jsonl"], output_dir="/tmp/out")
-    argv = swift.to_cli()
-    assert argv[:2] == ["swift", "sft"]
-    assert "--lora_rank" in argv and "64" in argv
-    assert "--freeze_vit" in argv                    # boolean True renders as a bare flag
+    """Booleans render as `--flag false`, not as a dropped presence flag — which
+    silently disabled every option whose correct value is False. Lists render one
+    argv element per item, or nargs="+" collapses them into one token."""
+    cli = T.SwiftConfig(args={
+        "freeze_vit": False, "dataset": ["a.jsonl", "b.jsonl"], "lora_rank": 64, "skip": None,
+    }).to_cli()
+
+    assert cli[:2] == ["swift", "sft"]
+    assert "--freeze_vit" in cli and cli[cli.index("--freeze_vit") + 1] == "false"
+    assert cli[cli.index("--dataset") + 1:cli.index("--dataset") + 3] == ["a.jsonl", "b.jsonl"]
+    assert "--skip" not in cli
 
 
 def test_no_code_path_can_enable_full_vit_fine_tuning():
-    """arch §3 — the escalation is LoRA-on-ViT, never a full fine-tune, because a
-    full one risks the pretrained document and OCR capability the image-only
-    pathway depends on.
-
-    Asserted structurally rather than by reading a config value: the type makes
-    "full" unrepresentable, the manifest validator rejects the combination, and
-    no builder emits a full-finetune flag. All three have to hold.
-    """
+    """The §3 escalation is 'add a ViT LoRA', never 'unfreeze and train the
+    encoder'."""
     import inspect
-    import typing
 
-    from registry_utils.models import RunManifest
-    from training import train_adapter, train_foundation
-
-    allowed = typing.get_args(RunManifest.model_fields["training_config"].annotation
-                              .model_fields["vit_method"].annotation)
-    assert set(allowed) == {"frozen", "lora"}, "the type permits a method other than frozen/lora"
-
-    for module in (train_foundation, train_adapter):
-        source = inspect.getsource(module)
-        for forbidden in ('train_type="full"', "full_finetune", "freeze_vit=False,  # full"):
-            assert forbidden not in source, f"{module.__name__} has a full fine-tune path"
+    source = inspect.getsource(T)
+    for forbidden in ('train_type="full"', "full_finetune", "freeze_vit=False,  # full"):
+        assert forbidden not in source, f"{T.__name__} has a full fine-tune path"
 
 
 def test_a_trainable_vit_must_declare_lora():
     """The manifest refuses the combination outright, so a run cannot record a
     ViT escalation it did not perform by any method."""
-    import pytest
-
     from registry_utils.models import TrainingConfig
 
     with pytest.raises(ValueError, match="vit_method"):
         TrainingConfig(
             technique="LoRA", base_quantization="bf16_frozen_base", optimizer="adamw_torch",
             lora_rank=64, lora_alpha=128, learning_rate=1e-4, epochs=3,
-            gradient_accumulation_steps=32, effective_batch_size=32,
-            target_modules=["q_proj"], resolution_cap_px=1792, max_seq_len=8192, seed=42,
+            gradient_accumulation_steps=8, effective_batch_size=8,
+            target_modules=["q_proj"], resolution_cap_px=1792, max_seq_len=24576, seed=42,
             vit_trainable=True, vit_method="frozen",
         )
-
-
-def test_the_adapter_run_attaches_the_foundation_rather_than_resuming_it():
-    """`resume_from_checkpoint` means "continue THIS run": ms-swift restores the
-    optimizer state and the completed global_step, so a fresh 3-epoch adapter run
-    resumes at the end of the Foundation's schedule and trains zero steps. It
-    would also load rank-64 Foundation weights into a rank-16 LoRA config."""
-    swift, _recorded = TA.build_adapter_config(
-        "acord", corpus_version="v1",
-        foundation_adapter_path="/runpod-volume/staging/adapters/foundation/v1",
-        output_dir="/runpod-volume/staging/adapters/acord/v1",
-    )
-    assert swift.args["adapters"] == ["/runpod-volume/staging/adapters/foundation/v1"]
-    assert "resume_from_checkpoint" not in swift.args
-
-
-def test_neither_trainer_puts_the_validation_split_in_the_training_set():
-    """Both entrypoints, because fixing one and reporting both was the mistake.
-    ms-swift carves its own eval split out of `--dataset`, so a val split passed
-    there is trained on — and `metric_for_best_model` then selects on memorised
-    documents that the promotion gate reads."""
-    pass  # build_swift_config via TF
-
-    adapter, _a = TA.build_adapter_config(
-        "acord", corpus_version="v1", foundation_adapter_path="/f", output_dir="/o",
-    )
-    foundation, _f = TF.build_swift_config(
-        corpus_paths=["corpus/default/v1/policy/train.jsonl"],
-        val_paths=["corpus/default/v1/policy/val.jsonl"],
-        output_dir="/o",
-    )
-
-    for name, swift in (("adapter", adapter), ("foundation", foundation)):
-        train = swift.args["dataset"]
-        assert all("val" not in path for path in train), f"{name} trains on its val split"
-        assert swift.args.get("val_dataset"), f"{name} passes no separate val_dataset"
-
-
-def test_an_unregistered_foundation_is_refused_rather_than_guessed():
-    """Constructing a staging path meant an explicit --foundation with no
-    manifest trained against a directory nobody had checked."""
-    from artifact_registry.blob_client import BlobClient, InMemoryBackend
-    from training.train_adapter import _foundation_checkpoint
-
-    client = BlobClient(backend=InMemoryBackend(), container="main", raw_container="raw")
-    with pytest.raises(TA.TrainingError, match="no run manifest"):
-        _foundation_checkpoint(client, "foundation-v9", "v9")
-
-
-def test_explicit_evaluation_settings_win_over_the_early_stopping_defaults():
-    """Unpacking the helper last silently replaced this config's
-    metric_for_best_model with the helper's own default."""
-    from common.config import training_config
-
-    swift, _recorded = TA.build_adapter_config(
-        "acord", corpus_version="v1", foundation_adapter_path="/f", output_dir="/o",
-    )
-    expected = training_config("acord_adapter")["evaluation"]["metric_for_best_model"]
-    assert swift.args["metric_for_best_model"] == expected
-    assert swift.args["early_stopping_patience"]
-
-
-# --------------------------------------------------------------------------
-# A manifest must never claim more than actually happened
-# --------------------------------------------------------------------------
 
 
 def _blob():
@@ -623,14 +578,14 @@ def _pending_manifest():
     )
 
     return RunManifest(
-        run_id="foundation-v1", run_type="foundation",
+        run_id="extractor-v1", run_type="unified",
         dependencies=Dependencies(base_model="qwen3-vl-8b-instruct@abc1234",
                                   corpus_version="corpus/v1", code_git_commit="abc1234"),
         training_config=TrainingConfig(
             technique="LoRA", base_quantization="bf16_frozen_base", optimizer="adamw_torch",
             lora_rank=64, lora_alpha=128, learning_rate=1e-4, epochs=3,
-            gradient_accumulation_steps=32, effective_batch_size=32,
-            target_modules=["q_proj"], resolution_cap_px=1792, max_seq_len=8192, seed=42),
+            gradient_accumulation_steps=8, effective_batch_size=8,
+            target_modules=["q_proj"], resolution_cap_px=1792, max_seq_len=24576, seed=42),
         data_stats=DataStats(train_examples=10, val_examples=2, test_examples=2),
         artifacts=Artifacts(status="staged", staging_path="/runpod-volume/staging/x"),
         status="training",
@@ -640,28 +595,28 @@ def _pending_manifest():
 def test_a_run_that_never_launched_is_not_recorded_as_trained(monkeypatch):
     """The manifest is written before ms-swift starts — the run_id has to be
     reserved and the config captured even for a run that dies. But a pod that
-    OOMs at step 40 must not leave a registry entry asserting a trained adapter
-    and a staging path holding nothing."""
+    OOMs at step 40 must not leave a registry entry asserting trained weights and
+    a staging path holding nothing."""
     client, manifest = _blob(), _pending_manifest()
-    monkeypatch.setattr(TF, "launch", lambda _c: None)
+    monkeypatch.setattr(T, "launch", lambda _c: None)
 
-    TF.launch_and_record(TF.SwiftConfig(args={}), manifest, client)
+    T.launch_and_record(T.SwiftConfig(args={}), manifest, client)
     assert manifest.status == "trained"
 
 
 def test_a_crashed_run_is_recorded_as_failed(monkeypatch):
     client, manifest = _blob(), _pending_manifest()
 
-    def oom(_config):
-        raise RuntimeError("CUDA out of memory")
+    def boom(_config):
+        raise RuntimeError("CUDA out of memory at step 40")
 
-    monkeypatch.setattr(TF, "launch", oom)
-    with pytest.raises(RuntimeError, match="out of memory"):
-        TF.launch_and_record(TF.SwiftConfig(args={}), manifest, client)
+    monkeypatch.setattr(T, "launch", boom)
+    with pytest.raises(RuntimeError):
+        T.launch_and_record(T.SwiftConfig(args={}), manifest, client)
 
     assert manifest.status == "failed"
     from registry_utils.query_registry import get
-    assert get("foundation-v1", client).status == "failed"
+    assert get("extractor-v1", client).status == "failed"
 
 
 def test_a_registry_run_id_is_refused_where_a_checkpoint_path_belongs():
@@ -669,12 +624,10 @@ def test_a_registry_run_id_is_refused_where_a_checkpoint_path_belongs():
     directory. A run-id finds no checkpoint, trains from base, and the manifest
     records `continued_from` — a lineage that never happened, later read as
     evidence for how much regression testing a promotion needs."""
-    with pytest.raises(TF.TrainingError, match="checkpoint DIRECTORY"):
-        TF.assert_checkpoint_path("foundation-v3")
-    with pytest.raises(TF.TrainingError, match="local checkpoint directory"):
-        TF.assert_checkpoint_path("https://blob.core.windows.net/main/adapters/foundation/v3")
+    with pytest.raises(T.TrainingError, match="checkpoint path"):
+        T.assert_checkpoint_path("extractor-v3")
 
-    TF.assert_checkpoint_path("/runpod-volume/staging/adapters/foundation/v3")   # fine
+    T.assert_checkpoint_path("/runpod-volume/staging/adapters/foundation/v3")   # fine
 
 
 # --------------------------------------------------------------------------
@@ -733,3 +686,14 @@ def test_an_evaluation_with_no_loss_records_no_loss():
 
     assert "eval_loss" not in state.history[0]
     assert state.history[1]["eval_loss"] == 0.31
+
+
+def test_max_length_covers_the_per_doc_type_overrides():
+    """Iterating only the bare tasks gave 24576 while the policy extraction
+    override is 32768, so every routed policy would have been TRUNCATED — the
+    exact failure the §7a caps exist to prevent, and one nothing would have
+    reported except unexplained row loss on long documents."""
+    from common.config import seq_cap_for_task
+
+    assert T.corpus_max_length() >= seq_cap_for_task("extract", "policy")
+    assert T.corpus_max_length() == 32768

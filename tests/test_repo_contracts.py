@@ -155,7 +155,7 @@ def test_no_secret_value_is_committed_in_the_template():
 #: and a config missing one silently takes a library default instead.
 REQUIRED_TRAINING_PARAMS: dict[str, tuple[str, ...]] = {
     "optimization": (
-        "learning_rate", "lr_scheduler_type", "warmup_ratio", "num_train_epochs",
+        "learning_rate", "lr_scheduler_type", "num_train_epochs",
         "optim", "adam_beta1", "adam_beta2", "adam_epsilon", "weight_decay", "max_grad_norm",
     ),
     "batch": (
@@ -164,7 +164,9 @@ REQUIRED_TRAINING_PARAMS: dict[str, tuple[str, ...]] = {
     "lora": ("rank", "alpha", "dropout", "target_modules", "bias"),
 }
 
-TRAINING_CONFIGS = ("foundation", "acord_adapter", "policy_adapter", "lossrun_adapter")
+#: ONE config under arch v2.1 §4.1. `per_type_adapter` exists but is reachable
+#: only through the §4.2 graduation gate, so it is not a launch-path config.
+TRAINING_CONFIGS = ("unified",)
 
 
 @pytest.mark.parametrize("name", TRAINING_CONFIGS)
@@ -180,41 +182,101 @@ def test_training_config_carries_every_specified_parameter(name: str):
         )
 
 
-@pytest.mark.parametrize("name", TRAINING_CONFIGS)
-def test_learning_rate_is_inside_the_specified_range(name: str):
-    """Foundation 1e-4..2e-4; per-type 5e-5..1e-4, lower because it builds on a
-    stable base."""
-    config = load_yaml(ROOT / "configs" / "training" / f"{name}.yaml")
-    lr = float(config["optimization"]["learning_rate"])
-    low, high = (1e-4, 2e-4) if name == "foundation" else (5e-5, 1e-4)
-    assert low <= lr <= high, f"{name}.yaml learning_rate {lr} is outside {low}..{high} (arch §11)"
+def test_there_is_exactly_one_launch_path_training_config():
+    """v1 shipped four — a Foundation plus one per document type — and they
+    drifted. The topology that needed them is gone: vLLM applies one LoRA per
+    request, so a Foundation and a per-type adapter could never both be active
+    (arch v2.1 §4.1)."""
+    configs = {p.stem for p in (ROOT / "configs" / "training").glob("*.yaml")}
+    assert configs <= {"unified", "per_type_adapter", "sweep"}, (
+        f"unexpected training configs: {sorted(configs - {'unified', 'per_type_adapter', 'sweep'})}"
+    )
+    assert "unified" in configs
 
 
-@pytest.mark.parametrize("name", TRAINING_CONFIGS)
-def test_epochs_are_inside_the_specified_range(name: str):
-    config = load_yaml(ROOT / "configs" / "training" / f"{name}.yaml")
-    epochs = int(config["optimization"]["num_train_epochs"])
-    low, high = (2, 3) if name == "foundation" else (3, 5)
-    assert low <= epochs <= high, f"{name}.yaml epochs {epochs} is outside {low}..{high}"
+def test_the_learning_rate_is_the_v2_1_value():
+    """1e-4. v1 ran the Foundation at 2e-4, which is aggressive for ~25 documents
+    per type and a rank-64 adapter (arch v2.1 §11.1)."""
+    config = load_yaml(ROOT / "configs" / "training" / "unified.yaml")
+    assert float(config["optimization"]["learning_rate"]) == 1.0e-4
 
 
-@pytest.mark.parametrize("name", TRAINING_CONFIGS)
-def test_effective_batch_is_inside_the_specified_range(name: str):
-    config = load_yaml(ROOT / "configs" / "training" / f"{name}.yaml")
-    size = int(config["batch"]["effective_batch_size"])
-    low, high = (32, 64) if name == "foundation" else (16, 32)
-    assert low <= size <= high, f"{name}.yaml effective_batch_size {size} is outside {low}..{high}"
+def test_warmup_is_counted_in_steps_not_a_ratio():
+    """At pilot volume a 0.03 ratio over a handful of steps rounds to zero
+    warmup, and the first optimizer step lands at full learning rate on a
+    freshly-initialised adapter (arch v2.1 §11.1)."""
+    optimization = load_yaml(ROOT / "configs" / "training" / "unified.yaml")["optimization"]
+    assert "warmup_steps" in optimization
+    assert "warmup_ratio" not in optimization
 
 
-@pytest.mark.parametrize("name", TRAINING_CONFIGS)
-def test_the_memory_settings_are_identical_everywhere(name: str):
-    """A config that quietly differs trains a different model from the one the
-    manifest describes."""
-    config = load_yaml(ROOT / "configs" / "training" / f"{name}.yaml")
+def test_weight_decay_is_zero_on_a_low_rank_adapter():
+    """Decay pulls B toward zero, which is where it starts — a shrinkage prior on
+    the update itself, not the regularisation it is on a full fine-tune. Dropout
+    does that job here (arch v2.1 §11.1)."""
+    optimization = load_yaml(ROOT / "configs" / "training" / "unified.yaml")["optimization"]
+    assert float(optimization["weight_decay"]) == 0.0
+    assert float(load_yaml(ROOT / "configs" / "training" / "unified.yaml")["lora"]["dropout"]) >= 0.05
+
+
+def test_the_effective_batch_is_small_enough_to_produce_updates():
+    """At ~25 documents per type an effective batch of 32 is most of an epoch in
+    one step, so a run sees a handful of updates and the cosine schedule never
+    gets anywhere (arch v2.1 §11.1)."""
+    batch = load_yaml(ROOT / "configs" / "training" / "unified.yaml")["batch"]
+    assert int(batch["effective_batch_size"]) <= 8
+
+
+def test_the_mergers_are_not_a_lora_target():
+    """A reversal of v1, which appended "merger" to the target list. Tower and
+    connector LoRA in vLLM is experimental with known mixed-adapter batching
+    risks, and arbitration is learned in the DECODER, where image tokens and OCR
+    text tokens attend to each other — the mergers never see OCR text at all
+    (arch v2.1 §9a)."""
+    lora = load_yaml(ROOT / "configs" / "training" / "unified.yaml")["lora"]
+    assert lora["include_vision_projector"] is False
+    assert "merger" not in lora["target_modules"]
+    assert set(lora["target_modules"]) == {
+        "q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"
+    }
+
+
+def test_the_memory_settings_that_make_the_largest_cap_affordable_are_on():
+    """Without use_logits_to_keep the LM head produces a 151k-vocabulary
+    distribution at every position of a 32k sequence, which dominates activation
+    memory on its own (arch v2.1 §9.3)."""
+    config = load_yaml(ROOT / "configs" / "training" / "unified.yaml")
     assert config["batch"]["gradient_checkpointing"] is True
-    # The config expresses arch §11's "mixed precision: bf16" as a bf16 flag,
-    # which is what the trainer flag actually is.
     assert config["batch"]["bf16"] is True
+    memory = config["memory"]
+    assert memory["use_logits_to_keep"] is True
+    assert memory["padding_free"] is True
+    assert memory["length_grouped_sampling"] is True
+
+
+def test_deepspeed_is_not_the_first_reach_for_vram():
+    """Under LoRA, ZeRO-2 shards ~1.5GB of adapter optimizer state and is close
+    to a no-op. Sequence parallelism comes first (arch v2.1 §9.3)."""
+    distributed = load_yaml(ROOT / "configs" / "training" / "unified.yaml")["distributed"]
+    assert distributed["deepspeed_config"] is None
+    assert "sequence_parallel_size" in distributed
+
+
+def test_checkpoint_retention_covers_what_the_selector_scores():
+    """checkpoint_eval generates over the last 3 checkpoints plus the best-loss
+    one, so fewer than 4 would discard a candidate before it is scored
+    (arch v2.1 §11.2)."""
+    evaluation = load_yaml(ROOT / "configs" / "training" / "unified.yaml")["evaluation"]
+    assert int(evaluation["save_total_limit"]) >= 4
+
+
+def test_early_stopping_selects_on_loss_and_says_so():
+    """Field F1 needs generation, which the training loop's eval does not do
+    efficiently for a VLM. Loss here is for early stopping only — a separate vLLM
+    job selects what ships (arch v2.1 §11.2)."""
+    evaluation = load_yaml(ROOT / "configs" / "training" / "unified.yaml")["evaluation"]
+    assert evaluation["metric_for_best_model"] == "eval_loss"
+    assert evaluation["greater_is_better"] is False
 
 
 def test_the_base_is_held_in_bf16_by_default():

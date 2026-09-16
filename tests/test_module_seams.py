@@ -174,48 +174,41 @@ def test_greater_is_better_is_read_rather_than_hardcoded():
     assert args["metric_for_best_model"] == "eval_loss"
 
 
-@pytest.mark.parametrize("which", ["foundation", "adapter"])
-def test_both_trainers_honour_their_yaml_over_the_helper_defaults(which):
+def test_the_trainer_honours_its_yaml_over_the_helper_defaults():
     """The fixed-one-of-two check. This ordering bug was fixed in train_adapter
     and left standing in train_foundation, exactly as the val-split leak had
-    been — twice is a pattern, so it gets a test covering both.
+    been — twice was a pattern, so it keeps a test now that both have collapsed
+    into one trainer.
     """
     from common.config import training_config
-    from training import train_adapter as TA
-    from training import train_foundation as TF
+    from training import train as T
 
-    if which == "foundation":
-        config_name = "foundation"
-        swift, _ = TF.build_swift_config(
-            corpus_paths=["c/train.jsonl"], val_paths=["c/val.jsonl"], output_dir="/o")
-    else:
-        config_name = "acord_adapter"
-        swift, _ = TA.build_adapter_config(
-            "acord", corpus_version="v1", foundation_adapter_path="/f", output_dir="/o")
+    swift, _ = T.build_training_config(
+        corpus_paths=["c/train/epoch_1.jsonl"], val_paths=["c/val/val.jsonl"], output_dir="/o")
 
-    evaluation = training_config(config_name)["evaluation"]
+    evaluation = training_config("unified")["evaluation"]
     for key in ("metric_for_best_model", "load_best_model_at_end"):
         assert swift.args[key] == evaluation[key], (
-            f"the {which} trainer emits {key}={swift.args[key]!r} while its YAML says "
+            f"the trainer emits {key}={swift.args[key]!r} while its YAML says "
             f"{evaluation[key]!r} — the helper's default is winning"
         )
     assert swift.args["greater_is_better"] == evaluation.get("greater_is_better", True)
 
 
-def test_neither_trainer_trains_on_its_validation_split():
-    """Kept alongside the test above, for the same reason."""
-    from training.train_adapter import build_adapter_config
-    from training.train_foundation import build_swift_config
+def test_the_trainer_does_not_train_on_its_validation_split():
+    """Kept alongside the test above, for the same reason. Passing both to
+    --dataset made ms-swift treat validation as training data and carve its own
+    eval split out of the union, so the selected checkpoint was chosen on
+    documents the model had memorised."""
+    from training.train import build_training_config
 
-    adapter, _ = build_adapter_config(
-        "acord", corpus_version="v1", foundation_adapter_path="/f", output_dir="/o")
-    foundation, _ = build_swift_config(
-        corpus_paths=["corpus/default/v1/policy/train.jsonl"],
-        val_paths=["corpus/default/v1/policy/val.jsonl"], output_dir="/o")
+    swift, _ = build_training_config(
+        corpus_paths=["corpus/default/v1/train/epoch_1.jsonl"],
+        val_paths=["corpus/default/v1/val/val.jsonl"], output_dir="/o")
 
-    for name, swift in (("adapter", adapter), ("foundation", foundation)):
-        assert all("val" not in p for p in swift.args["dataset"]), f"{name} trains on val"
-        assert swift.args.get("val_dataset"), f"{name} passes no val_dataset"
+    assert not set(swift.args["dataset"]) & set(swift.args["val_dataset"])
+    assert all("/val/" not in path for path in swift.args["dataset"])
+    assert swift.args.get("val_dataset"), "no val_dataset was passed at all"
 
 
 # --------------------------------------------------------------------------
@@ -359,10 +352,11 @@ def test_the_checkpoint_guard_covers_the_run_ids_this_repo_generates():
     every {type}-adapter-v{n} slipped past, trained from base, and recorded a
     lineage that never happened.
     """
-    from training.train_foundation import TrainingError, assert_checkpoint_path
+    from training.train import TrainingError, assert_checkpoint_path
 
-    for run_id in ("foundation-v3", "foundation-v2.1", "policy-adapter-v1", "acord-adapter-v2.3"):
-        with pytest.raises(TrainingError, match="checkpoint DIRECTORY"):
+    for run_id in ("extractor-v3", "extractor-v2.1", "foundation-v3",
+                   "policy-adapter-v1", "acord-adapter-v2.3"):
+        with pytest.raises(TrainingError, match="checkpoint path"):
             assert_checkpoint_path(run_id)
 
     assert_checkpoint_path("/runpod-volume/staging/adapters/foundation/v3")

@@ -68,7 +68,7 @@ def serving_config() -> dict[str, Any]:
 
 @cache
 def training_config(name: str) -> dict[str, Any]:
-    """Load ``configs/training/{name}.yaml`` (``foundation``, ``acord_adapter``, …)."""
+    """Load ``configs/training/{name}.yaml`` (``unified``, ``per_type_adapter``)."""
     return load_yaml(CONFIG_DIR / "training" / f"{name}.yaml")
 
 
@@ -271,8 +271,10 @@ def validate_all(*, require_pinned_revision: bool = False) -> None:
     resolution_cap_px()
     assert_resolution_parity()
     assert_task_budgets_are_coherent()
-    for name in ("foundation", "acord_adapter", "policy_adapter", "lossrun_adapter"):
-        assert_effective_batch(training_config(name))
+    # One config under arch v2.1 §4.1. The per-type config exists but is only
+    # reached through the §4.2 graduation gate, so it is validated when it is
+    # used rather than on every launch.
+    assert_effective_batch(training_config("unified"))
     if require_pinned_revision:
         assert_model_revision_pinned()
 
