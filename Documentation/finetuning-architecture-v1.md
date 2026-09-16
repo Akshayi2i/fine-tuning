@@ -1,3 +1,24 @@
+> # ⚠ SUPERSEDED BY v2.1
+>
+> **This document is historical.** The current architecture is
+> **`finetuning-architecture-v2.1.docx`**, and the codebase implements that one.
+>
+> Kept because the v2.1 revision tables reference what v1 said and why it
+> changed — a decision log is worth less without the decision it reversed.
+> **Do not implement from this file.** Its central claims are no longer true:
+>
+> | v1 said | v2.1 |
+> |---|---|
+> | Foundation LoRA + per-type adapters stacked | ONE unified LoRA, merged. vLLM applies one LoRA per request, so the stack was unservable |
+> | `max_seq_len: 8192` for everything | Per-task caps, 4k–32k. 8192 could not hold a one-page ACORD with its schema, image, OCR and output |
+> | LoRA on the vision projector (`merger`) | ViT **and** mergers frozen; arbitration is learned in the decoder |
+> | Gate: beat previous on every metric within 0.001, no override | Absolute floors + paired-bootstrap non-inferiority + a named, recorded override |
+> | Confidence: minimum token logprob, threshold 0.70 | Per-field-type feature calibrators, thresholds tied to a measured error bound |
+> | Split at `source_id` | Split at group level — carrier, template, account |
+> | GGUF (`q5_k_m`) as the serving target | bf16 → FP8 on vLLM; GGUF is an edge export |
+> | Trainer: TRL `SFTTrainer` | ms-swift's own `Seq2SeqTrainer` on the HF Trainer — v1 was simply wrong about this |
+> | 11 pipeline stages, gate before merge | 13 stages, gate after merge/quantize/calibrate |
+
 - [Qwen3-VL-8B-Instruct Fine-Tuning Architecture](#qwen3-vl-8b-instruct-fine-tuning-architecture)
   - [Insurance Document Extraction (ACORD, Policy, Loss Run)](#insurance-document-extraction-acord-policy-loss-run)
   - [0. Pipeline Integration and Schema Contract](#pipeline-integration-and-schema-contract)
