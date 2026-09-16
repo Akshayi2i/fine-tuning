@@ -1,5 +1,5 @@
 {
-  "_comment": "ZeRO-3: also shards model weights. Use only when VRAM-constrained - it adds communication overhead and slows training relative to ZeRO-2.",
+  "_comment": "ZeRO-3: also shards model weights, which under LoRA is the ONLY stage that saves meaningful VRAM - the base is ~16GB in bf16 and the adapter optimizer state is ~1.5GB. Two GPUs put ~8GB of base on each, better headroom than holding the whole base in 4-bit on one. This is a real option only because the base is bf16 (arch 9): bitsandbytes 4-bit params do not partition cleanly under stage 3, which is why QLoRA made this escape hatch awkward to actually use. Costs communication overhead and is slower per step than ZeRO-2.",
   "bf16": {"enabled": true},
   "zero_optimization": {
     "stage": 3,

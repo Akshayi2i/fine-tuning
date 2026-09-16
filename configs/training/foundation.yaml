@@ -27,7 +27,15 @@ optimization:
   lr_scheduler_type: "cosine"
   warmup_ratio: 0.03          # range 0.03 to 0.05
   num_train_epochs: 3         # range 2 to 3
-  optim: "paged_adamw_8bit"   # paged: survives the memory spikes from long sequences
+  # Plain AdamW, fp32 states. Under bf16 LoRA (arch 9) only ~150-200M params
+  # train at rank 64, so exact optimizer state costs ~1.4GB instead of ~0.35GB
+  # for 8-bit - affordable, and it removes a second quantization approximation
+  # from the loop. The old `paged_adamw_8bit` was a bitsandbytes QLoRA-ism whose
+  # stated rationale ("survives memory spikes from long sequences") did not hold:
+  # paging protects OPTIMIZER STATE, while the long-sequence spikes here are
+  # activation and logit spikes, which a paged optimizer does not touch.
+  # Switch to "paged_adamw_8bit" only alongside load_in_4bit on a tight pod.
+  optim: "adamw_torch"
   adam_beta1: 0.9
   adam_beta2: 0.999
   adam_epsilon: 1.0e-8

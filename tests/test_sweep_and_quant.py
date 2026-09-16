@@ -50,6 +50,7 @@ def _untagged_manifest(run_id: str) -> RunManifest:
             code_git_commit="abc1234",
         ),
         training_config=TrainingConfig(
+            technique="LoRA", base_quantization="bf16_frozen_base", optimizer="adamw_torch",
             lora_rank=64, lora_alpha=128, learning_rate=1e-4, epochs=3,
             gradient_accumulation_steps=32, effective_batch_size=32,
             target_modules=["q_proj"], resolution_cap_px=1792, max_seq_len=8192, seed=42,

@@ -1,5 +1,5 @@
 {
-  "_comment": "ZeRO-2: shards optimizer state and gradients across GPUs. Default choice - lower communication overhead than ZeRO-3 and sufficient for an 8B base held in 4-bit.",
+  "_comment": "ZeRO-2: shards optimizer state and gradients across GPUs. Default choice - lowest communication overhead. Note what it does NOT do: it never shards base weights, at any precision, so the previous claim that it was 'sufficient for an 8B base held in 4-bit' misattributed the saving. Under LoRA it shards ~1.5GB of adapter optimizer state and is close to a no-op; it is the default because it is cheap, not because it rescues VRAM. When VRAM is the constraint, ZeRO-3 is the lever - see zero3.json.",
   "bf16": {"enabled": true},
   "zero_optimization": {
     "stage": 2,

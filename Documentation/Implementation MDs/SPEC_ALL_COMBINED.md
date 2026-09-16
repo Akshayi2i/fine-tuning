@@ -55,7 +55,7 @@ The previous spec set cited the old architecture numbering. Everything has been 
 | Corpus management + split strategy | §7 | **§8** |
 | MinerU version pinning | *(did not exist)* | **§8a** |
 | Multi-tenant corpus isolation | *(did not exist)* | **§8b** |
-| QLoRA technique | §8 | **§9** |
+| Fine-tuning technique (LoRA on a bf16 base) | §8 | **§9** |
 | LoRA target-module justification | *(did not exist)* | **§9a** |
 | Trainer stack | §9 | **§10** |
 | Hyperparameters | §10 | **§11** |
@@ -151,7 +151,7 @@ The same real-world field appears under many surface labels across documents. Th
 | Decision | Value |
 |---|---|
 | Base model | `Qwen/Qwen3-VL-8B-Instruct`, pinned HF revision |
-| Fine-tuning technique | **QLoRA** — 4-bit NF4 base, **double quantization**, bf16 compute, LoRA adapters in bf16 |
+| Fine-tuning technique | **LoRA on a bf16 base** — bf16 frozen base weights, LoRA adapters in bf16. Both serving paths hold the base in bf16/fp16 (merged model per SPEC_10, vLLM LoRA hot-swap per SPEC_11), so training in bf16 means the adapter is applied to exactly the weights it trained against. **4-bit NF4 QLoRA remains a live flag** (`quantization.load_in_4bit`) for VRAM-constrained pods — arch §9.2 |
 | Trainable components | **Projector + LLM decoder** via LoRA. **Vision Encoder (ViT) frozen by default** — escalated only via the eval gate (arch §3). **When the ViT is trained it gets a LoRA — never a full fine-tune** (arch §3). |
 | Adapter strategy | **Hybrid**: one shared **Foundation LoRA** (rank 64, alpha 128) trained across all doc types + all 3 modality regimes, then small **per-type LoRA** adapters (rank 16, alpha 32) stacked on top. |
 | Trainer stack | **Layer 3 ms-swift** (what you invoke) → **Layer 2 TRL `SFTTrainer`** (the real loop) → **Layer 1 PyTorch/Transformers/PEFT/bitsandbytes/Accelerate+DeepSpeed**. Locked, one option per layer (arch §10). |
@@ -289,7 +289,7 @@ SPEC_02  Azure Blob I/O + training run registry                (deps: 01)
 SPEC_03  Ingestion + MinerU OCR (+ version pinning)            (deps: 01, 02)
 SPEC_04  Labeling + golden JSON + day-zero bootstrap gate      (deps: 01, 02, 03)
 SPEC_05  Dataset builder (JSONL, modality, split)              (deps: 01, 02, 04)
-SPEC_06  Training (ms-swift QLoRA, foundation + adapters)      (deps: 01, 02, 05)
+SPEC_06  Training (ms-swift LoRA, foundation + adapters)       (deps: 01, 02, 05)
 SPEC_07  Inference core (shared model-runner primitive)        (deps: 01, 02)
 SPEC_08  Evaluation (metrics + gating)                         (deps: 01, 02, 06, 07)
 SPEC_09  Confidence calibration                                (deps: 01, 02, 07, 08)
@@ -509,7 +509,7 @@ Scaffold the `insurance-extraction-finetuning` repo and create every config file
 - `.gitignore` — Python, `.env`, model weights, `*.pdf`, `results/`, `metrics/`, `ocr_cache/`, `calibration_store/`, `__pycache__`.
 
 ### 2. `configs/`
-- **`base_model.yaml`** — `model_id: Qwen/Qwen3-VL-8B-Instruct`, `revision: <pin>`, quantization block (**4-bit NF4, double quantization, bf16 compute**), `attn_implementation: flash_attention_2`, resolution cap (`max_image_long_side_px: 1792`, valid range 1536–2048 per arch §11), `max_seq_len` (comment: **set from the 95th-percentile token count measured on the real corpus**, not guessed).
+- **`base_model.yaml`** — `model_id: Qwen/Qwen3-VL-8B-Instruct`, `revision: <pin>`, quantization block (**`load_in_4bit: false` by default — the base is held in bf16**; the `bnb_4bit_*` keys stay populated so flipping the flag on a VRAM-constrained pod needs no other edit, and are read only when it is true, per arch §9.2), `attn_implementation: flash_attention_2`, resolution cap (`max_image_long_side_px: 1792`, valid range 1536–2048 per arch §11), `max_seq_len` (comment: **set from the 95th-percentile token count measured on the real corpus**, not guessed).
 - **`configs/training/foundation.yaml`** — the full parameter set from arch §11, not just the summary:
   - LoRA: rank 64, alpha 128, dropout 0.05, `bias: none`, target modules from master §2.
   - Optimization: LR `2e-4` (range 1e-4–2e-4), cosine schedule, warmup ratio 0.03–0.05, epochs 3 (range 2–3), **optimizer AdamW paged 8-bit**, β₁ 0.9, β₂ 0.999, ε 1e-8, weight decay 0.01, max grad norm 1.0.
@@ -703,7 +703,7 @@ Pydantic model `RunManifest` capturing the arch §12 manifest **plus the v1 addi
   - `code_git_commit`
   - **`mineru_version`** (arch §8a)
   - **`schema_version`** and **`prompt_template_version`** (arch §7)
-- `training_config`: technique, lora_rank/alpha/dropout, bias, base quantization (`nf4`, double-quant, bf16 compute), lr, lr_scheduler, warmup_ratio, epochs, optimizer (`adamw_paged_8bit`), betas, eps, weight_decay, max_grad_norm, per_device_batch, grad_accum, effective_batch_size, gradient_checkpointing, mixed_precision, target_modules, **`vit_trainable`** (and, when true, that it is **LoRA-on-ViT, never full fine-tune** — arch §3), resolution_cap_px, max_seq_len, **`seed`**.
+- `training_config`: **`technique` (`LoRA` | `QLoRA`) and `base_quantization` (`bf16_frozen_base`, or `<quant_type>_<double|single>_quant_<dtype>_compute` under 4-bit) — both REQUIRED, never defaulted**. They previously carried QLoRA/NF4 defaults on the model, so a bf16 run that did not pass them recorded a technique it never used; base precision is exactly the kind of change that causes a regression, and the manifest is what makes one attributable. Then lora_rank/alpha/dropout, bias, lr, lr_scheduler, warmup_ratio, epochs, **optimizer (`adamw_torch`, also required)**, betas, eps, weight_decay, max_grad_norm, per_device_batch, grad_accum, effective_batch_size, gradient_checkpointing, mixed_precision, target_modules, **`vit_trainable`** (and, when true, that it is **LoRA-on-ViT, never full fine-tune** — arch §3), resolution_cap_px, max_seq_len, **`seed`**.
 - `data_stats`: train/val/test counts, `modality_mix`, **`lob_coverage`** (per-LoB-value share, arch §0b), `tenant_ids` contributing, `deidentified: true|false` (recorded; the enforcement rule is **suspended while de-identification is blocked** — see SPEC_00 §8 and SPEC_05).
 - `eval_metrics` (all against the frozen golden eval set, arch §15):
   `field_exact_match`, `field_normalized_match`, `field_f1_list_fields`, `list_field_recall`, `schema_validity_rate`, `ece_confidence`, `ocr_arbitration_accuracy`, `image_only_accuracy`, `scanned_accuracy`, `doc_type_classifier_accuracy`, **`lob_detection_accuracy`** (overall **and per LoB value**), `latency_ms_per_doc`.
@@ -1166,15 +1166,15 @@ Writes `manifest.json` per corpus version — this is what training and eval rea
 
 # SPEC_06_training
 
-# SPEC 06 — Training (ms-swift QLoRA: Foundation + Per-Type Adapters)
+# SPEC 06 — Training (ms-swift LoRA: Foundation + Per-Type Adapters)
 
 > Read `SPEC_00_MASTER_CONTEXT.md` first. Dependencies: SPEC_01, SPEC_02, SPEC_05.
 >
-> **Architecture refs:** `finetuning-architecture-v1.md` §3 (ViT escalation gate — **LoRA, never full FT**), §4 (adapter strategy), §8b (tenancy per Fideon SPEC_12; de-identification per Fideon SPEC_11 — blocked, see SPEC_05), §9/§9a (QLoRA, LoRA targets), §10 (**locked three-layer trainer stack**), §11 (full hyperparameter spec), §11a (**sweep methodology**), §12 (versioning + run registry).
+> **Architecture refs:** `finetuning-architecture-v1.md` §3 (ViT escalation gate — **LoRA, never full FT**), §4 (adapter strategy), §8b (tenancy per Fideon SPEC_12; de-identification per Fideon SPEC_11 — blocked, see SPEC_05), **§9.2 (bf16 base vs 4-bit — the decision and its open measurement)**, §9a (LoRA targets), §10 (**locked three-layer trainer stack**), §11 (full hyperparameter spec), §11a (**sweep methodology**), §12 (versioning + run registry).
 
 ## Goal
 
-Fine-tune Qwen3-VL-8B-Instruct with QLoRA via the locked trainer stack. Train the shared Foundation LoRA and the per-type adapters on top, freezing the ViT by default with a gated escalation path, and record every run — sweeps included — in the registry.
+Fine-tune Qwen3-VL-8B-Instruct with **LoRA on a bf16 base** via the locked trainer stack. Train the shared Foundation LoRA and the per-type adapters on top, freezing the ViT by default with a gated escalation path, and record every run — sweeps included — in the registry.
 
 ## The locked stack (arch §10) — not a choice to re-make
 
@@ -1199,7 +1199,7 @@ Entrypoint that:
 - Pulls the base model and the corpus version from Blob (SPEC_02).
 - Reads the corpus manifest's `deidentified` flag and records it. **The hard assertion is suspended while de-identification is blocked** (SPEC_00 §8, SPEC_05 §1); reinstate it here and in SPEC_02 once the image-redaction question is resolved.
 - Loads `configs/training/foundation.yaml` + `configs/base_model.yaml`.
-- Configures **QLoRA**: 4-bit NF4 base with **double quantization**, bf16 compute, bf16 LoRA adapters (rank 64 / alpha 128 / dropout 0.05, `bias: none`), target modules = attention + MLP projections **+ the vision-language projector**, **ViT frozen** (`train_vit: false`), `flash_attention_2`.
+- Configures **base precision from `training/base_precision.py`** — one helper shared by both trainers, so a Foundation and the adapters stacked on it cannot hold the base differently. Default is a **bf16 frozen base** (`quantization_bit: 0`, passed explicitly rather than omitted, and the `bnb_4bit_*` arguments suppressed entirely so the run log never carries settings describing nothing the run did). Setting `load_in_4bit: true` switches to 4-bit NF4 with double quantization and bf16 compute. Then bf16 LoRA adapters (rank 64 / alpha 128 / dropout 0.05, `bias: none`), target modules = attention + MLP projections **+ the vision-language projector**, **ViT frozen** (`train_vit: false`), `flash_attention_2`.
 - Applies the full arch §11 parameter set — AdamW paged 8-bit, cosine schedule with warmup, max grad norm 1.0, gradient checkpointing, effective batch via accumulation, resolution cap and `max_seq_len` from config.
 - Launches **ms-swift** SFT (which runs TRL `SFTTrainer` underneath) with DeepSpeed (ZeRO-2 default, ZeRO-3 when VRAM-constrained).
 - Trains across **ALL doc types + ALL 3 modality regimes** — the mixed corpus is what makes the Foundation learn shared behavior (insurance terminology, table/checkbox reading, OCR-vs-image arbitration, JSON structural discipline).
@@ -1715,7 +1715,7 @@ Training (ephemeral pod)              Serving (persistent endpoint)
 ─────────────────────────             ─────────────────────────────
 clone repo @ commit                   vLLM + promoted model
 pull base + corpus (Blob)                     │
-run QLoRA training                    request ──> classify doc type
+run LoRA training                     request ──> classify doc type
 push adapter + manifest (Blob)                │
 terminate                             select + hot-swap adapter
                                               │
@@ -2147,7 +2147,7 @@ The 11 stages (arch §13) as reusable, individually addressable stage functions 
 | 2 | **Preprocessing (GPU)** — MinerU OCR + page rendering at the resolution cap | `finetune` | `processed/` (Blob) |
 | 3 | **Labeling** — human review | *(outside the CLI)* | `golden-labels/` (Blob) |
 | 4 | **Dataset build** — compile JSONL, inject schema, modality split, train/val/test split | `finetune` | `corpus/v{n}/` (Blob) |
-| 5 | **Training** — QLoRA, Foundation then per-type | `finetune` | staging volume |
+| 5 | **Training** — LoRA on a bf16 base, Foundation then per-type | `finetune` | staging volume |
 | 6 | **Evaluation & gate** — frozen golden eval set | `finetune` | staging volume + manifest |
 | 7 | **Merge** — PEFT `merge_and_unload()` | `finetune` | staging volume |
 | 8 | **Quantize** — GGUF export | `package` | staging volume |

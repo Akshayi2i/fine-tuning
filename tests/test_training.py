@@ -356,17 +356,71 @@ def test_improvement_resets_patience():
 # Training configuration
 # --------------------------------------------------------------------------
 
-def test_foundation_config_is_qlora_with_a_frozen_vit():
+def test_foundation_config_is_bf16_lora_with_a_frozen_vit():
+    """The arch §9 default: LoRA on a bf16 base, not QLoRA. Both serving paths
+    hold the base in bf16/fp16, so training in bf16 means the adapter is applied
+    to exactly the weights it trained against."""
     swift, recorded = TF.build_swift_config(
         corpus_paths=["corpus/default/v1/policy/train.jsonl"], output_dir="/tmp/out"
     )
-    assert swift.args["quantization_bit"] == 4
-    assert swift.args["bnb_4bit_quant_type"] == "nf4"
-    assert swift.args["bnb_4bit_use_double_quant"] is True
+    assert swift.args["quantization_bit"] == 0
+    # Emitted only under 4-bit: a bnb setting in the rendered command line of a
+    # bf16 run would describe nothing the run did.
+    assert "bnb_4bit_quant_type" not in swift.args
+    assert "bnb_4bit_use_double_quant" not in swift.args
     assert swift.args["freeze_vit"] is True
+    assert recorded.technique == "LoRA"
+    assert recorded.base_quantization == "bf16_frozen_base"
     assert recorded.vit_trainable is False
     assert recorded.vit_method == "frozen"
     assert recorded.lora_rank == 64 and recorded.lora_alpha == 128
+
+
+def test_four_bit_is_a_live_flag_not_a_hardcoded_constant(monkeypatch):
+    """`load_in_4bit` sat in the YAML being read by nothing while both trainers
+    hardcoded `quantization_bit: 4`, so the QLoRA-vs-LoRA decision could not be
+    A/B'd without a code change — and the manifest recorded a value that had no
+    effect on the run."""
+    base = TF.base_model_config()
+    quantized = {**base, "quantization": {**base["quantization"], "load_in_4bit": True}}
+    monkeypatch.setattr(TF, "base_model_config", lambda: quantized)
+
+    swift, recorded = TF.build_swift_config(corpus_paths=["x"], output_dir="/tmp/out")
+
+    assert swift.args["quantization_bit"] == 4
+    assert swift.args["bnb_4bit_quant_type"] == "nf4"
+    assert swift.args["bnb_4bit_use_double_quant"] is True
+    assert recorded.technique == "QLoRA"
+    assert recorded.base_quantization == "nf4_double_quant_bfloat16_compute"
+
+
+def test_the_manifest_cannot_default_its_way_into_claiming_qlora():
+    """These three carried "QLoRA" / NF4 / paged-8-bit as model defaults, so a
+    bf16 run that did not pass them recorded a technique it never used. The
+    record is the whole basis for attributing a regression, and base precision is
+    exactly the kind of change that causes one."""
+    import pytest
+
+    from registry_utils.models import TrainingConfig
+
+    with pytest.raises(ValueError):
+        TrainingConfig(
+            lora_rank=64, lora_alpha=128, learning_rate=1e-4, epochs=3,
+            gradient_accumulation_steps=32, effective_batch_size=32,
+            target_modules=["q_proj"], resolution_cap_px=1792, max_seq_len=8192, seed=42,
+        )
+
+
+def test_the_adapter_holds_the_base_the_same_way_as_its_foundation():
+    """A rank-16 adapter stacked on a Foundation trained against a differently
+    held base is a mismatch the promotion gate has no way to see."""
+    found, _ = TF.build_swift_config(corpus_paths=["x"], output_dir="/tmp/out")
+    adapter, _ = TA.build_adapter_config(
+        "acord", corpus_version="v1",
+        foundation_adapter_path="/runpod-volume/staging/adapters/foundation/v1",
+        output_dir="/runpod-volume/staging/adapters/acord/v1",
+    )
+    assert adapter.args["quantization_bit"] == found.args["quantization_bit"]
 
 
 def test_the_vision_projector_is_a_lora_target():
@@ -480,6 +534,7 @@ def test_a_trainable_vit_must_declare_lora():
 
     with pytest.raises(ValueError, match="vit_method"):
         TrainingConfig(
+            technique="LoRA", base_quantization="bf16_frozen_base", optimizer="adamw_torch",
             lora_rank=64, lora_alpha=128, learning_rate=1e-4, epochs=3,
             gradient_accumulation_steps=32, effective_batch_size=32,
             target_modules=["q_proj"], resolution_cap_px=1792, max_seq_len=8192, seed=42,
@@ -572,6 +627,7 @@ def _pending_manifest():
         dependencies=Dependencies(base_model="qwen3-vl-8b-instruct@abc1234",
                                   corpus_version="corpus/v1", code_git_commit="abc1234"),
         training_config=TrainingConfig(
+            technique="LoRA", base_quantization="bf16_frozen_base", optimizer="adamw_torch",
             lora_rank=64, lora_alpha=128, learning_rate=1e-4, epochs=3,
             gradient_accumulation_steps=32, effective_batch_size=32,
             target_modules=["q_proj"], resolution_cap_px=1792, max_seq_len=8192, seed=42),

@@ -18,7 +18,7 @@ Scaffold the `insurance-extraction-finetuning` repo and create every config file
 - `.gitignore` — Python, `.env`, model weights, `*.pdf`, `results/`, `metrics/`, `ocr_cache/`, `calibration_store/`, `__pycache__`.
 
 ### 2. `configs/`
-- **`base_model.yaml`** — `model_id: Qwen/Qwen3-VL-8B-Instruct`, `revision: <pin>`, quantization block (**4-bit NF4, double quantization, bf16 compute**), `attn_implementation: flash_attention_2`, resolution cap (`max_image_long_side_px: 1792`, valid range 1536–2048 per arch §11), `max_seq_len` (comment: **set from the 95th-percentile token count measured on the real corpus**, not guessed).
+- **`base_model.yaml`** — `model_id: Qwen/Qwen3-VL-8B-Instruct`, `revision: <pin>`, quantization block (**`load_in_4bit: false` by default — the base is held in bf16**; the `bnb_4bit_*` keys stay populated so flipping the flag on a VRAM-constrained pod needs no other edit, and are read only when it is true, per arch §9.2), `attn_implementation: flash_attention_2`, resolution cap (`max_image_long_side_px: 1792`, valid range 1536–2048 per arch §11), `max_seq_len` (comment: **set from the 95th-percentile token count measured on the real corpus**, not guessed).
 - **`configs/training/foundation.yaml`** — the full parameter set from arch §11, not just the summary:
   - LoRA: rank 64, alpha 128, dropout 0.05, `bias: none`, target modules from master §2.
   - Optimization: LR `2e-4` (range 1e-4–2e-4), cosine schedule, warmup ratio 0.03–0.05, epochs 3 (range 2–3), **optimizer AdamW paged 8-bit**, β₁ 0.9, β₂ 0.999, ε 1e-8, weight decay 0.01, max grad norm 1.0.

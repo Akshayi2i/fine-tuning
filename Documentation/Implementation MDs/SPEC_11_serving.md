@@ -17,7 +17,7 @@ Training (ephemeral pod)              Serving (persistent endpoint)
 ─────────────────────────             ─────────────────────────────
 clone repo @ commit                   vLLM + promoted model
 pull base + corpus (Blob)                     │
-run QLoRA training                    request ──> classify doc type
+run LoRA training                     request ──> classify doc type
 push adapter + manifest (Blob)                │
 terminate                             select + hot-swap adapter
                                               │

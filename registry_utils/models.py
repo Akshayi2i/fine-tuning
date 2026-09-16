@@ -75,17 +75,28 @@ class Dependencies(_Base):
 class TrainingConfig(_Base):
     """The configuration that actually ran — not what a YAML file says today."""
 
-    technique: str = "QLoRA"
+    #: Required, not defaulted. These three described the *technique* while
+    #: silently defaulting to QLoRA / NF4 / paged-8-bit, so a run that held the
+    #: base in bf16 and never passed them recorded itself as a 4-bit QLoRA run.
+    #: A manifest that misreports the technique is worse than no manifest: the
+    #: whole point is that "why did this regress" is answerable from the record,
+    #: and base precision is exactly the kind of change that causes a regression.
+    technique: Literal["LoRA", "QLoRA"]
+
+    #: ``bf16_frozen_base``, or ``<quant_type>_<double|single>_quant_<dtype>_compute``
+    #: under 4-bit. Built by ``training.base_precision.manifest_descriptor`` from
+    #: the config that ran, never hand-written at the call site.
+    base_quantization: str
+
     lora_rank: int
     lora_alpha: int
     lora_dropout: float = 0.05
     bias: str = "none"
-    base_quantization: str = "nf4_double_quant_bf16_compute"
     learning_rate: float
     lr_scheduler: str = "cosine"
     warmup_ratio: float = 0.03
     epochs: int
-    optimizer: str = "paged_adamw_8bit"
+    optimizer: str
     adam_beta1: float = 0.9
     adam_beta2: float = 0.999
     adam_epsilon: float = 1e-8

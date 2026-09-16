@@ -33,7 +33,8 @@ optimization:
   lr_scheduler_type: "cosine"
   warmup_ratio: 0.03
   num_train_epochs: 4         # range 3 to 5; less data, so more passes
-  optim: "paged_adamw_8bit"
+  # See foundation.yaml - fp32 AdamW state is affordable at rank 16 (~44M params).
+  optim: "adamw_torch"
   adam_beta1: 0.9
   adam_beta2: 0.999
   adam_epsilon: 1.0e-8

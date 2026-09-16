@@ -1,12 +1,12 @@
-# SPEC 06 — Training (ms-swift QLoRA: Foundation + Per-Type Adapters)
+# SPEC 06 — Training (ms-swift LoRA: Foundation + Per-Type Adapters)
 
 > Read `SPEC_00_MASTER_CONTEXT.md` first. Dependencies: SPEC_01, SPEC_02, SPEC_05.
 >
-> **Architecture refs:** `finetuning-architecture-v1.md` §3 (ViT escalation gate — **LoRA, never full FT**), §4 (adapter strategy), §8b (tenancy per Fideon SPEC_12; de-identification per Fideon SPEC_11 — blocked, see SPEC_05), §9/§9a (QLoRA, LoRA targets), §10 (**locked three-layer trainer stack**), §11 (full hyperparameter spec), §11a (**sweep methodology**), §12 (versioning + run registry).
+> **Architecture refs:** `finetuning-architecture-v1.md` §3 (ViT escalation gate — **LoRA, never full FT**), §4 (adapter strategy), §8b (tenancy per Fideon SPEC_12; de-identification per Fideon SPEC_11 — blocked, see SPEC_05), **§9.2 (bf16 base vs 4-bit — the decision and its open measurement)**, §9a (LoRA targets), §10 (**locked three-layer trainer stack**), §11 (full hyperparameter spec), §11a (**sweep methodology**), §12 (versioning + run registry).
 
 ## Goal
 
-Fine-tune Qwen3-VL-8B-Instruct with QLoRA via the locked trainer stack. Train the shared Foundation LoRA and the per-type adapters on top, freezing the ViT by default with a gated escalation path, and record every run — sweeps included — in the registry.
+Fine-tune Qwen3-VL-8B-Instruct with **LoRA on a bf16 base** via the locked trainer stack. Train the shared Foundation LoRA and the per-type adapters on top, freezing the ViT by default with a gated escalation path, and record every run — sweeps included — in the registry.
 
 ## The locked stack (arch §10) — not a choice to re-make
 
@@ -31,7 +31,7 @@ Entrypoint that:
 - Pulls the base model and the corpus version from Blob (SPEC_02).
 - Reads the corpus manifest's `deidentified` flag and records it. **The hard assertion is suspended while de-identification is blocked** (SPEC_00 §8, SPEC_05 §1); reinstate it here and in SPEC_02 once the image-redaction question is resolved.
 - Loads `configs/training/foundation.yaml` + `configs/base_model.yaml`.
-- Configures **QLoRA**: 4-bit NF4 base with **double quantization**, bf16 compute, bf16 LoRA adapters (rank 64 / alpha 128 / dropout 0.05, `bias: none`), target modules = attention + MLP projections **+ the vision-language projector**, **ViT frozen** (`train_vit: false`), `flash_attention_2`.
+- Configures **base precision from `training/base_precision.py`** — one helper shared by both trainers, so a Foundation and the adapters stacked on it cannot hold the base differently. Default is a **bf16 frozen base** (`quantization_bit: 0`, passed explicitly rather than omitted, and the `bnb_4bit_*` arguments suppressed entirely so the run log never carries settings describing nothing the run did). Setting `load_in_4bit: true` switches to 4-bit NF4 with double quantization and bf16 compute. Then bf16 LoRA adapters (rank 64 / alpha 128 / dropout 0.05, `bias: none`), target modules = attention + MLP projections **+ the vision-language projector**, **ViT frozen** (`train_vit: false`), `flash_attention_2`.
 - Applies the full arch §11 parameter set — AdamW paged 8-bit, cosine schedule with warmup, max grad norm 1.0, gradient checkpointing, effective batch via accumulation, resolution cap and `max_seq_len` from config.
 - Launches **ms-swift** SFT (which runs TRL `SFTTrainer` underneath) with DeepSpeed (ZeRO-2 default, ZeRO-3 when VRAM-constrained).
 - Trains across **ALL doc types + ALL 3 modality regimes** — the mixed corpus is what makes the Foundation learn shared behavior (insurance terminology, table/checkbox reading, OCR-vs-image arbitration, JSON structural discipline).

@@ -9,7 +9,7 @@
   - [6. Dual-Input-Mode Training (OCR+Image, and Image-Only)](#dual-input-mode-training-ocrimage-and-image-only)
   - [7. Dataset Format](#dataset-format)
   - [8. Data Corpus Management & Versioning](#data-corpus-management-versioning)
-  - [9. Fine-Tuning Technique — QLoRA](#fine-tuning-technique-qlora)
+  - [9. Fine-Tuning Technique — LoRA on a bf16 Base](#fine-tuning-technique-lora-on-a-bf16-base)
   - [10. Trainer & Framework — The Three-Layer Stack](#trainer-framework-the-three-layer-stack)
   - [11. Hyperparameters](#hyperparameters)
   - [12. Fine-Tuning Cycle & Versioning Strategy](#fine-tuning-cycle-versioning-strategy)
@@ -132,7 +132,7 @@ You asked me to make the call on two open design questions. Here's the recommend
 |:----------------------|:-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | Adapter strategy      | **Hybrid: one shared "Foundation LoRA" + small per-document-type adapters stacked on top**                                                                                                     |
 | Confidence score      | **Token-logprob extraction + post-hoc calibration** (not a separate verifier model, not pure self-reported)                                                                                    |
-| Fine-tuning technique | **QLoRA** (4-bit base, LoRA on LLM decoder + vision-language projector; ViT frozen *initially*, unfrozen via an eval gate if scanned/image-only accuracy demands it)                           |
+| Fine-tuning technique | **LoRA on a bf16 base** (LoRA on LLM decoder + vision-language projector; ViT frozen *initially*, unfrozen via an eval gate if scanned/image-only accuracy demands it). 4-bit QLoRA stays available behind `load_in_4bit` for VRAM-constrained pods — see §9.2 |
 | Trainer stack         | **ms-swift (entrypoint) → TRL** `SFTTrainer` **(training loop) → PyTorch/PEFT/bitsandbytes/DeepSpeed (foundation)**                                                                            |
 | Versioning strategy   | **Foundation retrained from the raw HF base model on major corpus expansions; per-type adapters always retrained fresh from the current Foundation, not from the previous adapter checkpoint** |
 | RunPod usage          | **Two separate concerns — ephemeral training pods, and a persistent Serverless vLLM inference endpoint. Your orchestration/business logic lives outside RunPod and calls the endpoint.**       |
@@ -144,7 +144,7 @@ The table above records *decisions*; this one records the resulting **committed 
 | Component                  | Specification                                                                                                                                                                                                                                           |
 |----------------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | Base model                 | `Qwen/Qwen3-VL-8B-Instruct`, pinned Hugging Face revision                                                                                                                                                                                               |
-| Fine-tuning technique      | QLoRA — 4-bit NF4 quantized base, LoRA adapters in bf16                                                                                                                                                                                                 |
+| Fine-tuning technique      | LoRA — bf16 frozen base, LoRA adapters in bf16. Both serving paths hold the base in bf16/fp16, so training in bf16 means the adapter is applied to exactly the weights it trained against (§9.2). 4-bit NF4 (QLoRA) remains available via `load_in_4bit` |
 | Trainable components       | Vision-language projector and LLM decoder via LoRA. Vision Encoder (ViT) frozen by default, unfrozen only through the evaluation gate in §3                                                                                                             |
 | Adapter strategy           | Shared Foundation LoRA across all document types and modality regimes, with per-document-type LoRA adapters stacked on top                                                                                                                              |
 | Trainer stack              | ms-swift entrypoint over TRL `SFTTrainer`, on PyTorch, PEFT, bitsandbytes, Accelerate/DeepSpeed                                                                                                                                                         |
@@ -216,7 +216,7 @@ ACORD 25, a Loss Run, and a Policy Declaration page have structurally different 
 
 ### Recommended structure: Foundation → Per-Type
 
-    Qwen3-VL-8B-Instruct (frozen base, 4-bit)
+    Qwen3-VL-8B-Instruct (frozen base, bf16)
             │
             ▼
     Foundation LoRA  (rank 64–128, trained on ALL doc types combined)
@@ -599,10 +599,44 @@ Raw documents contain insurance PII. Corpus partitioning follows the tenant isol
 >
 > Until resolved, the corpus manifest records `deidentified: false` and `image_redaction: "unresolved"`, PII protection rests on access control and tenancy, and **that limitation is stated to the compliance owner rather than left implicit**. Whichever resolution is chosen, one rule holds: de-identification must be consistent across the OCR text, the page image, and the target JSON.
 
-## 9. Fine-Tuning Technique — QLoRA
+## 9. Fine-Tuning Technique — LoRA on a bf16 Base
 
-- **Why QLoRA over full fine-tuning:** this task is behavior/format adaptation (schema discipline, OCR-vs-image arbitration) on top of a model that already has strong document/OCR pretraining — not new-domain-knowledge injection. QLoRA gets you there with a fraction of the VRAM and much faster iteration, which matters a lot when you're running a Foundation plus multiple per-type adapter training cycles.
-- **Base precision:** 4-bit NF4 quantized base weights, LoRA adapters trained in bf16.
+**Two decisions, argued separately.** An earlier revision of this section justified "QLoRA" with a single bullet titled *why QLoRA over full fine-tuning* — but every clause in it (behavior adaptation rather than knowledge injection, a fraction of the VRAM, many training cycles) argued for **low-rank adaptation**, and none of it distinguished a 4-bit base from a bf16 one. The 4-bit half was never actually argued. It is now, and it came out the other way.
+
+### 9.1 Why LoRA rather than a full fine-tune
+
+This task is behavior/format adaptation (schema discipline, OCR-vs-image arbitration) on top of a model that already has strong document/OCR pretraining — not new-domain-knowledge injection. A full fine-tune of an 8B model needs roughly 16 GB of weights plus 16 GB of gradients plus 32–64 GB of optimizer state; low-rank adaptation reaches the same place on a fraction of that, with much faster iteration, which matters when a cycle is one Foundation run plus three per-type runs.
+
+### 9.2 Why a bf16 base rather than 4-bit (QLoRA)
+
+**The default is LoRA on a bf16 base.** `configs/base_model.yaml` sets `quantization.load_in_4bit: false`.
+
+1. **Train/serve alignment — the decisive reason.** *Both* serving paths hold the base in bf16/fp16: the merged model (§13 step 7, SPEC_10) and vLLM's LoRA hot-swap (§11, SPEC_11). An adapter trained against a 4-bit base learns a delta that partly compensates for quantization error in weights it is then **never served against**. Training in bf16 removes that gap: the adapter is applied to exactly the weights it saw. This compounds — every per-type adapter stacks on a Foundation that would otherwise carry it.
+2. **ZeRO-3 becomes a usable escape hatch.** Under LoRA, ZeRO-2 shards ~1.5 GB of adapter optimizer state and is close to a no-op; ZeRO-3 shards the ~16 GB base, which is where the saving actually is. Two GPUs put ~8 GB of base on each — better headroom than holding the whole base in 4-bit on one card. bitsandbytes 4-bit params do not partition cleanly under stage 3, which is precisely what made this escape hatch awkward under QLoRA.
+3. **Faster steps.** NF4 weights dequantize on every matmul; expect 20–40% slower steps under QLoRA. (The old §9 claim of "much faster iteration" was true against *full fine-tuning*, and backwards against LoRA.)
+4. **One fewer approximation in the optimizer.** At rank 64 only ~150–200M params train, so fp32 AdamW state costs ~1.4 GB against ~0.35 GB for 8-bit. Affordable — so the optimizer is `adamw_torch`, not `paged_adamw_8bit`.
+
+**4-bit remains a live flag, not a deleted path.** Set `load_in_4bit: true` to save ~11 GB of base weights (~16 GB → ~5.5 GB), accepting the mismatch and the slowdown. It is the right answer on a VRAM-constrained pod, and the manifest records which way the run went (`technique`, `base_quantization`), so the two are never confused after the fact.
+
+**Per pod class** (peak VRAM, Foundation, rank 64 — *estimates pending the §9.3 measurement*):
+
+| Pod | QLoRA (NF4) | LoRA (bf16) | Verdict |
+|:----|:------------|:------------|:--------|
+| A100 80 GB (Foundation) | ~22 GB | ~33 GB | bf16 comfortable, ~47 GB spare |
+| L40S 48 GB (per-type) | ~22 GB | ~33 GB | bf16 fine, ~15 GB margin |
+| A100 40 GB (per-type) | ~22 GB | ~33 GB | **tight** — prefer L40S, ZeRO-3, or `load_in_4bit: true` |
+
+Base weights are 16 GB in bf16 against ~5.5 GB in NF4; adapter, gradients and optimizer state add ~1.5 GB; the rest is activations, dominated at `max_seq_len: 8192` by the LM-head logit tensor (Qwen3's ~151k vocab × 8192 positions is ~2.5 GB in bf16 and roughly double when cross-entropy upcasts to fp32) plus ~2.4 GB of layer-boundary checkpoints and the frozen ViT forward at 1792 px.
+
+### 9.3 Open item — measure before trusting the table
+
+The activation term above is arithmetic, not a measurement, and it is the term that decides whether the 40 GB pod still works. `scripts/phase0_spike.py` records the card's total VRAM but never peak allocation during a step; `check_model_loads` is where a `torch.cuda.max_memory_allocated()` probe over one forward/backward at full `max_seq_len` belongs. Two further reasons this stays open: `max_seq_len: 8192` is itself a placeholder pending the Phase 10 re-measurement on the real corpus (a higher value shrinks the margin), and the §3 ViT escalation adds trainable params on top.
+
+**Worth measuring once, not assumed:** the actual field-F1 delta between a 4-bit and a bf16 Foundation. The evaluation framework and promotion gate already exist, so the cost is one extra Foundation run. The gap is currently assumed to be zero, which is the one thing it certainly is not.
+
+### 9.4 Settled parameters
+
+- **Base precision:** bf16 frozen base weights, LoRA adapters in bf16. 4-bit NF4 with double quantization available via `load_in_4bit`.
 - **Frozen (initially):** entire Vision Encoder (ViT) — subject to the escalation gate in §3. If image-only or scanned-PDF evaluation shows the visual reading itself is the bottleneck, unfreeze the ViT (or apply LoRA to it) and retrain.
 - **LoRA targets:** `q_proj, k_proj, v_proj, o_proj, gate_proj, up_proj, down_proj` in every LLM decoder layer, plus the vision-language projector/merger layer.
 - **LoRA rank/alpha:**
@@ -650,23 +684,23 @@ This is the committed choice for the project, one option per layer (no open alte
 |-----------------------------|-------------------------------------------------------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | **Layer 3 — Entrypoint**    | **ms-swift (ModelScope-Swift)**                                         | What you invoke; builds config, launches training, manages adapters                                                                                                          | Most current first-class Qwen3-VL multimodal support; natively handles interleaved image+text collation, the `-100` label masking, and multi-adapter (Foundation + per-type) workflows — a direct match to this architecture. Chosen over LLaMA-Factory to standardize on one framework and avoid the raw-collation masking risk. |
 | **Layer 2 — Training loop** | **TRL** `SFTTrainer`                                                    | Optimizer step, backprop, gradient accumulation, checkpointing, eval hooks, early stopping                                                                                   | Not a separate decision — it’s what ms-swift builds on. `SFTTrainer` brings a mature, well-tested training loop with DeepSpeed/Accelerate integration, callbacks, and resumable checkpoints for free.                                                                                                                             |
-| **Layer 1 — Foundation**    | **PyTorch · Transformers · PEFT · bitsandbytes · Accelerate/DeepSpeed** | Tensors/autograd (PyTorch), model + Qwen3-VL classes (Transformers), LoRA adapters (PEFT), 4-bit QLoRA base (bitsandbytes), multi-GPU/sharding (Accelerate + DeepSpeed ZeRO) | Standard, battle-tested stack that every Layer-2/3 tool sits on; fixed regardless of anything above it.                                                                                                                                                                                                                           |
+| **Layer 1 — Foundation**    | **PyTorch · Transformers · PEFT · bitsandbytes · Accelerate/DeepSpeed** | Tensors/autograd (PyTorch), model + Qwen3-VL classes (Transformers), LoRA adapters (PEFT), optional 4-bit base (bitsandbytes, only under `load_in_4bit`), multi-GPU/sharding (Accelerate + DeepSpeed ZeRO) | Standard, battle-tested stack that every Layer-2/3 tool sits on; fixed regardless of anything above it. |
 
 **What this means concretely:**
 
 - You invoke **ms-swift** (CLI/config). It internally runs TRL `SFTTrainer`, which runs on the **PyTorch/PEFT/bitsandbytes/DeepSpeed** foundation.
 
-- `training/train_foundation.py` and `training/train_adapter.py` are thin wrappers that assemble the ms-swift config (model, corpus version, LoRA/QLoRA params, DeepSpeed config) and launch it — not custom training loops.
+- `training/train_foundation.py` and `training/train_adapter.py` are thin wrappers that assemble the ms-swift config (model, corpus version, LoRA params, base precision, DeepSpeed config) and launch it — not custom training loops. Base precision comes from `training/base_precision.py`, one helper shared by both so they cannot drift apart on how the base is held.
 
 - The **data collator** (system/image/OCR tokens masked to `-100`, loss only on assistant JSON) is provided by ms-swift; you don’t hand-write it. `training/data_collator.py` exists only as an override hook if you ever need to customize masking behavior.
 
 - **Fallback clause:** the only condition under which you’d drop to invoking TRL `SFTTrainer` directly at Layer 3 is if ms-swift lacks support for a specific Qwen3-VL capability you need at implementation time. That’s a contingency, not a parallel option — the committed path is ms-swift.
 
-- **Distributed training:** DeepSpeed ZeRO-2 (or ZeRO-3 if VRAM-constrained) for multi-GPU RunPod instances — configured through ms-swift, executed at the Accelerate/DeepSpeed layer, independent of the Layer-3 choice.
+- **Distributed training:** DeepSpeed ZeRO-2 (or ZeRO-3 if VRAM-constrained) for multi-GPU RunPod instances — configured through ms-swift, executed at the Accelerate/DeepSpeed layer, independent of the Layer-3 choice. Note what ZeRO-2 does *not* do: under LoRA it shards only ~1.5 GB of adapter optimizer state and is close to a no-op. ZeRO-3 shards the bf16 base and is the stage that actually saves VRAM (§9.2).
 
 ## 11. Hyperparameters
 
-**These are starting points for a sweep, not settled values.** The specific numbers below (especially learning rates and epoch counts) are sensible initializations based on QLoRA norms for this model size and task — but treat them as the center of a small hyperparameter search, tuned against your validation set, not as fixed truth. The Foundation-vs-per-type differentiation reflects the right *direction* (per-type builds on a stable base, so lower LR / more epochs on less data), but the exact ranges should be confirmed empirically.
+**These are starting points for a sweep, not settled values.** The specific numbers below (especially learning rates and epoch counts) are sensible initializations based on LoRA norms for this model size and task — but treat them as the center of a small hyperparameter search, tuned against your validation set, not as fixed truth. The Foundation-vs-per-type differentiation reflects the right *direction* (per-type builds on a stable base, so lower LR / more epochs on less data), but the exact ranges should be confirmed empirically.
 
 | Parameter                        | Foundation phase                                                                                                                      | Per-type phase                                                     |
 |:---------------------------------|:--------------------------------------------------------------------------------------------------------------------------------------|:-------------------------------------------------------------------|
@@ -694,7 +728,7 @@ The summary table above gives the shape of the decision; the tables below are th
 | LR scheduler      | Cosine                         | Cosine                         |
 | Warmup ratio      | 0.03 to 0.05                   | 0.03 to 0.05                   |
 | Epochs            | 2 to 3                         | 3 to 5                         |
-| Optimizer         | AdamW, paged 8-bit under QLoRA | AdamW, paged 8-bit under QLoRA |
+| Optimizer         | `adamw_torch` (fp32 state)     | `adamw_torch` (fp32 state)     |
 | Adam β₁           | 0.9                            | 0.9                            |
 | Adam β₂           | 0.999                          | 0.999                          |
 | Adam ε            | 1e-8                           | 1e-8                           |
@@ -721,7 +755,7 @@ The summary table above gives the shape of the decision; the tables below are th
 | Dropout           | 0.05                                                                            | 0.05                                         |
 | Target modules    | Attention and feed-forward projections plus the vision-language projector (§9a) | Same                                         |
 | Bias              | none                                                                            | none                                         |
-| Base quantization | 4-bit NF4, double quantization, bf16 compute                                    | 4-bit NF4, double quantization, bf16 compute |
+| Base precision    | bf16 frozen base (`load_in_4bit: false`, §9.2)                                  | Same                                         |
 
 **Vision and sequence**
 
@@ -834,7 +868,8 @@ This directly answers your question: **yes**, keep a registry entry for every si
         "code_git_commit": "a1b2c3d"               // exact repo commit that ran this
       },
       "training_config": {
-        "technique": "QLoRA",
+        "technique": "LoRA",                       // "LoRA" | "QLoRA" — required, never defaulted
+        "base_quantization": "bf16_frozen_base",   // or nf4_double_quant_bfloat16_compute under 4-bit
         "lora_rank": 16, "lora_alpha": 32, "lora_dropout": 0.05,
         "learning_rate": 7e-5, "epochs": 4,
         "effective_batch_size": 24,
@@ -890,7 +925,7 @@ The `registry_index.json` at the top is a flat table of all runs (run_id, type, 
                              apply 3-regime modality split, train/val/test split
                              → Azure Blob /corpus/v{n}/
     5. Training (RunPod)  → pull base model (cached from HF) + corpus from Blob
-                             → QLoRA train (Foundation or per-type)
+                             → LoRA train (Foundation or per-type)
                              → checkpoints + eval logs → /adapters/.../v{n}/
     6. Evaluation & Gate   → run against frozen golden eval set
                              → must beat previous version on all gating metrics
@@ -987,7 +1022,7 @@ The eleven stages above are driven by **three commands plus one umbrella command
     ─────────────────────────                ─────────────────────────────
     clone repo @ commit                      vLLM + promoted model
     pull base + corpus (Blob)                        │
-    run QLoRA training                       request ──> classify doc type
+    run LoRA training                        request ──> classify doc type
     push adapter + manifest (Blob)                   │
     terminate                                 select + hot-swap adapter
                                                      │
@@ -1004,7 +1039,7 @@ The eleven stages above are driven by **three commands plus one umbrella command
 
 ### Training — ephemeral pods
 
-- On-demand RunPod GPU Pods (A100 80GB for Foundation training given the larger effective batch/sequence needs; A100 40GB or L40S is usually sufficient for the smaller per-type adapter runs).
+- On-demand RunPod GPU Pods (A100 80GB for Foundation training given the larger effective batch/sequence needs; **L40S 48GB for the smaller per-type adapter runs**). A100 40GB is marginal under the bf16 base — see the §9.2 table — so prefer L40S, or reach for ZeRO-3 or `load_in_4bit: true` when a 40GB card is what is available.
 - Training **code lives in your private git repo**, versioned normally — the pod clones it fresh at job start, rather than code living permanently resident on a pod.
 - A pod's job: pull base model + corpus version from Azure Blob → run training → push resulting adapter + eval report to Azure Blob → terminate. Trigger this via RunPod's API from a lightweight orchestrator (a simple Python controller, or GitHub Actions / Airflow if you want scheduling and audit trails).
 - Nothing about training needs to be "always on" — keep these pods ephemeral to control cost.
@@ -1458,7 +1493,7 @@ This is the **codebase** structure (git repo) — separate from the Azure Blob a
 
 - [ ] ViT frozen *initially*; unfreeze via eval gate if scanned/image-only accuracy shows visual-reading is the bottleneck (§3)
 - [ ] LoRA on LLM decoder + projector
-- [ ] QLoRA, 4-bit base, bf16 adapters, flash-attention 2
+- [ ] LoRA on a bf16 base, bf16 adapters, flash-attention 2 (§9.2); `load_in_4bit` available for VRAM-constrained pods, and the manifest records which way each run went
 - [ ] Trainer stack locked: ms-swift entrypoint → TRL SFTTrainer loop → PyTorch/PEFT/bitsandbytes/DeepSpeed; framework provides the `-100` collator masking
 - [ ] Foundation LoRA (rank 64/alpha 128) trained on full mixed corpus, all doc types + all 3 modality regimes
 - [ ] Per-type LoRA adapters (rank 16/alpha 32) trained fresh from current Foundation, never from previous adapter checkpoint
@@ -1509,7 +1544,7 @@ Plain-language definitions for every named technology in this document. Each ent
 | **`SFTTrainer`**                             | *Supervised Fine-Tuning Trainer* — the training loop itself: it runs forward passes, computes loss, backpropagates, steps the optimizer, checkpoints, and evaluates.                    | This is the loop that actually trains the adapters. “Supervised fine-tuning” means learning from labeled input→output pairs, which is exactly our setup (document in, golden JSON out).                      |
 | **ms-swift** (ModelScope-Swift)              | A higher-level fine-tuning framework you drive by CLI or config file. It assembles the model, dataset, collator, and LoRA settings, then launches `SFTTrainer`.                         | Chosen for its first-class Qwen3-VL multimodal support: it handles interleaved image+text collation, `-100` label masking, and multi-adapter workflows out of the box, so we don’t hand-write that plumbing. |
 | **PEFT** (Parameter-Efficient Fine-Tuning)   | Hugging Face library that implements LoRA and friends — it inserts the small trainable matrices, saves/loads adapters, and merges them back into the base model.                        | Provides the LoRA machinery for both the Foundation and per-type adapters, plus `merge_and_unload()` in the pipeline’s merge step.                                                                           |
-| **bitsandbytes**                             | A library of low-precision GPU operations — 4-bit/8-bit weight storage and 8-bit optimizers.                                                                                            | Makes the 4-bit NF4 quantized base and the paged 8-bit AdamW optimizer possible; this is what puts the “Q” in QLoRA.                                                                                         |
+| **bitsandbytes**                             | A library of low-precision GPU operations — 4-bit/8-bit weight storage and 8-bit optimizers. | Only used when `load_in_4bit: true` (§9.2). Under the bf16 default neither the 4-bit base nor a paged 8-bit optimizer is in play, but the dependency stays so flipping the flag needs no environment change. |
 | **Accelerate**                               | Hugging Face’s device/distribution layer — decides what runs on which GPU and handles mixed precision.                                                                                  | Lets the same training script run on one GPU or many without code changes.                                                                                                                                   |
 | **DeepSpeed / ZeRO**                         | Microsoft’s distributed-training library. ZeRO (“Zero Redundancy Optimizer”) shards optimizer state, gradients, and optionally weights across GPUs instead of duplicating them on each. | Cuts per-GPU memory on multi-GPU RunPod instances. ZeRO-2 shards optimizer state and gradients; ZeRO-3 also shards weights, for tighter VRAM budgets.                                                        |
 | **flash-attention-2**                        | A memory-efficient, fused implementation of the attention operation.                                                                                                                    | Our inputs are long (thousands of image tokens plus OCR text). Standard attention memory grows with the square of sequence length; flash-attention makes these sequences affordable.                         |
@@ -1520,9 +1555,9 @@ Plain-language definitions for every named technology in this document. Each ent
 |----------------------------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | **Fine-tuning**                        | Continuing to train an already-pretrained model on your own data so it adapts to your task.                                                                                    | Teaches Qwen3-VL insurance-document conventions and strict JSON schema output.                                                                                  |
 | **LoRA** (Low-Rank Adaptation)         | Instead of updating billions of weights, freeze them and train a small pair of low-rank matrices alongside each targeted layer. The result is an “adapter” file of tens of MB. | Cheap to train, fast to iterate, and small to store and version — which is what makes one Foundation plus several per-type adapters practical.                  |
-| **QLoRA**                              | LoRA applied on top of a base model held in 4-bit precision.                                                                                                                   | Cuts VRAM enough to train an 8B multimodal model on a single GPU, without meaningfully hurting quality for behavior/format adaptation.                          |
+| **QLoRA**                              | LoRA applied on top of a base model held in 4-bit precision. | **Not the default here** (§9.2): the base is held in bf16 so the adapter trains against the same weights it is served against. Available via `load_in_4bit` on a VRAM-constrained pod, where it saves ~11 GB of base weights at the cost of that alignment and ~20-40% slower steps. |
 | **Rank / alpha**                       | Rank is the size (capacity) of the LoRA matrices; alpha scales how strongly the adapter influences the base model.                                                             | Foundation uses rank 64 / alpha 128 because it learns broad behavior; per-type adapters use rank 16 / alpha 32 because they learn only a narrow schema mapping. |
-| **NF4 / double quantization**          | NF4 is a 4-bit number format designed for the way neural-network weights are distributed; double quantization also compresses the quantization constants.                      | The base-model storage format under QLoRA.                                                                                                                      |
+| **NF4 / double quantization**          | NF4 is a 4-bit number format designed for the way neural-network weights are distributed; double quantization also compresses the quantization constants. | The base-model storage format when `load_in_4bit` is enabled — opt-in, not the default (§9.2). |
 | **Adapter**                            | The trained LoRA weights saved as a standalone file, loaded on top of an unchanged base model.                                                                                 | The unit we version, promote, store in Azure Blob, and hot-swap per document type at serving time.                                                              |
 | **Modality dropout**                   | Deliberately removing one input channel (here, the OCR text) for a share of training examples.                                                                                 | Trains a *single* model to work both with OCR text and image-only, instead of maintaining two models.                                                           |
 | **`-100` masking**                     | The label value PyTorch’s loss function ignores. Tokens marked `-100` contribute nothing to the loss.                                                                          | Applied to system, image, and OCR-text tokens so the model is only graded on the JSON it generates, not on reproducing its own prompt.                          |

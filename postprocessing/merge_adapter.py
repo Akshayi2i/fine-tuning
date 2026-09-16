@@ -5,6 +5,13 @@ one standalone model. Required before quantization, and it is what the first
 serving cycle actually ships: **vLLM on the merged fp16/bf16 model** is the
 primary path, with GGUF as the portable/edge option (arch §13a).
 
+Loading the base here in bf16/fp16 is the *aligned* case, not a compromise: under
+the arch §9 default the adapter was trained against a bf16 base, so merging into
+bf16 applies it to exactly the weights it saw. That was not true while training
+ran in 4-bit — the adapter then carried a delta partly compensating for
+quantization error in weights it was never merged into. If a run sets
+``load_in_4bit: true``, that gap comes back, and this merge is where it lands.
+
 Writes to the **staging volume**, not to Blob. `package` (SPEC_13 command 2)
 pushes it. The merged model is ~16 GB and quantization also runs on RunPod, so
 pushing it to Azure here and pulling it back there is a 32 GB round trip for

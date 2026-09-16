@@ -8,11 +8,29 @@ model:
   revision: "PIN_ME"                    # TODO Phase 0: set to a concrete commit SHA
   trust_remote_code: true
 
-# QLoRA: the base is held in 4-bit and never updated; only the LoRA adapters
-# train, in bf16. This is behavior/format adaptation on a model that already has
-# strong document pretraining, not new-knowledge injection (arch 9).
+# Base precision (arch 9). DEFAULT: LoRA on a bf16 base - the base is held in
+# bf16 and never updated; only the LoRA adapters train. This is behavior/format
+# adaptation on a model that already has strong document pretraining, not
+# new-knowledge injection, which is what makes low-rank adaptation the right
+# technique in the first place.
+#
+# Why bf16 rather than 4-bit NF4 (QLoRA): BOTH serving paths hold the base in
+# bf16/fp16 - the merged model (SPEC_10) and vLLM's LoRA hot-swap (SPEC_11). An
+# adapter trained against a 4-bit base learns a delta that partly compensates for
+# quantization error in weights it is then never served against. bf16 removes
+# that gap: you train on exactly the weights you serve. It also runs 20-40%
+# faster per step (NF4 dequantizes on every matmul) and lets DeepSpeed ZeRO-3
+# shard the base, which bitsandbytes 4-bit params do not do cleanly.
+#
+# Flip load_in_4bit to true on a VRAM-constrained pod. It saves ~11GB of base
+# weights (~16GB -> ~5.5GB) at the cost of the mismatch and the speed above.
+# See configs/deepspeed/zero3.json for the other way out of a VRAM ceiling.
 quantization:
-  load_in_4bit: true
+  load_in_4bit: false
+
+  # Read ONLY when load_in_4bit is true. training/base_precision.py omits these
+  # from the ms-swift command entirely under bf16, so the run log never carries
+  # settings that describe nothing the run did.
   bnb_4bit_quant_type: "nf4"            # designed for how NN weights distribute
   bnb_4bit_use_double_quant: true       # also compresses the quantization constants
   bnb_4bit_compute_dtype: "bfloat16"

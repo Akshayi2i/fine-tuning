@@ -166,7 +166,7 @@ The 11 stages (arch §13) as reusable, individually addressable stage functions 
 | 2 | **Preprocessing (GPU)** — MinerU OCR + page rendering at the resolution cap | `finetune` | `processed/` (Blob) |
 | 3 | **Labeling** — human review | *(outside the CLI)* | `golden-labels/` (Blob) |
 | 4 | **Dataset build** — compile JSONL, inject schema, modality split, train/val/test split | `finetune` | `corpus/v{n}/` (Blob) |
-| 5 | **Training** — QLoRA, Foundation then per-type | `finetune` | staging volume |
+| 5 | **Training** — LoRA on a bf16 base, Foundation then per-type | `finetune` | staging volume |
 | 6 | **Evaluation & gate** — frozen golden eval set | `finetune` | staging volume + manifest |
 | 7 | **Merge** — PEFT `merge_and_unload()` | `finetune` | staging volume |
 | 8 | **Quantize** — GGUF export | `package` | staging volume |

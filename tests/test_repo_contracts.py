@@ -207,14 +207,41 @@ def test_effective_batch_is_inside_the_specified_range(name: str):
 
 
 @pytest.mark.parametrize("name", TRAINING_CONFIGS)
-def test_the_qlora_base_quantization_is_identical_everywhere(name: str):
-    """4-bit NF4, double quantization, bf16 compute. A config that quietly
-    differs trains a different model from the one the manifest describes."""
+def test_the_memory_settings_are_identical_everywhere(name: str):
+    """A config that quietly differs trains a different model from the one the
+    manifest describes."""
     config = load_yaml(ROOT / "configs" / "training" / f"{name}.yaml")
     assert config["batch"]["gradient_checkpointing"] is True
     # The config expresses arch §11's "mixed precision: bf16" as a bf16 flag,
     # which is what the trainer flag actually is.
     assert config["batch"]["bf16"] is True
+
+
+def test_the_base_is_held_in_bf16_by_default():
+    """arch §9: LoRA on a bf16 base, not QLoRA. Both serving paths — the merged
+    model (SPEC_10) and vLLM's LoRA hot-swap (SPEC_11) — hold the base in
+    bf16/fp16, so a 4-bit training base means the adapter compensates for
+    quantization error in weights it is never served against.
+
+    This asserts the DEFAULT, not the only permitted value: `load_in_4bit` is a
+    live flag for VRAM-constrained pods. What it prevents is the flag flipping
+    without the arch §9 rationale and the pod-class guidance moving with it."""
+    quant = load_yaml(ROOT / "configs" / "base_model.yaml")["quantization"]
+    assert quant["load_in_4bit"] is False
+    # The bnb_* keys stay populated so flipping the flag needs no other edit.
+    assert quant["bnb_4bit_quant_type"] == "nf4"
+    assert quant["bnb_4bit_use_double_quant"] is True
+
+
+@pytest.mark.parametrize("name", TRAINING_CONFIGS)
+def test_the_optimizer_is_not_a_bitsandbytes_paged_one(name: str):
+    """`paged_adamw_8bit` was carried over from the QLoRA default. Under bf16
+    LoRA only ~150-200M params train, so fp32 AdamW state is affordable and
+    removes a second quantization approximation from the loop. Paging also never
+    addressed the long-sequence spikes it was commented as addressing — those are
+    activation and logit spikes, not optimizer state."""
+    config = load_yaml(ROOT / "configs" / "training" / f"{name}.yaml")
+    assert config["optimization"]["optim"] == "adamw_torch"
 
 
 # --------------------------------------------------------------------------

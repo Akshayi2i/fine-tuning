@@ -46,7 +46,7 @@ The previous spec set cited the old architecture numbering. Everything has been 
 | Corpus management + split strategy | §7 | **§8** |
 | MinerU version pinning | *(did not exist)* | **§8a** |
 | Multi-tenant corpus isolation | *(did not exist)* | **§8b** |
-| QLoRA technique | §8 | **§9** |
+| Fine-tuning technique (LoRA on a bf16 base) | §8 | **§9** |
 | LoRA target-module justification | *(did not exist)* | **§9a** |
 | Trainer stack | §9 | **§10** |
 | Hyperparameters | §10 | **§11** |
@@ -142,7 +142,7 @@ The same real-world field appears under many surface labels across documents. Th
 | Decision | Value |
 |---|---|
 | Base model | `Qwen/Qwen3-VL-8B-Instruct`, pinned HF revision |
-| Fine-tuning technique | **QLoRA** — 4-bit NF4 base, **double quantization**, bf16 compute, LoRA adapters in bf16 |
+| Fine-tuning technique | **LoRA on a bf16 base** — bf16 frozen base weights, LoRA adapters in bf16. Both serving paths hold the base in bf16/fp16 (merged model per SPEC_10, vLLM LoRA hot-swap per SPEC_11), so training in bf16 means the adapter is applied to exactly the weights it trained against. **4-bit NF4 QLoRA remains a live flag** (`quantization.load_in_4bit`) for VRAM-constrained pods — arch §9.2 |
 | Trainable components | **Projector + LLM decoder** via LoRA. **Vision Encoder (ViT) frozen by default** — escalated only via the eval gate (arch §3). **When the ViT is trained it gets a LoRA — never a full fine-tune** (arch §3). |
 | Adapter strategy | **Hybrid**: one shared **Foundation LoRA** (rank 64, alpha 128) trained across all doc types + all 3 modality regimes, then small **per-type LoRA** adapters (rank 16, alpha 32) stacked on top. |
 | Trainer stack | **Layer 3 ms-swift** (what you invoke) → **Layer 2 TRL `SFTTrainer`** (the real loop) → **Layer 1 PyTorch/Transformers/PEFT/bitsandbytes/Accelerate+DeepSpeed**. Locked, one option per layer (arch §10). |
@@ -280,7 +280,7 @@ SPEC_02  Azure Blob I/O + training run registry                (deps: 01)
 SPEC_03  Ingestion + MinerU OCR (+ version pinning)            (deps: 01, 02)
 SPEC_04  Labeling + golden JSON + day-zero bootstrap gate      (deps: 01, 02, 03)
 SPEC_05  Dataset builder (JSONL, modality, split)              (deps: 01, 02, 04)
-SPEC_06  Training (ms-swift QLoRA, foundation + adapters)      (deps: 01, 02, 05)
+SPEC_06  Training (ms-swift LoRA, foundation + adapters)       (deps: 01, 02, 05)
 SPEC_07  Inference core (shared model-runner primitive)        (deps: 01, 02)
 SPEC_08  Evaluation (metrics + gating)                         (deps: 01, 02, 06, 07)
 SPEC_09  Confidence calibration                                (deps: 01, 02, 07, 08)

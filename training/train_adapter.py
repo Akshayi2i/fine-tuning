@@ -32,6 +32,11 @@ from common.constants import ACTIVE_DOC_TYPES
 from registry_utils.models import Artifacts, DataStats, Dependencies, RunManifest, TrainingConfig
 from registry_utils.query_registry import latest_promoted
 from registry_utils.write_run_manifest import capture_git_commit, write_manifest
+from training.base_precision import (
+    manifest_descriptor,
+    swift_quantization_args,
+    technique,
+)
 from training.callbacks.early_stopping import swift_early_stopping_args
 from training.train_foundation import SwiftConfig, TrainingError, launch_and_record
 
@@ -126,10 +131,9 @@ def build_adapter_config(
         "lora_alpha": lora["alpha"],
         "lora_dropout": lora["dropout"],
         "lora_target_modules": target_modules,
-        "quantization_bit": 4,
-        "bnb_4bit_quant_type": base["quantization"]["bnb_4bit_quant_type"],
-        "bnb_4bit_use_double_quant": base["quantization"]["bnb_4bit_use_double_quant"],
-        "bnb_4bit_compute_dtype": base["quantization"]["bnb_4bit_compute_dtype"],
+        # Must match the Foundation this adapter stacks on: the same helper reads
+        # the same config key, so the two runs cannot hold the base differently.
+        **swift_quantization_args(base),
         "attn_impl": base["attention"]["attn_implementation"],
         "learning_rate": opt["learning_rate"],
         "lr_scheduler_type": opt["lr_scheduler_type"],
@@ -169,6 +173,8 @@ def build_adapter_config(
     }
 
     recorded = TrainingConfig(
+        technique=technique(base),
+        base_quantization=manifest_descriptor(base),
         lora_rank=lora["rank"],
         lora_alpha=lora["alpha"],
         lora_dropout=lora["dropout"],

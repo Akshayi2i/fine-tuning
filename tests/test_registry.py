@@ -57,6 +57,7 @@ def _deps(**over) -> Dependencies:
 
 def _tc(**over) -> TrainingConfig:
     base = dict(
+        technique="LoRA", base_quantization="bf16_frozen_base", optimizer="adamw_torch",
         lora_rank=16, lora_alpha=32, learning_rate=7e-5, epochs=4,
         gradient_accumulation_steps=16, effective_batch_size=16,
         target_modules=["q_proj"], resolution_cap_px=1792, max_seq_len=8192, seed=42,

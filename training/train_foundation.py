@@ -40,6 +40,11 @@ from registry_utils.models import (
     TrainingConfig,
 )
 from registry_utils.write_run_manifest import capture_git_commit, is_dirty_worktree, write_manifest
+from training.base_precision import (
+    manifest_descriptor,
+    swift_quantization_args,
+    technique,
+)
 from training.callbacks.early_stopping import swift_early_stopping_args
 
 log = logging.getLogger(__name__)
@@ -127,11 +132,9 @@ def build_swift_config(
         "lora_alpha": lora["alpha"],
         "lora_dropout": lora["dropout"],
         "lora_target_modules": target_modules,
-        # QLoRA: 4-bit NF4 base with double quantization, bf16 compute.
-        "quantization_bit": 4,
-        "bnb_4bit_quant_type": base["quantization"]["bnb_4bit_quant_type"],
-        "bnb_4bit_use_double_quant": base["quantization"]["bnb_4bit_use_double_quant"],
-        "bnb_4bit_compute_dtype": base["quantization"]["bnb_4bit_compute_dtype"],
+        # bf16 frozen base by default; 4-bit NF4 only when the config asks for it
+        # (arch §9). One helper for both trainers so they cannot disagree.
+        **swift_quantization_args(base),
         "attn_impl": base["attention"]["attn_implementation"],
         "learning_rate": opt["learning_rate"],
         "lr_scheduler_type": opt["lr_scheduler_type"],
@@ -177,6 +180,12 @@ def build_swift_config(
         args["resume_from_checkpoint"] = resume_from
 
     recorded = TrainingConfig(
+        # Derived from the config that actually ran, never defaulted. These
+        # three used to carry "QLoRA"/NF4/paged-8bit defaults on the model, so a
+        # bf16 run that did not pass them recorded a technique it never used —
+        # in the one record the whole reproducibility story rests on.
+        technique=technique(base),
+        base_quantization=manifest_descriptor(base),
         lora_rank=lora["rank"],
         lora_alpha=lora["alpha"],
         lora_dropout=lora["dropout"],
