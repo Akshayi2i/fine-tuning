@@ -14,7 +14,6 @@ import pytest
 from artifact_registry.blob_client import BlobClient, InMemoryBackend
 from calibration.fit_calibration import CalibrationParams
 from inference_core.model_runner import EchoBackend, load_model
-from postprocessing.merge_adapter import plan_merge
 from postprocessing.quantize import QuantizationError, plan_quantization, quantize
 from serving.adapter_router import route
 from serving.doc_type_classifier import (
@@ -26,6 +25,7 @@ from serving.doc_type_classifier import (
 from serving.page_router import merge_page_extractions, plan_pages
 from serving.pipeline import ExtractionRequest, PipelineError, extract
 from testing.run_extraction import run_document, summarise
+from training.merge import plan_merge
 
 GOLDEN = {
     "insured_name": "Rivera Fabrication LLC",
@@ -336,10 +336,34 @@ def test_summary_aggregates_across_a_batch(model):
 def test_merge_plans_target_the_staging_volume():
     """The merged model is ~16GB and quantization also runs on RunPod — pushing
     it to Azure and back is a 32GB round trip for nothing."""
-    plan = plan_merge(base_model="Qwen/Qwen3-VL-8B-Instruct",
-                      foundation_version="v2", out_version="v2")
+    plan = plan_merge(base_model="Qwen/Qwen3-VL-8B-Instruct", version="v2")
     assert plan.output_dir.startswith("/runpod-volume/")
-    assert plan.is_unified
+
+
+def test_the_merge_defaults_to_bf16_not_fp16():
+    """The adapter trained in bf16 against a bf16 base, and FP8 is quantized from
+    this artifact (arch v2.1 §13a). Merging to fp16 would introduce a precision
+    change between training and every serving format, for no reason."""
+    assert plan_merge(base_model="m", version="v2").dtype == "bf16"
+
+
+def test_the_merge_folds_in_the_selected_checkpoint_when_there_is_one():
+    """Recorded because the merged weights do not say which checkpoint they came
+    from, and once the staging volume is reclaimed nothing else does either."""
+    chosen = "/runpod-volume/staging/adapters/foundation/v2/checkpoint-450"
+    plan = plan_merge(base_model="m", version="v2", selected_checkpoint=chosen)
+
+    assert plan.adapter == chosen
+    assert plan.selected_checkpoint == chosen
+    assert chosen in plan.describe()
+
+
+def test_the_merge_falls_back_to_the_staged_adapter_directory():
+    """What `--from-stage merge` does: no selection ran, so there is nothing to
+    pick and the adapter directory is the honest source."""
+    plan = plan_merge(base_model="m", version="v2")
+    assert plan.selected_checkpoint is None
+    assert plan.adapter.endswith("/v2")
 
 
 def test_quantization_defaults_to_baseline_plus_one_serving_format():

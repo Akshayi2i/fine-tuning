@@ -393,6 +393,17 @@ def corpus_epoch_file(version: str, epoch: int, tenant_id: str | None = None) ->
     return _join(corpus_dir(version, tenant_id), "train", f"epoch_{int(epoch)}.jsonl")
 
 
+def checkpoint_selection(version: str, tenant_id: str | None = None) -> str:
+    """Which checkpoint shipped, and what it beat (arch v2.1 §11.2).
+
+    Recorded because the merged weights do not say. Once the staging volume is
+    reclaimed, "which checkpoint is this model" is otherwise unanswerable — and
+    the selection margin is what tells a later regression review whether the
+    choice was decisive or inside eval noise.
+    """
+    return _join("eval-reports", _version(version), "checkpoint_selection.json")
+
+
 def golden_eval_set_dir() -> str:
     """Frozen and versioned separately, held constant across corpus versions so
     model versions stay comparable (arch §8). Never trained on."""

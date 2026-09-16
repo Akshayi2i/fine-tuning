@@ -135,6 +135,21 @@ class StageContext:
     #: empty evidence, supply the booleans and it read as no evidence at all.
     cross_type_evidence: dict[str, dict[str, dict[str, float]]] | None = None
 
+    #: Staged checkpoint directories from the training run (arch v2.1 §11.2).
+    #: Supplied by the trainer in a real cycle; empty in a dry run, where nothing
+    #: was written and there is honestly nothing to choose between.
+    checkpoints: list[str] = field(default_factory=list)
+
+    #: The checkpoint early stopping liked. Scored alongside the trailing ones
+    #: even when it is not among them — that is exactly the interesting case,
+    #: because training continued past what loss preferred.
+    best_loss_checkpoint: str | None = None
+
+    #: Injectable so selection is testable without a GPU, and so the scorer is
+    #: the SAME one the gate uses: a selector scoring by a different definition
+    #: of "correct" picks a checkpoint the gate then rejects.
+    checkpoint_scorer: Any = None
+
     # -- accumulated state -------------------------------------------------
     results: dict[str, StageResult] = field(default_factory=dict)
     manifests: dict[str, Any] = field(default_factory=dict)
@@ -586,6 +601,64 @@ def _count_rows(bucket: Any) -> int:
 
 
 # --------------------------------------------------------------------------
+# Stage 6 — checkpoint selection (arch v2.1 §11.2)
+# --------------------------------------------------------------------------
+
+
+def stage_checkpoint_eval(ctx: StageContext) -> StageResult:
+    """Pick the checkpoint that ships, by GENERATED field F1.
+
+    Validation loss drove selection under v1, and it is a poor proxy: averaged
+    over every token, it is dominated by the easy copy tokens — schema keys, JSON
+    punctuation, boilerplate — the model gets right within a hundred steps. A
+    checkpoint can improve on loss while getting worse at the values, which is
+    the only thing the gate reads.
+
+    Skipped, explicitly, when nothing was staged: a dry run never launched
+    ms-swift, so there is nothing to choose between, and merging the staged
+    adapter directory is the honest fallback rather than a silent one.
+    """
+    from evaluation.checkpoint_eval import CheckpointEvalError, select_best
+
+    checkpoints = sorted(ctx.checkpoints or [])
+    if not checkpoints:
+        return StageResult(
+            "checkpoint_eval", "skipped",
+            "no staged checkpoints to choose between; merge takes the staged adapter directory",
+            {"selected": None},
+        )
+    # No separate dry-run branch: a dry run never launched ms-swift, so it has no
+    # checkpoints, and the check above already covers it. A second condition
+    # meaning the same thing is one that can disagree with the first.
+    scorer = ctx.checkpoint_scorer
+    if scorer is None:  # pragma: no cover - needs a GPU
+        from common.config import base_model_config, generation_config
+        from evaluation.checkpoint_eval import vllm_scorer
+
+        base = base_model_config()["model"]
+        scorer = vllm_scorer(
+            base_model=f"{base['model_id']}@{base['revision']}",
+            val_path=paths.corpus_eval_split(ctx.corpus, "val", ctx.tenant_id),
+            generation_config=generation_config(),
+        )
+
+    try:
+        report = select_best(checkpoints, scorer, best_loss=ctx.best_loss_checkpoint)
+    except CheckpointEvalError as exc:
+        raise PipelineError(
+            f"no checkpoint could be selected for {ctx.out_version}: {exc}. Merging an "
+            "arbitrary one would ship a model nobody measured."
+        ) from exc
+
+    ctx.client.write_json(paths.checkpoint_selection(ctx.out_version), report.as_dict())
+    detail = f"selected {report.selected} (margin {report.margin:+.4f} field F1)"
+    if report.loss_and_f1_disagreed:
+        detail += f"; validation loss would have shipped {report.best_loss_checkpoint}"
+
+    return StageResult("checkpoint_eval", "completed", detail, report.as_dict())
+
+
+# --------------------------------------------------------------------------
 # Stage 6 — evaluation and the promotion gate (HARD STOP)
 # --------------------------------------------------------------------------
 
@@ -823,20 +896,27 @@ def stage_merge(ctx: StageContext) -> StageResult:
     LoRA per request.
     """
     from common.config import base_model_config
-    from postprocessing.merge_adapter import merge, plan_merge
+    from training.merge import merge, plan_merge
 
     base = base_model_config()["model"]
+    # The checkpoint the §11.2 selector picked, when checkpoint_eval ran. Falling
+    # back to the staged adapter directory is what `--from-stage merge` does.
+    selection = ctx.results.get("checkpoint_eval")
+    selected = (selection.data or {}).get("selected") if selection else None
+
     plan = plan_merge(
         base_model=f"{base['model_id']}@{base['revision']}",
-        foundation_version=ctx.out_version,
-        out_version=ctx.out_version,
-        doc_type=None,
+        version=ctx.out_version,
         dtype=ctx.dtype,  # type: ignore[arg-type]
+        selected_checkpoint=selected,
     )
     output = merge(plan, dry_run=ctx.dry_run)
     ctx.volume.mark(output)
 
-    return StageResult("merge", "completed", "merged unified", {"merged": ["unified"]})
+    return StageResult(
+        "merge", "completed", plan.describe(),
+        {"merged": ["unified"], "selected_checkpoint": selected},
+    )
 
 
 # --------------------------------------------------------------------------
@@ -1075,12 +1155,15 @@ STAGES: tuple[Stage, ...] = (
     Stage(3, "labeling", "finetune", False, stage_labeling, None),
     Stage(4, "dataset_build", "finetune", True, stage_dataset_build, _is_corpus_built),
     Stage(5, "training", "finetune", True, stage_training, _is_trained),
-    Stage(6, "evaluation_gate", "finetune", True, stage_evaluation_gate, None),
-    Stage(7, "merge", "finetune", True, stage_merge, _is_merged),
-    Stage(8, "quantize", "package", True, stage_quantize, _is_quantized),
-    Stage(9, "push", "package", False, stage_push, None),
-    Stage(10, "serving", "deploy-endpoint", False, stage_deploy, None),
-    Stage(11, "feedback_loop", "extract", False, stage_feedback, None),
+    # Between training and the gate: the gate scores what ships, so what ships
+    # has to be chosen first (arch v2.1 §11.2).
+    Stage(6, "checkpoint_eval", "finetune", True, stage_checkpoint_eval, None),
+    Stage(7, "evaluation_gate", "finetune", True, stage_evaluation_gate, None),
+    Stage(8, "merge", "finetune", True, stage_merge, _is_merged),
+    Stage(9, "quantize", "package", True, stage_quantize, _is_quantized),
+    Stage(10, "push", "package", False, stage_push, None),
+    Stage(11, "serving", "deploy-endpoint", False, stage_deploy, None),
+    Stage(12, "feedback_loop", "extract", False, stage_feedback, None),
 )
 
 STAGE_BY_NAME: dict[str, Stage] = {s.name: s for s in STAGES}

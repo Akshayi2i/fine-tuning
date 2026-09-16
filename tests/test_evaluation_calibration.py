@@ -535,3 +535,122 @@ def test_the_lob_balance_target_is_reachable():
         + ["property"] * 20 + ["umbrella"] * 19
     )
     assert coverage.is_balanced, coverage.warning()
+
+
+# --------------------------------------------------------------------------
+# Checkpoint selection (arch v2.1 §11.2)
+# --------------------------------------------------------------------------
+
+def _ckpts(*steps):
+    return [f"/staging/adapters/foundation/v2/checkpoint-{n}" for n in steps]
+
+
+def test_selection_reads_generated_field_f1_not_loss():
+    """Loss is averaged over every token, so it is dominated by the easy copy
+    tokens — schema keys, JSON punctuation, boilerplate — the model gets right
+    within a hundred steps. A checkpoint can improve on loss while getting worse
+    at the values, which is the only thing the gate reads."""
+    from evaluation.checkpoint_eval import select_best
+
+    scores = {"checkpoint-100": 0.70, "checkpoint-200": 0.88, "checkpoint-300": 0.81}
+
+    def scorer(path):
+        return {"field_normalized_match": scores[path.rsplit("/", 1)[-1]]}
+
+    report = select_best(_ckpts(100, 200, 300), scorer)
+    assert report.selected.endswith("checkpoint-200")
+    assert report.margin == pytest.approx(0.07)
+
+
+def test_the_best_loss_checkpoint_is_scored_even_when_it_is_not_recent():
+    """Exactly the interesting case: early stopping liked it and training
+    continued past it."""
+    from evaluation.checkpoint_eval import select_candidates
+
+    candidates = select_candidates(
+        _ckpts(100, 200, 300, 400, 500),
+        best_loss="/staging/adapters/foundation/v2/checkpoint-100",
+    )
+    steps = [c.step for c in candidates]
+    assert steps == [100, 300, 400, 500], "the last three plus the best-loss one"
+    assert next(c for c in candidates if c.step == 100).is_best_loss
+
+
+def test_a_disagreement_between_loss_and_f1_is_surfaced():
+    """When it fires, validation loss would have shipped a different model. That
+    is the whole reason this job exists, so it is recorded rather than buried."""
+    from evaluation.checkpoint_eval import select_best
+
+    def scorer(path):
+        return {"field_normalized_match": 0.9 if path.endswith("300") else 0.6}
+
+    report = select_best(
+        _ckpts(100, 200, 300),
+        scorer,
+        best_loss="/staging/adapters/foundation/v2/checkpoint-100",
+    )
+    assert report.selected.endswith("checkpoint-300")
+    assert report.loss_and_f1_disagreed is True
+    assert report.as_dict()["best_loss_checkpoint"].endswith("checkpoint-100")
+
+
+def test_a_checkpoint_that_cannot_be_scored_is_skipped_not_zeroed():
+    """A scorer that fell over on one candidate says nothing about that
+    candidate's quality; scoring it zero would silently remove it from
+    contention."""
+    from evaluation.checkpoint_eval import select_best
+
+    def scorer(path):
+        if path.endswith("200"):
+            raise RuntimeError("vLLM OOM")
+        return {"field_normalized_match": 0.8}
+
+    report = select_best(_ckpts(100, 200, 300), scorer)
+    assert len(report.skipped) == 1 and "OOM" in report.skipped[0][1]
+    assert report.selected and not report.selected.endswith("200")
+
+
+def test_selecting_from_nothing_is_refused():
+    """Merging an arbitrary checkpoint would ship a model nobody measured."""
+    from evaluation.checkpoint_eval import CheckpointEvalError, select_best
+
+    with pytest.raises(CheckpointEvalError, match="no checkpoints"):
+        select_best([], lambda _p: {"field_normalized_match": 1.0})
+
+    with pytest.raises(CheckpointEvalError, match="no checkpoint could be scored"):
+        select_best(_ckpts(100), lambda _p: (_ for _ in ()).throw(RuntimeError("boom")))
+
+
+def test_a_tie_breaks_toward_the_later_checkpoint():
+    """Picking the earlier one on a tie would quietly prefer an under-trained
+    checkpoint whenever the metric saturates."""
+    from evaluation.checkpoint_eval import select_best
+
+    report = select_best(_ckpts(100, 200, 300), lambda _p: {"field_normalized_match": 0.9})
+    assert report.selected.endswith("checkpoint-300")
+    assert report.margin == 0.0
+
+
+def test_an_unparseable_checkpoint_name_is_refused():
+    """Ordering by step is what 'the last three' means, and a silent 0 would put
+    a real checkpoint at the front of the list."""
+    from evaluation.checkpoint_eval import CheckpointEvalError, checkpoint_step
+
+    assert checkpoint_step("/a/b/checkpoint-450") == 450
+    with pytest.raises(CheckpointEvalError, match="cannot read a step"):
+        checkpoint_step("/a/b/final-model")
+
+
+def test_the_selection_record_says_how_close_it_was():
+    """A margin inside ordinary eval noise means the selection was close to
+    arbitrary, and a later regression reads better against that than against a
+    bare filename."""
+    from evaluation.checkpoint_eval import select_best
+
+    def scorer(path):
+        return {"field_normalized_match": 0.9001 if path.endswith("300") else 0.9}
+
+    record = select_best(_ckpts(100, 200, 300), scorer).as_dict()
+    assert record["selection_metric"] == "field_normalized_match"
+    assert 0 < record["margin_over_runner_up"] < 0.005
+    assert len(record["candidates"]) == 3

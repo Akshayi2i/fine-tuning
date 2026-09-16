@@ -170,11 +170,20 @@ def test_every_stage_is_owned_by_exactly_one_command():
     finetune = {s.name for s in FINETUNE_STAGES}
     package = {s.name for s in PACKAGE_STAGES}
     assert not finetune & package
-    assert len(STAGES) == 11
+    assert len(STAGES) == 12
 
 
 def test_stage_numbers_match_the_architecture_order():
-    assert [s.number for s in STAGES] == list(range(1, 12))
+    assert [s.number for s in STAGES] == list(range(1, 13))
+
+
+def test_checkpoint_selection_runs_between_training_and_the_gate():
+    """The gate scores what ships, so what ships has to be chosen first
+    (arch v2.1 §11.2)."""
+    order = [s.name for s in STAGES]
+    assert order.index("training") < order.index("checkpoint_eval")
+    assert order.index("checkpoint_eval") < order.index("evaluation_gate")
+    assert order.index("evaluation_gate") < order.index("merge")
 
 
 def test_from_stage_resumes_mid_pipeline():
@@ -1008,3 +1017,60 @@ def test_the_gpu_flag_actually_reaches_the_training_pod(client, controller):
     controller.launch = lambda spec: (launched.append(spec.gpu_class), original(spec))[1]  # type: ignore[method-assign]
     run_stages(ctx, stages_for("finetune"), command="finetune")
     assert launched == ["H100-80G"]
+
+
+# --------------------------------------------------------------------------
+# Checkpoint selection in the pipeline (arch v2.1 §11.2)
+# --------------------------------------------------------------------------
+
+def test_the_selected_checkpoint_is_what_gets_merged(client, controller):
+    """The selection is worth nothing if merge ignores it and folds in the
+    staged adapter directory anyway."""
+    seed_corpus(client)
+    chosen = "/runpod-volume/staging/adapters/foundation/v1/checkpoint-300"
+    ctx = make_context(
+        client, controller,
+        checkpoints=[
+            "/runpod-volume/staging/adapters/foundation/v1/checkpoint-100",
+            "/runpod-volume/staging/adapters/foundation/v1/checkpoint-200",
+            chosen,
+        ],
+        checkpoint_scorer=lambda p: {
+            "field_normalized_match": 0.95 if p.endswith("300") else 0.80
+        },
+
+    )
+    report = run_stages(ctx, stages_for("finetune"), command="finetune")
+
+    assert report.ok, report.render()
+    assert ctx.results["checkpoint_eval"].data["selected"] == chosen
+    assert ctx.results["merge"].data["selected_checkpoint"] == chosen
+
+
+def test_a_run_with_no_checkpoints_skips_selection_rather_than_guessing(client, controller):
+    """A dry run never launched ms-swift, so there is nothing to choose between.
+    Merging the staged adapter directory is the honest fallback."""
+    seed_corpus(client)
+    ctx = make_context(client, controller)
+    report = run_stages(ctx, stages_for("finetune"), command="finetune")
+
+    assert report.ok, report.render()
+    assert ctx.results["checkpoint_eval"].status == "skipped"
+    assert ctx.results["merge"].data["selected_checkpoint"] is None
+
+
+def test_the_selection_is_recorded_where_a_later_review_can_read_it(client, controller):
+    """The merged weights do not say which checkpoint they came from, and once
+    the staging volume is reclaimed nothing else does either."""
+    seed_corpus(client)
+    ctx = make_context(
+        client, controller,
+        checkpoints=["/runpod-volume/staging/adapters/foundation/v1/checkpoint-100"],
+        checkpoint_scorer=lambda _p: {"field_normalized_match": 0.9},
+
+    )
+    run_stages(ctx, stages_for("finetune"), command="finetune")
+
+    record = client.read_json(paths.checkpoint_selection("v1"))
+    assert record["selected"].endswith("checkpoint-100")
+    assert record["selection_metric"] == "field_normalized_match"
