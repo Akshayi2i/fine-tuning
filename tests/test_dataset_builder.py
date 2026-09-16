@@ -379,8 +379,21 @@ def test_manifest_records_every_pin_and_measurement():
     assert manifest["builder_git_commit"] == "deadbee"
     assert manifest["seed"] == 42
 
-    # Composition and coverage.
-    assert manifest["total_rows"] == 36
+    # Composition and coverage. Not a fixed number any more: under arch v2.1
+    # §6.1 a train document contributes one row per EPOCH (four, always
+    # materialized) while val and test keep all three modality regimes so
+    # image-only accuracy is measured on the full eval population.
+    from data_pipeline.dataset_builder.sample_modes import EPOCH_FILES
+
+    expected = (
+        len(result.rows_by_split["train"])
+        + len(result.rows_by_split["val"])
+        + len(result.rows_by_split["test"])
+    )
+    assert manifest["total_rows"] == expected
+    assert len(result.rows_by_split["train"]) % EPOCH_FILES == 0, (
+        "every train document contributes exactly one row per epoch"
+    )
     assert set(manifest["modality_mix"]) == set(MODALITY_MODES)
     assert manifest["lob_coverage_target"] == 0.20
     assert "alias_coverage" in manifest
@@ -618,3 +631,237 @@ def test_assignment_is_stable_as_the_corpus_grows():
         if before.split_of(f.group_id) != after.split_of(f.group_id)
     ]
     assert not moved, f"{len(moved)} group(s) moved on growth: {moved[:5]}"
+
+
+# --------------------------------------------------------------------------
+# Per-epoch mode sampling (arch v2.1 §6.1)
+# --------------------------------------------------------------------------
+
+def test_each_document_appears_once_per_epoch():
+    """v1 expanded every document into three rows, so a "3 epoch" run was nine
+    passes over the corpus and the manifest's epoch count described something
+    other than what ran."""
+    from data_pipeline.dataset_builder.sample_modes import sample_modes
+
+    ids = [f"doc_{i:03d}" for i in range(200)]
+    assignment = sample_modes(ids, epochs=4)
+
+    for source_id in ids:
+        assert len(assignment.modes_seen_by(source_id)) == 4
+
+
+def test_the_realised_mix_approaches_the_target_not_thirty_three_each():
+    """The v1 three-rows-per-document expansion produced 33/33/33, and a
+    downstream sampler discarded rows to correct it — throwing away labelled data
+    to fix a shape problem."""
+    from common.constants import MODALITY_MIX
+    from data_pipeline.dataset_builder.sample_modes import assert_mix_is_close, sample_modes
+
+    assignment = sample_modes([f"doc_{i:04d}" for i in range(500)], epochs=4)
+    assert_mix_is_close(assignment)
+
+    realised = assignment.realised_mix()
+    assert abs(realised["ocr_plus_image"] - MODALITY_MIX["ocr_plus_image"]) < 0.05
+    assert realised["ocr_plus_image"] > realised["image_only"] > realised["noisy_ocr_image"]
+
+
+def test_a_document_is_shown_in_more_than_one_regime_over_a_run():
+    """The whole point of per-epoch sampling: a document only ever seen with
+    clean OCR teaches nothing about arbitration."""
+    from data_pipeline.dataset_builder.sample_modes import sample_modes
+
+    assignment = sample_modes([f"doc_{i:03d}" for i in range(200)], epochs=4)
+    varied = [
+        sid for sid in {s for s, _ in assignment.draws}
+        if len(set(assignment.modes_seen_by(sid))) > 1
+    ]
+    assert len(varied) > 100, "epochs are drawing the same mode every time"
+
+
+def test_mode_draws_are_stable_as_the_corpus_grows():
+    """Adding a document must not change the regime an existing one was shown
+    in, or every rebuild reshuffles what the model already learned."""
+    from data_pipeline.dataset_builder.sample_modes import sample_modes
+
+    before = sample_modes([f"doc_{i:03d}" for i in range(50)])
+    after = sample_modes([f"doc_{i:03d}" for i in range(80)])
+
+    for key, mode in before.draws.items():
+        assert after.draws[key] == mode
+
+
+def test_a_mix_that_does_not_sum_to_one_is_refused():
+    """Whichever regime falls off the end of the cumulative thresholds is
+    silently starved."""
+    from data_pipeline.dataset_builder.sample_modes import ModeSamplingError, sample_modes
+
+    with pytest.raises(ModeSamplingError, match="sums to"):
+        sample_modes(["a"], mix={"ocr_plus_image": 0.5, "noisy_ocr_image": 0.2, "image_only": 0.2})
+
+
+# --------------------------------------------------------------------------
+# Cap checking (arch v2.1 §7a)
+# --------------------------------------------------------------------------
+
+def test_an_over_cap_row_is_rejected_not_truncated():
+    """A truncated example is not a smaller example, it is a wrong one: cut the
+    tail off a Loss Run assistant span and the target becomes JSON that stops
+    after eleven claims, so the model is trained to stop after eleven claims."""
+    from data_pipeline.dataset_builder.cap_check import CapReport, check_row, estimate_row
+
+    report = CapReport()
+    estimate = estimate_row(
+        task="extract",
+        system_prompt="x" * 4000,
+        ocr_pages=["y" * 40000] * 12,
+        page_count=12,
+        target_json={"claims": [{"n": i} for i in range(200)]},
+        doc_type="acord",
+    )
+    assert not check_row(estimate, source_id="big_001", report=report)
+    assert report.rejected and report.accepted == 0
+
+
+def test_an_over_budget_output_is_rejected_even_when_the_total_fits():
+    """The case that actually produces a clipped assistant span — and the one a
+    single total-length check would miss."""
+    from data_pipeline.dataset_builder.cap_check import check_row, estimate_row
+
+    estimate = estimate_row(
+        task="lossrun_totals",
+        system_prompt="short",
+        ocr_pages=None,
+        page_count=1,
+        target_json="z" * 60000,
+    )
+    assert estimate.output_tokens > 1024
+    assert not check_row(estimate, source_id="totals_001")
+
+
+def test_a_normal_row_fits_its_budget():
+    from data_pipeline.dataset_builder.cap_check import CapReport, check_row, estimate_row
+
+    report = CapReport()
+    estimate = estimate_row(
+        task="extract",
+        system_prompt="You are an insurance document extraction system. " * 40,
+        ocr_pages=["page text " * 300] * 2,
+        page_count=2,
+        target_json={"insured_name": "Rivera Fabrication LLC", "claims": []},
+        doc_type="acord",
+    )
+    assert check_row(estimate, source_id="ok_001", report=report)
+    assert report.accepted == 1 and not report.rejected
+
+
+def test_the_estimate_is_pessimistic_about_page_cost():
+    """Assumes every page fills its pixel budget. Over-estimating costs a
+    rejection an operator sees; under-estimating costs silent truncation."""
+    from data_pipeline.dataset_builder.cap_check import estimate_visual_tokens
+
+    assert estimate_visual_tokens(1, "extract") > estimate_visual_tokens(1, "classify") * 5
+    assert estimate_visual_tokens(3, "extract") == 3 * estimate_visual_tokens(1, "extract")
+
+
+def test_the_rejection_warning_says_the_documents_are_not_the_problem():
+    from data_pipeline.dataset_builder.cap_check import CapReport, TokenEstimate
+
+    report = CapReport()
+    report.reject("d1", "extract", TokenEstimate(task="extract", doc_type="policy"), 24576)
+    assert "contribute NOTHING to training" in report.warning()
+
+
+# --------------------------------------------------------------------------
+# Task decomposition (arch v2.1 §7b)
+# --------------------------------------------------------------------------
+
+def test_dense_lossrun_pages_get_a_single_page_window():
+    """A dense page overflows the OUTPUT budget, not the input one — which is why
+    the window shrinks as row density rises."""
+    from data_pipeline.dataset_builder.expand_tasks import plan_windows
+
+    assert plan_windows([40] * 6, output_budget=8000) == [[1], [2], [3], [4], [5], [6]]
+
+
+def test_sparse_lossrun_pages_get_a_three_page_window_with_overlap():
+    """Overlap so a row split across a page break is seen whole by one window."""
+    from data_pipeline.dataset_builder.expand_tasks import plan_windows
+
+    windows = plan_windows([8] * 6, output_budget=8000)
+    assert windows[0] == [1, 2, 3]
+    assert windows[1][0] == 3, "windows overlap by one page"
+
+
+def test_the_planner_shrinks_a_window_the_page_count_alone_would_allow():
+    """Three sparse pages holding ninety rows between them still overflow a
+    budget sized for sixty-five, and the band table cannot see that."""
+    from data_pipeline.dataset_builder.expand_tasks import plan_windows
+
+    assert plan_windows([30, 30, 30], output_budget=4000) == [[1], [2], [3]]
+
+
+def test_a_lossrun_expands_into_header_windows_and_totals():
+    """Printed totals sit at the END of the report and per policy period, not on
+    pages 1-2 where v2.0 looked for them (v2.1 correction)."""
+    from common.tasks import Task
+    from data_pipeline.dataset_builder.expand_tasks import expand_lossrun
+
+    examples = expand_lossrun(
+        source_id="lr_001",
+        golden_label={
+            "carrier": "Acme",
+            "claims": [{"claim_number": f"C{i}"} for i in range(30)],
+            "totals": {"incurred": 184200.0},
+        },
+        page_markdown=["| a | b |\n|---|---|\n" + "| 1 | 2 |\n" * 10] * 4,
+        output_budget=8000,
+    )
+    tasks = [e.task for e in examples]
+    assert tasks[0] == Task.LOSSRUN_HEADER
+    assert tasks[-1] == Task.LOSSRUN_TOTALS
+    assert Task.LOSSRUN_ROWS in tasks
+
+    totals = examples[-1]
+    assert totals.pages == [3, 4], "totals read the LAST pages, not the first"
+
+
+def test_every_lossrun_example_shares_the_documents_identity():
+    """All of them share the document's group, so all of them share its split.
+    A header in train and its rows in test is the same leak as any other."""
+    from data_pipeline.dataset_builder.expand_tasks import expand_lossrun
+
+    examples = expand_lossrun(
+        source_id="lr_002",
+        golden_label={"carrier": "Acme", "claims": [], "totals": {}},
+        page_markdown=["| a |\n|---|\n| 1 |\n"] * 3,
+        output_budget=8000,
+    )
+    assert {e.source_id for e in examples} == {"lr_002"}
+
+
+def test_the_declarations_pages_are_always_routed():
+    """A selector that misses the declarations area produces an extraction with
+    no policy number."""
+    from data_pipeline.dataset_builder.expand_tasks import select_policy_pages
+
+    assert select_policy_pages([22, 31], 40)[:3] == [1, 2, 3]
+
+
+def test_the_routed_page_set_is_capped():
+    """An uncapped routed set defeats the routing."""
+    from data_pipeline.dataset_builder.expand_tasks import MAX_ROUTED_PAGES, select_policy_pages
+
+    selected = select_policy_pages([5, 9, 14, 22, 31, 33, 38], 40)
+    assert len(selected) == MAX_ROUTED_PAGES
+    assert selected[:3] == [1, 2, 3], "declarations survive the cap"
+
+
+def test_a_long_policy_is_thumbnailed_in_chunks():
+    """A 200-page policy cannot have every page thumbnailed in one call even at
+    256 tokens a page."""
+    from data_pipeline.dataset_builder.expand_tasks import page_select_chunks
+
+    chunks = page_select_chunks(200)
+    assert len(chunks) == 4
+    assert chunks[0][0] == 1 and chunks[-1][-1] == 200
+    assert sum(len(c) for c in chunks) == 200

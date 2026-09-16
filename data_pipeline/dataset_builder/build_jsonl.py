@@ -19,6 +19,7 @@ from typing import Any
 
 from common.constants import MODALITY_MIX, MODALITY_MODES
 from data_pipeline.dataset_builder.noisy_ocr_augment import corrupt_ocr_pages
+from data_pipeline.dataset_builder.sample_modes import ModeAssignment, sample_modes
 from data_pipeline.dataset_builder.split_groups import (
     GroupSplitAssignment,
     assert_no_leakage,
@@ -94,10 +95,17 @@ def expand_document(
     seed: int = 42,
     modes: tuple[str, ...] = MODALITY_MODES,
 ) -> tuple[list[dict[str, Any]], list[str]]:
-    """Expand one document into its modality variants.
+    """Expand one document into one row per mode in ``modes``.
 
-    All three rows land in the **same** split, because the document was assigned
+    Every row lands in the **same** split, because the document was assigned
     before expansion. Returns ``(rows, corruption_details)``.
+
+    Under arch v2.1 §6.1 the caller passes ONE mode per epoch, drawn by
+    :mod:`data_pipeline.dataset_builder.sample_modes`. Passing all three — the v1
+    behaviour — produces a 33/33/33 mix rather than the 50/20/30 the architecture
+    specifies, and shows every document to the model three times per epoch, so a
+    "3 epoch" run is nine passes. Val and test still take all three, so
+    image-only accuracy is measured on the full eval population.
     """
     golden_json = json.dumps(document.golden_label, ensure_ascii=False, sort_keys=False)
     rows: list[dict[str, Any]] = []
@@ -140,9 +148,18 @@ def build_corpus(
     assignment: GroupSplitAssignment,
     *,
     seed: int = 42,
+    mode_assignment: ModeAssignment | None = None,
 ) -> BuildResult:
-    """Compile every document into its split's rows, then assert no leakage."""
+    """Compile every document into its split's rows, then assert no leakage.
+
+    ``mode_assignment`` carries the per-document, per-epoch modality draw
+    (arch v2.1 §6.1). Without one the v1 behaviour applies — all three regimes
+    for every document — which is retained only so the val and test paths and the
+    older tests keep working; a real train build always passes one.
+    """
     result = BuildResult(rows_by_split={"train": [], "val": [], "test": []})
+    if mode_assignment is None:
+        mode_assignment = sample_modes([d.source_id for d in documents], seed=seed)
 
     for document in documents:
         try:
@@ -151,12 +168,30 @@ def build_corpus(
             result.skipped.append((document.source_id, str(exc)))
             continue
 
+        # Train draws ONE mode per epoch (§6.1); val and test keep all three so
+        # image-only and noisy-OCR accuracy are measured on the full eval
+        # population rather than a sample of it.
+        if split == "train" and mode_assignment is not None:
+            epoch_modes = tuple(
+                mode_assignment.mode_for(document.source_id, e)
+                for e in range(1, mode_assignment.epochs + 1)
+            )
+        else:
+            epoch_modes = MODALITY_MODES
+
         try:
-            rows, details = expand_document(document, split, seed=seed)
+            rows, details = expand_document(document, split, seed=seed, modes=epoch_modes)
         except Exception as exc:  # noqa: BLE001 - one bad document must not stop a corpus
             result.skipped.append((document.source_id, f"expansion failed: {exc}"))
             log.warning("skipping %s: %s", document.source_id, exc)
             continue
+
+        # Train rows are stamped with the epoch they belong to, so the corpus can
+        # be written as epoch_1..4.jsonl and a run reproduced from the files
+        # alone rather than from a sampler behaving identically at training time.
+        if split == "train" and mode_assignment is not None:
+            for epoch, row in enumerate(rows, start=1):
+                row["epoch"] = epoch
 
         # Stamped here rather than inside expand_document: the family is a
         # property of the corpus build, not of one document's expansion, and the
