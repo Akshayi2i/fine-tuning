@@ -48,7 +48,7 @@ def no_external(monkeypatch):
 def seed_labels(client: BlobClient, doc_type: str, count: int) -> None:
     for i in range(1, count + 1):
         client.write_json(paths.golden_label(doc_type, f"{doc_type}_{i:04d}"),
-                          {"line_of_business": "workers_comp"})
+                          {"line_of_business": ["workers_comp"]})
 
 
 # --------------------------------------------------------------------------

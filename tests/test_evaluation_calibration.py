@@ -165,8 +165,8 @@ def test_alias_accuracy_is_not_a_gating_metric():
 
 def test_lob_accuracy_is_reported_per_value():
     """A rare class must not hide inside a healthy aggregate (arch §0b)."""
-    documents = [({"line_of_business": "workers_comp"}, {"line_of_business": "workers_comp"})] * 9
-    documents.append(({"line_of_business": "umbrella"}, {"line_of_business": "property"}))
+    documents = [({"line_of_business": ["workers_comp"]}, {"line_of_business": ["workers_comp"]})] * 9
+    documents.append(({"line_of_business": ["umbrella"]}, {"line_of_business": ["property"]}))
 
     report = score_lob(documents)
     assert report.overall == pytest.approx(0.9)
@@ -176,7 +176,7 @@ def test_lob_accuracy_is_reported_per_value():
 
 def test_unmeasured_lob_values_are_reported():
     """An unmeasured class is not a passing class."""
-    report = score_lob([({"line_of_business": "workers_comp"}, {"line_of_business": "workers_comp"})])
+    report = score_lob([({"line_of_business": ["workers_comp"]}, {"line_of_business": ["workers_comp"]})])
     assert "umbrella" in report.unmeasured_values()
 
 

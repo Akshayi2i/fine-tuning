@@ -288,7 +288,7 @@ def test_corruptions_are_recorded_for_eval_slicing():
 # --------------------------------------------------------------------------
 
 def test_lob_under_coverage_names_the_thin_values():
-    labels = [{"line_of_business": "workers_comp"}] * 19 + [{"line_of_business": "property"}]
+    labels = [{"line_of_business": ["workers_comp"]}] * 19 + [{"line_of_business": ["property"]}]
     shares, warnings = compute_lob_coverage(labels)
     assert shares["workers_comp"] > 0.9
     assert warnings and "property" in warnings[0]

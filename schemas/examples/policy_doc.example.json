@@ -6,11 +6,27 @@
   "expiration_date": "2027-04-01",
   "carrier": "Sentinel Insurance Company",
   "producer": "Hanover Risk Partners",
-  "total_premium": 47250.00,
-  "line_of_business": "workers_comp",
-  "coverage_schedule": [
-    {"coverage_name": "Workers Compensation", "limit": 1000000.00, "deductible": null, "premium": 44100.00},
-    {"coverage_name": "Employers Liability", "limit": 500000.00, "deductible": null, "premium": 3150.00}
+  "total_premium": 47250.0,
+  "line_of_business": [
+    "workers_comp"
   ],
-  "endorsements": ["WC 00 03 13", "WC 00 04 21"]
+  "coverage_schedule": [
+    {
+      "coverage_name": "Workers Compensation",
+      "limit": 1000000.0,
+      "deductible": null,
+      "premium": 44100.0
+    },
+    {
+      "coverage_name": "Employers Liability",
+      "limit": 500000.0,
+      "deductible": null,
+      "premium": 3150.0
+    }
+  ],
+  "endorsements": [
+    "WC 00 03 13",
+    "WC 00 04 21"
+  ],
+  "line_of_business_other": []
 }

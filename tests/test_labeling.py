@@ -56,7 +56,7 @@ def test_valid_label_passes():
 
 
 def test_label_without_line_of_business_is_rejected():
-    """Required in every label, every type, even when null (arch §0b)."""
+    """Required in every label, every type, even when empty (arch §0b)."""
     label = _policy_label()
     del label["line_of_business"]
     with pytest.raises(LabelValidationError, match="line_of_business is missing"):
@@ -65,12 +65,29 @@ def test_label_without_line_of_business_is_rejected():
 
 def test_out_of_enum_line_of_business_is_rejected():
     with pytest.raises(LabelValidationError, match="invalid line_of_business"):
-        validate_golden_label(_policy_label(line_of_business="marine_cargo"), "policy")
+        validate_golden_label(_policy_label(line_of_business=["marine_cargo"]), "policy")
 
 
-def test_null_line_of_business_is_accepted():
-    """Null means the document does not determine it — a correct answer."""
-    validate_golden_label(_policy_label(line_of_business=None), "policy")
+def test_an_empty_line_of_business_is_accepted():
+    """An empty list means the document does not determine a line — a correct
+    answer, and distinct from omitting the field. Under v1 this was `null`;
+    v2.1 §0b makes it a list, so `[]` carries that meaning."""
+    validate_golden_label(_policy_label(line_of_business=[]), "policy")
+
+
+def test_several_lines_are_accepted_on_one_document():
+    """The whole reason the field became a list: a package policy or certificate
+    routinely covers several lines, and the v1 scalar forced the annotator to
+    pick one and discard the rest."""
+    validate_golden_label(
+        _policy_label(line_of_business=["general_liability", "property"]), "policy"
+    )
+
+
+def test_a_duplicated_line_is_rejected():
+    validate = validate_golden_label
+    with pytest.raises(LabelValidationError):
+        validate(_policy_label(line_of_business=["property", "property"]), "policy")
 
 
 def test_acord_label_without_a_form_is_rejected():

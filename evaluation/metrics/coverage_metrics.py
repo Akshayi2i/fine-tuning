@@ -30,47 +30,92 @@ from common.schemas import is_valid
 
 @dataclass
 class LobReport:
-    """LoB detection accuracy, overall and per value."""
+    """LoB detection as a **set** problem, per value (arch v2.1 §15.2).
 
-    per_value: dict[str, tuple[int, int]] = field(default_factory=dict)
-    null_correct: int = 0
-    null_total: int = 0
+    Under v1 this was one label per document and accuracy was a fair summary.
+    Under a list it is not: a document covering general liability and property,
+    predicted as general liability alone, is neither right nor wrong — it is
+    complete precision at half recall, and an accuracy number cannot say that.
+
+    So each value gets true positives, false positives and false negatives, and
+    the gate reads set-F1. The distinction matters in the direction that costs
+    money: a missed line under-states coverage on a certificate.
+    """
+
+    #: value -> [true positives, false positives, false negatives]
+    per_value: dict[str, list[int]] = field(default_factory=dict)
+
+    #: Documents whose golden LoB list is empty. Predicting a line for one is a
+    #: false positive that no per-value recall would otherwise catch, because
+    #: there is no truth value to miss.
+    undetermined_total: int = 0
+    undetermined_correct: int = 0
+
+    def _cell(self, value: str) -> list[int]:
+        return self.per_value.setdefault(value, [0, 0, 0])
+
+    @staticmethod
+    def _f1(tp: int, fp: int, fn: int) -> float:
+        precision = tp / (tp + fp) if tp + fp else 0.0
+        recall = tp / (tp + fn) if tp + fn else 0.0
+        return 2 * precision * recall / (precision + recall) if precision + recall else 0.0
 
     @property
     def overall(self) -> float:
-        correct = sum(c for c, _ in self.per_value.values()) + self.null_correct
-        total = sum(t for _, t in self.per_value.values()) + self.null_total
-        return correct / total if total else 0.0
+        """Micro set-F1 across every value — the gating number."""
+        tp = sum(c[0] for c in self.per_value.values())
+        fp = sum(c[1] for c in self.per_value.values())
+        fn = sum(c[2] for c in self.per_value.values())
+        return self._f1(tp, fp, fn)
 
-    def accuracy_by_value(self) -> dict[str, float]:
+    def f1_by_value(self) -> dict[str, float]:
         return {
-            value: round(correct / total, 4) if total else 0.0
-            for value, (correct, total) in sorted(self.per_value.items())
+            value: round(self._f1(*counts), 4)
+            for value, counts in sorted(self.per_value.items())
         }
+
+    #: Kept under the v1 name so the manifest field and the gate key do not move
+    #: in the same change as the metric's meaning. It reports F1, not accuracy.
+    def accuracy_by_value(self) -> dict[str, float]:
+        return self.f1_by_value()
 
     def unmeasured_values(self) -> list[str]:
         """LoB values with no eval documents at all.
 
-        An unmeasured class is not a passing class — it is one whose accuracy
-        nobody knows, and the aggregate will not say so.
+        An unmeasured class is not a passing class — it is one whose score nobody
+        knows, and the aggregate will not say so. ``tp + fn`` is the support:
+        false positives alone mean the value was never in the golden set.
         """
-        return sorted(v for v in lob_values() if self.per_value.get(v, (0, 0))[1] == 0)
+        return sorted(
+            v for v in lob_values()
+            if (self.per_value.get(v, [0, 0, 0])[0] + self.per_value.get(v, [0, 0, 0])[2]) == 0
+        )
 
 
 def score_lob(documents: list[tuple[dict[str, Any], dict[str, Any]]]) -> LobReport:
-    """Score ``line_of_business`` per value across the eval set."""
+    """Score ``line_of_business`` as a set, per value, across the eval set."""
+    from common.lob import normalize_lob
+
     report = LobReport()
     for expected, got in documents:
-        truth = expected.get("line_of_business")
-        prediction = got.get("line_of_business")
-        correct = truth == prediction
+        truth = set(normalize_lob(expected.get("line_of_business")))
+        prediction = set(normalize_lob(got.get("line_of_business")))
 
-        if truth is None:
-            report.null_total += 1
-            report.null_correct += int(correct)
-        else:
-            hits, total = report.per_value.get(truth, (0, 0))
-            report.per_value[truth] = (hits + int(correct), total + 1)
+        if not truth:
+            # Nothing to recall. What is measurable is whether the model also
+            # declined — inventing a line here is the failure mode, and it shows
+            # up as a false positive on whichever value it invented.
+            report.undetermined_total += 1
+            report.undetermined_correct += int(not prediction)
+
+        for value in truth | prediction:
+            cell = report._cell(value)
+            if value in truth and value in prediction:
+                cell[0] += 1
+            elif value in prediction:
+                cell[1] += 1
+            else:
+                cell[2] += 1
     return report
 
 

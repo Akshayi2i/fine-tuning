@@ -75,9 +75,35 @@ def test_list_fields_name_their_row_fields():
     assert {f.path for f in claims.row_fields} >= {"claims[].claim_number", "claims[].loss_date"}
 
 
-def test_enum_fields_offer_an_explicit_null_choice():
-    """Undetermined is a decision the reviewer makes, not an empty box."""
-    assert "null (undetermined)" in build_labeling_config("policy")
+def test_a_list_valued_enum_is_multi_select_with_an_explicit_none():
+    """Undetermined is a decision the reviewer makes, not an empty box — and
+    under v2.1 a document can carry several lines. Forcing single choice on
+    line_of_business is what made the v1 annotator pick one line off a package
+    policy and discard the rest: the control and the label shape have to agree,
+    or the tool quietly caps what can be recorded (arch v2.1 §0b)."""
+    config = build_labeling_config("policy")
+    assert 'name="line_of_business"' in config
+    assert 'choice="multiple"' in config
+    assert "select none if the document determines no value" in config
+
+
+def test_a_multi_select_is_not_marked_required():
+    """Selecting nothing IS the answer for a document that determines no line.
+    A required control makes that undetermined-but-correct label unrecordable."""
+    config = build_labeling_config("policy")
+    block = config.split('name="line_of_business"')[1].split(">")[0]
+    assert 'required="false"' in block
+
+
+def test_the_lob_control_still_offers_every_enum_value():
+    """An array-of-enum declares its values on items.enum, not enum. Reading only
+    the latter degrades the control to a free-text box, and the reviewer can type
+    anything."""
+    from common.lob import lob_values
+
+    config = build_labeling_config("policy")
+    for value in lob_values():
+        assert f'<Choice value="{value}"/>' in config
 
 
 def test_every_field_has_a_provenance_input():

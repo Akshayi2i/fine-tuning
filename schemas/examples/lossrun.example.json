@@ -4,12 +4,39 @@
   "insured_name": "Rivera Fabrication LLC",
   "effective_date": "2025-04-01",
   "expiration_date": "2026-04-01",
-  "line_of_business": "workers_comp",
+  "line_of_business": [
+    "workers_comp"
+  ],
   "valuation_date": "2026-03-31",
   "total_claims_reported": 3,
   "claims": [
-    {"claim_number": "WC24-00817", "loss_date": "2024-02-14", "status": "closed", "paid": 12400.00, "reserved": 0.00, "total_incurred": 12400.00, "description": "Laceration, left hand"},
-    {"claim_number": "WC24-01109", "loss_date": "2024-07-03", "status": "open", "paid": 3150.00, "reserved": 18000.00, "total_incurred": 21150.00, "description": null},
-    {"claim_number": "WC25-00204", "loss_date": "2025-01-22", "status": "open", "paid": 875.00, "reserved": 5500.00, "total_incurred": 6375.00, "description": "Slip and fall"}
-  ]
+    {
+      "claim_number": "WC24-00817",
+      "loss_date": "2024-02-14",
+      "status": "closed",
+      "paid": 12400.0,
+      "reserved": 0.0,
+      "total_incurred": 12400.0,
+      "description": "Laceration, left hand"
+    },
+    {
+      "claim_number": "WC24-01109",
+      "loss_date": "2024-07-03",
+      "status": "open",
+      "paid": 3150.0,
+      "reserved": 18000.0,
+      "total_incurred": 21150.0,
+      "description": null
+    },
+    {
+      "claim_number": "WC25-00204",
+      "loss_date": "2025-01-22",
+      "status": "open",
+      "paid": 875.0,
+      "reserved": 5500.0,
+      "total_incurred": 6375.0,
+      "description": "Slip and fall"
+    }
+  ],
+  "line_of_business_other": []
 }

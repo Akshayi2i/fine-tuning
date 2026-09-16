@@ -30,7 +30,7 @@ from testing.run_extraction import run_document, summarise
 GOLDEN = {
     "insured_name": "Rivera Fabrication LLC",
     "policy_number": "WC-8842317-01",
-    "line_of_business": "workers_comp",
+    "line_of_business": ["workers_comp"],
     "effective_date": "2026-04-01",
 }
 RESPONSE = json.dumps(GOLDEN)
@@ -213,7 +213,11 @@ def test_pipeline_produces_the_output_contract(model):
     result = extract(_request(), model, StaticClassifier("policy"), CALIBRATION)
     assert result.schema_valid
     assert result.doc_type == "policy"
-    assert result.line_of_business["value"] == "workers_comp"
+    # A list under arch v2.1 §0b. The span mapper emits one span per value —
+    # each has its own tokens and its own logprob — and the pipeline collapses
+    # them into one field carrying the weakest value's confidence.
+    assert result.line_of_business["value"] == ["workers_comp"]
+    assert 0.0 <= result.line_of_business["confidence"] <= 1.0
     assert "insured_name" in result.fields
     assert set(result.fields["insured_name"]) == {"value", "confidence"}
     assert result.pages_used
@@ -255,7 +259,7 @@ def test_list_completeness_flags_reach_the_result(client):
     """A dropped claim row is invisible to per-field confidence."""
     response = json.dumps({
         "carrier": "Sentinel", "policy_number": "WC-1", "valuation_date": "2026-03-31",
-        "line_of_business": "workers_comp", "total_claims_reported": 8,
+        "line_of_business": ["workers_comp"], "total_claims_reported": 8,
         "claims": [{"claim_number": f"C{i}", "loss_date": "2024-01-01", "status": "open"}
                    for i in range(6)],
     })

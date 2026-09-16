@@ -4,13 +4,29 @@
   "producer": "Hanover Risk Partners",
   "certificate_holder": "Meridian Property Group LLC",
   "additional_insured": null,
-  "line_of_business": "general_liability",
+  "line_of_business": [
+    "general_liability"
+  ],
   "certificate_number": null,
   "issue_date": "2026-04-05",
   "insurers": [
-    {"letter": "A", "name": "Sentinel Insurance Company", "naic_code": null}
+    {
+      "letter": "A",
+      "name": "Sentinel Insurance Company",
+      "naic_code": null
+    }
   ],
   "coverages": [
-    {"coverage_type": "COMMERCIAL GENERAL LIABILITY", "insurer_letter": "A", "policy_number": "GL-4419920-00", "effective_date": "2026-04-01", "expiration_date": "2027-04-01", "limits": {"each_occurrence": 1000000.00}}
-  ]
+    {
+      "coverage_type": "COMMERCIAL GENERAL LIABILITY",
+      "insurer_letter": "A",
+      "policy_number": "GL-4419920-00",
+      "effective_date": "2026-04-01",
+      "expiration_date": "2027-04-01",
+      "limits": {
+        "each_occurrence": 1000000.0
+      }
+    }
+  ],
+  "line_of_business_other": []
 }

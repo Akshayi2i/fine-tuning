@@ -117,6 +117,9 @@
       "items": {
         "type": "string"
       }
+    },
+    "line_of_business_other": {
+      "$ref": "lob.enum.json#/$defs/line_of_business_other"
     }
   },
   "$comment": "AUTHORING NOTE - not injected into the prompt. On an application the party seeking coverage is usually labelled differently from how a bound policy labels it, yet it maps to the same canonical insured_name. That mapping is learned from training examples plus the field's semantic gloss - never from an alias list in the prompt, which would give the model a lexical prior and make confusable errors worse (arch 0c)."

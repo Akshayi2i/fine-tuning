@@ -4,8 +4,22 @@
   "producer": "Hanover Risk Partners",
   "carrier": "Sentinel Insurance Company",
   "effective_date": "2026-04-01",
-  "line_of_business": "property",
+  "line_of_business": [
+    "property"
+  ],
   "buildings": [
-    {"location_number": "1", "building_number": "1", "address": "1420 Foundry Road, Toledo OH 43604", "year_built": 1987, "construction_type": "Joisted Masonry", "occupancy": "Metal fabrication shop", "square_footage": 42000, "building_limit": 3200000.00, "contents_limit": 1450000.00, "deductible": 25000.00}
-  ]
+    {
+      "location_number": "1",
+      "building_number": "1",
+      "address": "1420 Foundry Road, Toledo OH 43604",
+      "year_built": 1987,
+      "construction_type": "Joisted Masonry",
+      "occupancy": "Metal fabrication shop",
+      "square_footage": 42000,
+      "building_limit": 3200000.0,
+      "contents_limit": 1450000.0,
+      "deductible": 25000.0
+    }
+  ],
+  "line_of_business_other": []
 }

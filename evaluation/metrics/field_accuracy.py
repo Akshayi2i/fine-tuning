@@ -67,10 +67,17 @@ class AccuracyReport:
 
 
 def flatten_scalars(obj: dict[str, Any], prefix: str = "") -> dict[str, Any]:
-    """Flatten to scalar leaves, keeping list rows addressable.
+    """Flatten to scalar leaves, keeping list ROWS addressable.
 
     ``claims[0].paid`` rather than ``claims`` — per-value accuracy inside a row
     is meaningful, an aggregate over a whole table is not.
+
+    **A list of scalars is one field, not a table.** ``line_of_business`` is a
+    set of enum values (arch v2.1 §0b), so exploding it into
+    ``line_of_business[0]`` would make position part of its identity — and since
+    ``score_fields`` skips any path containing ``[``, it also made the field
+    disappear from scoring entirely the moment it stopped being a scalar. Kept
+    whole, ``values_match`` compares it as the set it is.
     """
     out: dict[str, Any] = {}
     for key, value in obj.items():
@@ -78,11 +85,16 @@ def flatten_scalars(obj: dict[str, Any], prefix: str = "") -> dict[str, Any]:
         if isinstance(value, dict):
             out.update(flatten_scalars(value, f"{path}."))
         elif isinstance(value, list):
-            for index, item in enumerate(value):
-                if isinstance(item, dict):
-                    out.update(flatten_scalars(item, f"{path}[{index}]."))
-                else:
-                    out[f"{path}[{index}]"] = item
+            if any(isinstance(item, dict) for item in value):
+                # A table: rows are addressable, and an empty one contributes
+                # nothing rather than a phantom field.
+                for index, item in enumerate(value):
+                    if isinstance(item, dict):
+                        out.update(flatten_scalars(item, f"{path}[{index}]."))
+                    else:
+                        out[f"{path}[{index}]"] = item
+            else:
+                out[path] = value
         else:
             out[path] = value
     return out

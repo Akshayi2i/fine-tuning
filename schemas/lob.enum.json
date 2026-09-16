@@ -4,10 +4,43 @@
   "title": "Line of Business enum",
   "description": "The single definition of the LOB enum. Every document schema $refs this; it is never redeclared. Mirrors the Fideon SPEC_00 LOB enum (arch 0b).",
   "$defs": {
+    "lob_value": {
+      "type": "string",
+      "enum": [
+        "workers_comp",
+        "general_liability",
+        "commercial_auto",
+        "property",
+        "umbrella"
+      ],
+      "description": "One coverage line. Infer it from the coverage described, the policy number prefix, or the form used - never from the carrier or the insured's industry."
+    },
     "line_of_business": {
-      "type": ["string", "null"],
-      "enum": ["workers_comp", "general_liability", "commercial_auto", "property", "umbrella", null],
-      "description": "The coverage line this document concerns. Infer it from the coverage described, the policy number prefix, or the form used. Output null when the document does not determine it - do not guess from the carrier or the insured's industry."
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": [
+          "workers_comp",
+          "general_liability",
+          "commercial_auto",
+          "property",
+          "umbrella"
+        ],
+        "description": "One supported coverage line."
+      },
+      "uniqueItems": true,
+      "default": [],
+      "description": "The coverage lines this document concerns, as a LIST (arch v2.1 0b). A certificate or a package policy routinely covers several lines, and a single-valued field forced the annotator to pick one and discard the rest - which taught the model to do the same. An EMPTY list means the document does not determine any line; it is not the same as an unlisted line, which goes in line_of_business_other. Do not guess."
+    },
+    "line_of_business_other": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "uniqueItems": true,
+      "default": [],
+      "description": "Coverage lines the document names that are outside the supported enum - inland marine, cyber, crime, EPLI and so on. Also a list (v2.1 correction): a document can carry several unlisted lines. Recorded rather than dropped, because the count of what lands here is the evidence for whether the enum should grow."
     }
   }
 }

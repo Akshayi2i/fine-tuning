@@ -30,7 +30,7 @@ def _scored_documents(n: int = 30):
     golden = {
         "insured_name": "Rivera Fabrication LLC",
         "policy_number": "WC-8842317-01",
-        "line_of_business": "workers_comp",
+        "line_of_business": ["workers_comp"],
         "certificate_holder": "Meridian Property Group LLC",
         "claims": [
             {"claim_number": "CLM-00417", "amount": "12500.00"},

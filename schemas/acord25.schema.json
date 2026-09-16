@@ -6,20 +6,42 @@
   "description": "Canonical extraction target for ACORD form 25 (Fideon SPEC_00 ACORDMappingDocument, doc_type 'acord', acord_form '25'). This form is the sharpest test of confusable discrimination: the insured, the producer, the certificate holder, and up to six insurers all appear as organisation names on a single page (arch 0c).",
   "type": "object",
   "additionalProperties": false,
-  "required": ["insured_name", "certificate_holder", "line_of_business"],
+  "required": [
+    "insured_name",
+    "certificate_holder",
+    "line_of_business"
+  ],
   "properties": {
-    "insured_name": {"$ref": "common_fields.json#/$defs/insured_name"},
-    "insured_address": {"$ref": "common_fields.json#/$defs/insured_address"},
-    "producer": {"$ref": "common_fields.json#/$defs/producer"},
-    "certificate_holder": {"$ref": "common_fields.json#/$defs/certificate_holder"},
-    "additional_insured": {"$ref": "common_fields.json#/$defs/additional_insured"},
-    "line_of_business": {"$ref": "lob.enum.json#/$defs/line_of_business"},
+    "insured_name": {
+      "$ref": "common_fields.json#/$defs/insured_name"
+    },
+    "insured_address": {
+      "$ref": "common_fields.json#/$defs/insured_address"
+    },
+    "producer": {
+      "$ref": "common_fields.json#/$defs/producer"
+    },
+    "certificate_holder": {
+      "$ref": "common_fields.json#/$defs/certificate_holder"
+    },
+    "additional_insured": {
+      "$ref": "common_fields.json#/$defs/additional_insured"
+    },
+    "line_of_business": {
+      "$ref": "lob.enum.json#/$defs/line_of_business"
+    },
     "certificate_number": {
-      "type": ["string", "null"],
+      "type": [
+        "string",
+        "null"
+      ],
       "description": "The identifier of this certificate document. Not any policy number listed on it."
     },
     "issue_date": {
-      "type": ["string", "null"],
+      "type": [
+        "string",
+        "null"
+      ],
       "description": "The date this certificate was issued, as YYYY-MM-DD. Not a policy effective or expiration date."
     },
     "insurers": {
@@ -28,15 +50,41 @@
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["letter", "name"],
+        "required": [
+          "letter",
+          "name"
+        ],
         "properties": {
           "letter": {
-            "type": ["string", "null"],
-            "enum": ["A", "B", "C", "D", "E", "F", null],
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "A",
+              "B",
+              "C",
+              "D",
+              "E",
+              "F",
+              null
+            ],
             "description": "The A-F letter this insurer is assigned on the form, used by the coverage rows to reference it."
           },
-          "name": {"type": ["string", "null"], "description": "The insurer's company name as listed."},
-          "naic_code": {"type": ["string", "null"], "description": "The insurer's NAIC code, if shown."}
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The insurer's company name as listed."
+          },
+          "naic_code": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The insurer's NAIC code, if shown."
+          }
         }
       }
     },
@@ -46,26 +94,51 @@
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["coverage_type"],
+        "required": [
+          "coverage_type"
+        ],
         "properties": {
           "coverage_type": {
-            "type": ["string", "null"],
+            "type": [
+              "string",
+              "null"
+            ],
             "description": "The coverage named on this row, for example Commercial General Liability, Automobile Liability, Umbrella, or Workers Compensation."
           },
           "insurer_letter": {
-            "type": ["string", "null"],
+            "type": [
+              "string",
+              "null"
+            ],
             "description": "The A-F letter in the INSR LTR column, linking this row to an entry in insurers."
           },
-          "policy_number": {"$ref": "common_fields.json#/$defs/policy_number"},
-          "effective_date": {"$ref": "common_fields.json#/$defs/effective_date"},
-          "expiration_date": {"$ref": "common_fields.json#/$defs/expiration_date"},
+          "policy_number": {
+            "$ref": "common_fields.json#/$defs/policy_number"
+          },
+          "effective_date": {
+            "$ref": "common_fields.json#/$defs/effective_date"
+          },
+          "expiration_date": {
+            "$ref": "common_fields.json#/$defs/expiration_date"
+          },
           "limits": {
-            "type": ["object", "null"],
-            "additionalProperties": {"type": ["number", "null"]},
+            "type": [
+              "object",
+              "null"
+            ],
+            "additionalProperties": {
+              "type": [
+                "number",
+                "null"
+              ]
+            },
             "description": "The limits shown for this row, keyed by the limit name as printed, for example 'each_occurrence' or 'general_aggregate'. Values are numbers without currency symbols or separators."
           }
         }
       }
+    },
+    "line_of_business_other": {
+      "$ref": "lob.enum.json#/$defs/line_of_business_other"
     }
   }
 }

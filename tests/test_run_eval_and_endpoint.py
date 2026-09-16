@@ -40,7 +40,7 @@ from serving.vllm_entrypoint import (
 GOLDEN = {
     "insured_name": "Rivera Fabrication LLC",
     "policy_number": "WC-8842317-01",
-    "line_of_business": "workers_comp",
+    "line_of_business": ["workers_comp"],
 }
 
 

@@ -70,12 +70,12 @@ def test_the_baseline_reports_where_it_fails_not_just_how_much():
     expected = {
         "insured_name": "Rivera Fabrication LLC",
         "policy_number": "WC-8842317-01",
-        "line_of_business": "workers_comp",
+        "line_of_business": ["workers_comp"],
     }
     got = {
         "insured_name": "Meridian Property Group",   # a confusable, not a typo
         "policy_number": "WC-8842317-O1",            # OCR-shaped near miss
-        "line_of_business": "workers_comp",
+        "line_of_business": ["workers_comp"],
     }
     report = summarise_baseline([("policy", expected, got, {"schema_valid": True, "document": "p1"})])
 

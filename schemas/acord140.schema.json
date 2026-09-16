@@ -6,34 +6,114 @@
   "description": "Canonical extraction target for ACORD form 140 (doc_type 'acord', acord_form '140'). A supplementary property section, normally filed alongside an ACORD 125, so it repeats the applicant identity and adds per-building detail.",
   "type": "object",
   "additionalProperties": false,
-  "required": ["insured_name", "line_of_business"],
+  "required": [
+    "insured_name",
+    "line_of_business"
+  ],
   "properties": {
-    "insured_name": {"$ref": "common_fields.json#/$defs/insured_name"},
-    "policy_number": {"$ref": "common_fields.json#/$defs/policy_number"},
-    "producer": {"$ref": "common_fields.json#/$defs/producer"},
-    "carrier": {"$ref": "common_fields.json#/$defs/carrier"},
-    "effective_date": {"$ref": "common_fields.json#/$defs/effective_date"},
-    "line_of_business": {"$ref": "lob.enum.json#/$defs/line_of_business"},
+    "insured_name": {
+      "$ref": "common_fields.json#/$defs/insured_name"
+    },
+    "policy_number": {
+      "$ref": "common_fields.json#/$defs/policy_number"
+    },
+    "producer": {
+      "$ref": "common_fields.json#/$defs/producer"
+    },
+    "carrier": {
+      "$ref": "common_fields.json#/$defs/carrier"
+    },
+    "effective_date": {
+      "$ref": "common_fields.json#/$defs/effective_date"
+    },
+    "line_of_business": {
+      "$ref": "lob.enum.json#/$defs/line_of_business"
+    },
     "buildings": {
       "type": "array",
       "description": "One entry per building or location described on the property section.",
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["address"],
+        "required": [
+          "address"
+        ],
         "properties": {
-          "location_number": {"type": ["string", "null"], "description": "The location number as printed on the form."},
-          "building_number": {"type": ["string", "null"], "description": "The building number within that location."},
-          "address": {"type": ["string", "null"], "description": "The street address of this building."},
-          "year_built": {"type": ["integer", "null"], "description": "Year of construction, as a four-digit year."},
-          "construction_type": {"type": ["string", "null"], "description": "Construction class as stated, for example Frame, Joisted Masonry, or Fire Resistive."},
-          "occupancy": {"type": ["string", "null"], "description": "How the building is used."},
-          "square_footage": {"type": ["number", "null"], "description": "Total area in square feet, as a number."},
-          "building_limit": {"type": ["number", "null"], "description": "Limit of insurance on the building itself. Not the contents or business personal property limit."},
-          "contents_limit": {"type": ["number", "null"], "description": "Limit of insurance on contents or business personal property. Not the building limit."},
-          "deductible": {"type": ["number", "null"], "description": "The property deductible applying to this building."}
+          "location_number": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The location number as printed on the form."
+          },
+          "building_number": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The building number within that location."
+          },
+          "address": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The street address of this building."
+          },
+          "year_built": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "Year of construction, as a four-digit year."
+          },
+          "construction_type": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Construction class as stated, for example Frame, Joisted Masonry, or Fire Resistive."
+          },
+          "occupancy": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "How the building is used."
+          },
+          "square_footage": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "description": "Total area in square feet, as a number."
+          },
+          "building_limit": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "description": "Limit of insurance on the building itself. Not the contents or business personal property limit."
+          },
+          "contents_limit": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "description": "Limit of insurance on contents or business personal property. Not the building limit."
+          },
+          "deductible": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "description": "The property deductible applying to this building."
+          }
         }
       }
+    },
+    "line_of_business_other": {
+      "$ref": "lob.enum.json#/$defs/line_of_business_other"
     }
   }
 }

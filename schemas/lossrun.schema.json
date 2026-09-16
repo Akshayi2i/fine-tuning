@@ -6,21 +6,45 @@
   "description": "Canonical extraction target for a Loss Run (Fideon SPEC_00 LossRunDocument, doc_type 'lossrun'). The claims array is the key list field: a silently dropped row is both easy to produce and expensive to miss, so list recall and row completeness are measured separately from per-value accuracy (arch 5, 15).",
   "type": "object",
   "additionalProperties": false,
-  "required": ["carrier", "policy_number", "valuation_date", "line_of_business", "claims"],
+  "required": [
+    "carrier",
+    "policy_number",
+    "valuation_date",
+    "line_of_business",
+    "claims"
+  ],
   "properties": {
-    "carrier": {"$ref": "common_fields.json#/$defs/carrier"},
-    "policy_number": {"$ref": "common_fields.json#/$defs/policy_number"},
-    "insured_name": {"$ref": "common_fields.json#/$defs/insured_name"},
-    "effective_date": {"$ref": "common_fields.json#/$defs/effective_date"},
-    "expiration_date": {"$ref": "common_fields.json#/$defs/expiration_date"},
-    "line_of_business": {"$ref": "lob.enum.json#/$defs/line_of_business"},
+    "carrier": {
+      "$ref": "common_fields.json#/$defs/carrier"
+    },
+    "policy_number": {
+      "$ref": "common_fields.json#/$defs/policy_number"
+    },
+    "insured_name": {
+      "$ref": "common_fields.json#/$defs/insured_name"
+    },
+    "effective_date": {
+      "$ref": "common_fields.json#/$defs/effective_date"
+    },
+    "expiration_date": {
+      "$ref": "common_fields.json#/$defs/expiration_date"
+    },
+    "line_of_business": {
+      "$ref": "lob.enum.json#/$defs/line_of_business"
+    },
     "valuation_date": {
-      "type": ["string", "null"],
+      "type": [
+        "string",
+        "null"
+      ],
       "description": "The as-of date through which claim amounts on this report are valued, as YYYY-MM-DD. Not the policy effective or expiration date, and not the date the report was printed.",
       "$comment": "Deliberately distinct from effective_date - the two are easy to confuse and this is a named example in arch 17."
     },
     "total_claims_reported": {
-      "type": ["integer", "null"],
+      "type": [
+        "integer",
+        "null"
+      ],
       "description": "The claim count stated by the document itself, when it states one. Extract the stated figure rather than counting the rows.",
       "$comment": "Feeds the row-completeness cross-check in SPEC_09 - it is compared against the number of rows actually extracted."
     },
@@ -30,39 +54,73 @@
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["claim_number", "loss_date", "status"],
+        "required": [
+          "claim_number",
+          "loss_date",
+          "status"
+        ],
         "properties": {
           "claim_number": {
-            "type": ["string", "null"],
+            "type": [
+              "string",
+              "null"
+            ],
             "description": "The carrier's identifier for this individual claim. Not the policy number."
           },
           "loss_date": {
-            "type": ["string", "null"],
+            "type": [
+              "string",
+              "null"
+            ],
             "description": "The date the loss occurred, as YYYY-MM-DD. Not the date the claim was reported or closed."
           },
           "status": {
-            "type": ["string", "null"],
-            "enum": ["open", "closed", "reopened", "denied", null],
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "open",
+              "closed",
+              "reopened",
+              "denied",
+              null
+            ],
             "description": "The claim's current status, lowercased to one of the listed values. Map the document's wording onto these; output null if it states none."
           },
           "paid": {
-            "type": ["number", "null"],
+            "type": [
+              "number",
+              "null"
+            ],
             "description": "Amount paid to date on this claim, as a number without currency symbols or separators."
           },
           "reserved": {
-            "type": ["number", "null"],
+            "type": [
+              "number",
+              "null"
+            ],
             "description": "Amount currently reserved (set aside, not yet paid) on this claim."
           },
           "total_incurred": {
-            "type": ["number", "null"],
+            "type": [
+              "number",
+              "null"
+            ],
             "description": "Total incurred on this claim, normally paid plus reserved. Extract the document's stated figure rather than computing it."
           },
           "description": {
-            "type": ["string", "null"],
+            "type": [
+              "string",
+              "null"
+            ],
             "description": "The document's free-text description of the loss, if present."
           }
         }
       }
+    },
+    "line_of_business_other": {
+      "$ref": "lob.enum.json#/$defs/line_of_business_other"
     }
   }
 }

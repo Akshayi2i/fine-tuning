@@ -51,12 +51,38 @@ def test_every_field_has_a_description(doc_type, acord_form):
 
 
 @pytest.mark.parametrize("doc_type,acord_form", ALL_KEYS)
-def test_line_of_business_is_required_and_enumerated(doc_type, acord_form):
-    """The VLM is the fallback LoB detector when L1/L2 miss (arch §0b)."""
+def test_line_of_business_is_a_required_list_of_enum_values(doc_type, acord_form):
+    """The VLM is the fallback LoB detector when L1/L2 miss (arch §0b), and it is
+    a LIST under v2.1: a certificate or package policy routinely covers several
+    lines, and the v1 scalar forced the annotator to pick one and discard the
+    rest — which taught the model to do the same."""
     resolved = schemas.resolved_schema(doc_type, acord_form)
     lob = resolved["properties"]["line_of_business"]
     assert "line_of_business" in resolved["required"]
-    assert set(lob["enum"]) == set(lob_values()) | {None}, "null must be representable — undetermined is a valid answer"
+    assert lob["type"] == "array", "a document can cover several lines"
+    assert set(lob["items"]["enum"]) == set(lob_values())
+    assert lob.get("uniqueItems") is True, "the same line twice is a labelling error"
+
+
+@pytest.mark.parametrize("doc_type,acord_form", ALL_KEYS)
+def test_an_empty_lob_list_is_valid_and_means_undetermined(doc_type, acord_form):
+    """Undetermined is a correct answer, not a missing one. Under v1 that was
+    `null`; under a list it is `[]`, and it must stay representable or the model
+    learns to guess a line rather than decline."""
+    path = ROOT / "schemas" / "examples" / f"{EXAMPLE_STEMS[(doc_type, acord_form)]}.example.json"
+    inst = json.loads(path.read_text(encoding="utf-8"))
+    inst["line_of_business"] = []
+    schemas.validate(inst, doc_type, acord_form)
+
+
+def test_lines_outside_the_enum_go_to_their_own_field():
+    """Inland marine, cyber, crime and EPLI are real lines this enum does not
+    support. Recorded rather than dropped, because the count of what lands here
+    is the evidence for whether the enum should grow — and it is a list, because
+    a document can name several (v2.1 correction)."""
+    inst = json.loads((ROOT / "schemas/examples/lossrun.example.json").read_text(encoding="utf-8"))
+    inst["line_of_business_other"] = ["inland_marine", "cyber"]
+    schemas.validate(inst, "lossrun")
 
 
 @pytest.mark.parametrize("doc_type,acord_form", ALL_KEYS)
@@ -67,7 +93,21 @@ def test_schema_validates_its_example(doc_type, acord_form):
 
 def test_schema_rejects_out_of_enum_lob():
     inst = json.loads((ROOT / "schemas/examples/lossrun.example.json").read_text(encoding="utf-8"))
-    inst["line_of_business"] = "marine_cargo"
+    inst["line_of_business"] = ["marine_cargo"]
+    assert not schemas.is_valid(inst, "lossrun")
+
+
+def test_schema_rejects_the_v1_scalar_shape():
+    """A corpus row still carrying the v1 scalar must fail loudly here rather
+    than reaching training, where it would be one silently malformed target."""
+    inst = json.loads((ROOT / "schemas/examples/lossrun.example.json").read_text(encoding="utf-8"))
+    inst["line_of_business"] = "workers_comp"
+    assert not schemas.is_valid(inst, "lossrun")
+
+
+def test_schema_rejects_a_duplicated_line():
+    inst = json.loads((ROOT / "schemas/examples/lossrun.example.json").read_text(encoding="utf-8"))
+    inst["line_of_business"] = ["property", "property"]
     assert not schemas.is_valid(inst, "lossrun")
 
 

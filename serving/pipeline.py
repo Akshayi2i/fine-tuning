@@ -218,6 +218,42 @@ def _calibration_for(
     )
 
 
+def _lob_output(fields: dict[str, Any]) -> dict[str, Any] | None:
+    """Collapse the per-value LoB spans into one ``{value, confidence}``.
+
+    ``line_of_business`` is a list under arch v2.1 §0b, so the span mapper emits
+    ``line_of_business[0]``, ``[1]`` … — correctly, because each emitted value has
+    its own tokens and therefore its own logprob. The API returns one field, so
+    they are collapsed here.
+
+    Confidence is the **minimum** across the values, matching the aggregation used
+    for a multi-token span: the weakest line is what makes the set worth
+    reviewing, and averaging would let one confident line hide an invented one.
+
+    An empty list is a real answer — the document determines no line — and is
+    returned with full confidence rather than as a missing field, so it is not
+    confused with a field the model failed to emit.
+    """
+    exact = fields.get("line_of_business")
+    if exact is not None and isinstance(exact.value, list):
+        return exact.as_output()
+
+    elements = [
+        (path, f) for path, f in fields.items()
+        if path.startswith("line_of_business[")
+    ]
+    if not elements:
+        # Distinguish "emitted as empty" from "never emitted". Only the former
+        # is an answer.
+        return {"value": [], "confidence": 1.0} if exact is not None else None
+
+    elements.sort(key=lambda kv: kv[0])
+    return {
+        "value": [f.value for _, f in elements],
+        "confidence": round(min(f.confidence for _, f in elements), 4),
+    }
+
+
 def extract(
     request: ExtractionRequest,
     model: LoadedModel,
@@ -337,10 +373,7 @@ def extract(
             name: {"rows": extraction.get(name, []), **signal.as_output()}
             for name, signal in sorted(completeness.items())
         },
-        line_of_business=(
-            calibrated.fields["line_of_business"].as_output()
-            if "line_of_business" in calibrated.fields else None
-        ),
+        line_of_business=_lob_output(calibrated.fields),
         pages_used=pages_used,
         review_flags=sorted(set(flags)),
         route_info={

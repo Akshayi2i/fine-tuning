@@ -132,7 +132,7 @@ class EchoBackend(ModelBackend):
     exactly, so :mod:`inference_core.span_map` can be exercised end to end.
     """
 
-    def __init__(self, response: str = '{"line_of_business":null}', chunk: int = 4) -> None:
+    def __init__(self, response: str = '{"line_of_business":[]}', chunk: int = 4) -> None:
         self.response = response
         self.chunk = chunk
         self.calls: list[dict[str, Any]] = []

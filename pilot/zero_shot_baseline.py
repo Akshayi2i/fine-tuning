@@ -215,7 +215,15 @@ def summarise_baseline(
 
         schema_valid.append(bool(metrics.get("schema_valid", False)))
         if "line_of_business" in expected:
-            lob_hits.append(expected["line_of_business"] == got.get("line_of_business"))
+            # Set equality, not ==: LoB is a list under v2.1 and [a, b] must match
+            # [b, a]. Comparing lists directly would score correct extractions as
+            # misses whenever the model emitted the lines in another order.
+            from common.lob import normalize_lob
+
+            lob_hits.append(
+                set(normalize_lob(expected["line_of_business"]))
+                == set(normalize_lob(got.get("line_of_business")))
+            )
 
     report.by_doc_type = {
         doc_type: sum(scores) / len(scores) for doc_type, scores in accuracy_by_type.items()

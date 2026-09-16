@@ -6,8 +6,11 @@
   "expiration_date": "2027-04-01",
   "carrier": null,
   "producer": "Hanover Risk Partners",
-  "total_premium": 47250.00,
-  "line_of_business": "workers_comp",
+  "total_premium": 47250.0,
+  "line_of_business": [
+    "workers_comp"
+  ],
   "coverage_schedule": [],
-  "endorsements": null
+  "endorsements": null,
+  "line_of_business_other": []
 }

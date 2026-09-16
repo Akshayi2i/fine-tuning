@@ -313,7 +313,18 @@ def _table_column_header(text: str, value_start: int) -> tuple[str, Pattern] | N
 
 
 def _iter_leaf_fields(label: dict[str, Any], prefix: str = "") -> list[tuple[str, Any]]:
-    """Flatten a golden label to ``(field_path, value)`` leaves."""
+    """Flatten a golden label to ``(field_path, value)`` leaves.
+
+    A list of OBJECTS yields indexed leaves — ``claims[0].claim_number`` — because
+    each row's surface label is its own column header.
+
+    A list of SCALARS yields one leaf per value at the **unindexed** path. They
+    share one canonical field and one surface label, so indexing them would split
+    a single field's alias evidence across ``line_of_business[0]``,
+    ``[1]`` … and align none of it. Previously these were dropped entirely, so a
+    set-valued field was invisible to alias derivation and to the unresolved
+    report the moment it stopped being a scalar (arch v2.1 §0b).
+    """
     out: list[tuple[str, Any]] = []
     for key, value in label.items():
         path = f"{prefix}{key}"
@@ -323,6 +334,8 @@ def _iter_leaf_fields(label: dict[str, Any], prefix: str = "") -> list[tuple[str
             for index, item in enumerate(value):
                 if isinstance(item, dict):
                     out.extend(_iter_leaf_fields(item, f"{path}[{index}]."))
+                elif item is not None:
+                    out.append((path, item))
         else:
             out.append((path, value))
     return out

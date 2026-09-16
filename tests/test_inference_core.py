@@ -261,7 +261,7 @@ def test_load_base_needs_no_registry_entry(client):
 
 
 def test_generate_returns_text_with_aligned_logprobs(client):
-    response = '{"insured_name":"Rivera Fabrication LLC","line_of_business":"workers_comp"}'
+    response = '{"insured_name":"Rivera Fabrication LLC","line_of_business":["workers_comp"]}'
     model = load_model("base", client, backend_impl=EchoBackend(response))
     built = build_messages("policy", PAGES, OCR, "ocr_plus_image")
 

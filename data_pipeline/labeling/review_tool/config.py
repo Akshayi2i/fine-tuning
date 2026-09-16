@@ -110,12 +110,17 @@ def review_fields_for(doc_type: str, acord_form: str | None = None) -> list[Revi
                 confusables=tuple(row_entry.confusables) if row_entry else (),
             ))
 
+        # An array-of-enum (line_of_business under v2.1 §0b) declares its values
+        # on `items.enum`, not `enum`. Read both, or the control silently
+        # degrades to a free-text box and the reviewer can type anything.
+        node_enum = node.get("enum") or (node.get("items") or {}).get("enum")
+
         fields.append(ReviewField(
             path=name,
             types=_types(node),
             gloss=gloss,
             required=name in required or name in MANDATORY_FIELDS,
-            enum=node.get("enum"),
+            enum=node_enum,
             aliases=tuple(entry.aliases) if entry else (),
             confusables=tuple(entry.confusables) if entry else (),
             row_fields=row_fields,
@@ -160,7 +165,12 @@ def build_labeling_config(doc_type: str, acord_form: str | None = None) -> str:
 
     for f in fields:
         hint = escape(_hint(f))
-        if f.is_list:
+        # A list of ENUM values is a multi-select, not a row editor. Two
+        # different list shapes live in these schemas — `claims` is a list of
+        # objects and needs one row per claim, `line_of_business` is a list of
+        # enum values and needs checkboxes — and treating them alike gave the
+        # reviewer a free-text box where a controlled vocabulary belongs.
+        if f.is_list and not f.enum:
             row_names = ", ".join(r.path.split("[].")[-1] for r in f.row_fields)
             lines.append(f'      <Header value="{escape(f.path)} (one entry per row)"/>')
             lines.append(f'      <Text name="{f.path}_hint" value="{hint} Row fields: {escape(row_names)}."/>')
@@ -170,11 +180,30 @@ def build_labeling_config(doc_type: str, acord_form: str | None = None) -> str:
         lines.append(f'      <Header value="{escape(f.path)}{" *" if f.required else ""}"/>')
         lines.append(f'      <Text name="{f.path}_hint" value="{hint}"/>')
         if f.enum:
-            lines.append(f'      <Choices name="{f.path}" toName="pages" choice="single" required="{str(f.required).lower()}">')
+            # A list-valued enum gets MULTIPLE choice. Forcing single choice on
+            # line_of_business is what made the v1 annotator pick one line off a
+            # package policy and discard the rest — the label shape and the
+            # control have to agree, or the tool quietly caps what can be
+            # recorded (arch v2.1 §0b).
+            multiple = f.is_list
+            choice = "multiple" if multiple else "single"
+            # Required is dropped for a multi-select: selecting nothing IS the
+            # answer for a document that determines no line, and a required
+            # control makes that undetermined-but-correct label unrecordable.
+            required = "false" if multiple else str(f.required).lower()
+            lines.append(
+                f'      <Choices name="{f.path}" toName="pages" choice="{choice}" '
+                f'required="{required}">'
+            )
             for value in f.enum:
                 shown = "null (undetermined)" if value is None else str(value)
                 lines.append(f'        <Choice value="{escape(shown)}"/>')
             lines.append("      </Choices>")
+            if multiple:
+                lines.append(
+                    f'      <Text name="{f.path}_none" '
+                    f'value="select none if the document determines no value"/>'
+                )
         else:
             lines.append(
                 f'      <TextArea name="{f.path}" toName="pages" rows="1" editable="true" '

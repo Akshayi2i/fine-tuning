@@ -8,7 +8,7 @@ confidently.
 Three checks run before anything is written:
 
 1. **Schema conformance** against the canonical Fideon SPEC_00 schema (arch §0a).
-2. **``line_of_business`` present**, valid or explicitly ``null`` (arch §0b).
+2. **``line_of_business`` present**, a list of valid values or explicitly ``[]`` (arch §0b).
 3. **``field_provenance`` names no registered confusable** — a label claiming
    ``insured_name`` was found under "Certificate Holder" is rejected. This is the
    highest-value annotation check in the system, because that mistake is exactly
@@ -103,8 +103,9 @@ def validate_golden_label(
     if "line_of_business" not in label:
         problems.append(
             "line_of_business is missing. It is required in every golden label for every "
-            "document type, even when null — the VLM is the fallback LoB detector when L1/L2 "
-            "miss (arch §0b)."
+            "document type, even when empty — the VLM is the fallback LoB detector when L1/L2 "
+            "miss (arch §0b). An empty list means the document determines no line; that is a "
+            "correct label, and it is not the same as omitting the field."
         )
     else:
         try:

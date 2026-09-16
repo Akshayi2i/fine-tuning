@@ -229,6 +229,22 @@ def values_match(
     """
     if expected is None and actual is None:
         return True
+
+    # A list-valued field is a SET, not a sequence (arch v2.1 §0b —
+    # line_of_business, line_of_business_other). Comparing them positionally
+    # would score a correct extraction as a miss whenever the model emitted the
+    # same lines in another order, and no ordering is printed on the document for
+    # it to have got wrong. An empty list and an absent field both mean "this
+    # document determines none", so they match.
+    if isinstance(expected, (list, tuple)) or isinstance(actual, (list, tuple)):
+        left = expected if isinstance(expected, (list, tuple)) else ([] if expected is None else [expected])
+        right = actual if isinstance(actual, (list, tuple)) else ([] if actual is None else [actual])
+        if any(isinstance(v, dict) for v in (*left, *right)):
+            # A list of objects (claims, coverages) is row-aligned by the
+            # evaluation matcher, not compared as a set here.
+            return False
+        return {normalize_text(v) for v in left} == {normalize_text(v) for v in right}
+
     if expected is None or actual is None:
         return False
     a = normalize_value(expected, field_path, kind)
