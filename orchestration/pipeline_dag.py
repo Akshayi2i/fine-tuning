@@ -843,7 +843,12 @@ def stage_evaluation_gate(ctx: StageContext) -> StageResult:
         "baseline_metrics": baseline,
         "passed": result.passed,
         "failed_gates": result.failed_gates,
-        "deltas": [d.describe() for d in result.deltas],
+        # The full verdict per metric — floor, interval and basis — not just a
+        # delta. "Why was this blocked" needs the evidence, not the difference.
+        "verdicts": [v.as_dict() for v in result.verdicts],
+        "improved_metrics": result.improved_metrics,
+        "waived_gates": sorted(result.waived),
+        "override": result.override.as_dict() if result.override else None,
     })
     ctx.volume.write(paths.staging_eval_report(ctx.out_version), json.dumps(candidate))
 

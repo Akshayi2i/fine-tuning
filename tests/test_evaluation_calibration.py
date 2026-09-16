@@ -206,16 +206,51 @@ def test_mode_accuracy_carries_document_counts():
 # --------------------------------------------------------------------------
 
 def _metrics(**over) -> dict[str, float]:
-    base = {name: 0.90 for name in GATING_METRICS}
+    """A metric set that clears every §0d floor, so a test that wants a block
+    creates one rather than inheriting it from a fixture that never passed."""
+    base = {name: 0.96 for name in GATING_METRICS}
+    # Schema validity has the highest floor (0.98) because a structurally
+    # invalid extraction is unusable rather than merely inaccurate.
+    base["schema_validity_rate"] = 1.0
     base["ece_confidence"] = 0.04                   # lower is better
     base["confusable_misattribution_rate"] = 0.02   # lower is better
+    base["false_null_rate"] = 0.03                  # lower is better
     base.update(over)
     return base
 
 
+def _passing(**over) -> dict[str, float]:
+    return _metrics(**over)
+
+
+def _paired(metric: str, current: float, candidate: float, n: int = 40):
+    """Per-document scores that produce a decisive interval.
+
+    Constant within each arm on purpose: the bootstrap then has no within-arm
+    variance, so the interval is tight and the test is about the gate's logic
+    rather than about sampling luck."""
+    return {metric: ([current] * n, [candidate] * n)}
+
+
 def test_an_improved_candidate_passes():
-    result = promotion_gate(_metrics(field_exact_match=0.92), _metrics())
-    assert result.passed
+    result = promotion_gate(_metrics(field_exact_match=0.98), _metrics())
+    assert result.passed, result.report()
+
+
+def test_a_drop_inside_the_noise_margin_no_longer_blocks():
+    """THE v1 defect. A flat 0.001 tolerance at pilot volume was 250x finer than
+    the eval set could resolve, so a genuinely-equal model was blocked by float
+    jitter on one of twelve metrics."""
+    result = promotion_gate(_metrics(field_exact_match=0.9595), _metrics())
+    assert result.passed, result.report()
+
+
+def test_a_drop_beyond_the_margin_still_blocks():
+    """Not a softening: the margin is per-metric and calibrated to what the eval
+    set can resolve, not to what is convenient."""
+    result = promotion_gate(_metrics(field_exact_match=0.90), _metrics())
+    assert not result.passed
+    assert "field_exact_match" in result.failed_gates
 
 
 def test_a_single_regression_blocks_promotion():
@@ -287,19 +322,19 @@ def test_cross_type_regression_blocks_a_continued_foundation():
     assert any("acord" in gate for gate in result.failed_gates)
 
 
-def test_the_gate_has_no_override_parameter():
-    """A gate that can be waived is a suggestion, not a guarantee — and every
-    other assurance in the pipeline rests on it."""
+def test_the_gate_has_no_silent_bypass():
+    """An override EXISTS under arch v2.1 §15.5 — but there is no parameter that
+    forces a pass without attribution. v1 had no override at all, reasoning that
+    a waivable gate is a suggestion. That was right about the risk and wrong
+    about the remedy: the v1 gate demanded improvement on twelve metrics within
+    0.001, which at pilot volume is finer than the eval set can resolve, so the
+    rule would have been broken in practice rather than in the open."""
     import inspect
 
     signature = inspect.signature(promotion_gate)
-    for forbidden in ("force", "override", "skip", "ignore_regressions"):
+    for forbidden in ("force", "skip", "ignore_regressions", "bypass"):
         assert forbidden not in signature.parameters
 
-
-# --------------------------------------------------------------------------
-# Confidence
-# --------------------------------------------------------------------------
 
 def _span(path: str, value, logprobs: list[float], mapped: bool = True) -> FieldSpan:
     span = FieldSpan(field_path=path, value=value, char_start=0, char_end=1)
@@ -308,6 +343,69 @@ def _span(path: str, value, logprobs: list[float], mapped: bool = True) -> Field
     if not mapped:
         span.reason = "no token span"
     return span
+
+
+def test_an_override_must_be_attributable():
+    """The waiver worth preventing is the one nobody can trace later."""
+    from evaluation.gating import GateError, GateOverrideRecord
+
+    with pytest.raises(GateError, match="name the person"):
+        GateOverrideRecord("ci", "x" * 30, ["ece_confidence"]).validate()
+    with pytest.raises(GateError, match="written reason"):
+        GateOverrideRecord("A. Reviewer", "too busy", ["ece_confidence"]).validate()
+    with pytest.raises(GateError, match="name the gates"):
+        GateOverrideRecord("A. Reviewer", "y" * 30, []).validate()
+
+    GateOverrideRecord(
+        "A. Reviewer",
+        "FP8 ECE regressed 0.004 on a 30-document slice; shipping for the pilot",
+        ["ece_confidence"],
+    ).validate()
+
+
+def test_an_override_lifts_only_the_gates_it_names():
+    """Waiving a gate that passed would make the record say something untrue
+    about what the approver decided."""
+    from evaluation.gating import GateOverrideRecord
+
+    # Below its §0d floor of 0.95, so the gate genuinely fails on it.
+    candidate = {**_passing(), "doc_type_classifier_accuracy": 0.90}
+    result = promotion_gate(
+        candidate, None,
+        override=GateOverrideRecord(
+            "A. Reviewer",
+            "classifier retrain is tracked in FID-118; shipping the extractor gain now",
+            ["doc_type_classifier_accuracy"],
+        ),
+    )
+    assert result.passed, result.report()
+    assert result.waived == ["doc_type_classifier_accuracy"]
+    assert "doc_type_classifier_accuracy" not in result.failed_gates
+
+
+def test_a_waived_pass_is_not_recorded_as_a_clean_pass():
+    """"Passed with a waiver" must never be indistinguishable from "passed"."""
+    from evaluation.gating import GateOverrideRecord, apply_to_manifest
+
+    class _Promotion:
+        beat_previous_on_all_gates = None
+        failed_gates: list = []
+        gated_against = None
+
+    class _Manifest:
+        promotion = _Promotion()
+        status = "trained"
+
+    result = promotion_gate(
+        {**_passing(), "doc_type_classifier_accuracy": 0.90}, None,
+        override=GateOverrideRecord(
+            "A. Reviewer", "classifier retrain tracked in FID-118, shipping anyway",
+            ["doc_type_classifier_accuracy"],
+        ),
+    )
+    manifest = apply_to_manifest(result, _Manifest())
+    assert manifest.promotion.beat_previous_on_all_gates is False
+    assert any("WAIVED" in g for g in manifest.promotion.failed_gates)
 
 
 def test_min_aggregation_is_sensitive_to_the_weakest_token():
@@ -654,3 +752,176 @@ def test_the_selection_record_says_how_close_it_was():
     assert record["selection_metric"] == "field_normalized_match"
     assert 0 < record["margin_over_runner_up"] < 0.005
     assert len(record["candidates"]) == 3
+
+
+# --------------------------------------------------------------------------
+# Paired bootstrap and the statistical gate (arch v2.1 §15.5)
+# --------------------------------------------------------------------------
+
+def test_the_interval_is_paired_not_independent():
+    """Both models saw the same documents. Drawing separate index sets for each
+    side would compare two different document samples and widen every interval
+    for nothing — which on a 30-document eval set is the difference between a
+    usable gate and an unpassable one."""
+    from evaluation.bootstrap import paired_bootstrap
+
+    # Wildly varying documents, but the candidate is uniformly +0.10 on each.
+    current = [0.1, 0.9, 0.3, 0.7, 0.5] * 8
+    candidate = [c + 0.10 for c in current]
+
+    ci = paired_bootstrap("field_normalized_match", current, candidate)
+    assert ci.observed == pytest.approx(0.10, abs=1e-9)
+    # The pairing cancels the between-document variance entirely.
+    assert ci.width < 1e-6, f"pairing was lost; interval width {ci.width}"
+    assert ci.improved
+
+
+def test_a_genuinely_equal_model_is_non_inferior():
+    """The v1 gate blocked this. Twelve metrics each needing not to move down by
+    more than 0.001 gave a genuinely-equal model roughly a 0.02% chance of
+    passing all twelve."""
+    import random
+
+    from evaluation.bootstrap import paired_bootstrap
+
+    rng = random.Random(7)
+    current = [rng.random() for _ in range(60)]
+    candidate = [c + rng.gauss(0, 0.02) for c in current]
+
+    ci = paired_bootstrap("field_normalized_match", current, candidate)
+    assert ci.non_inferior(0.010), ci.describe()
+    assert not ci.improved, "noise is not improvement"
+
+
+def test_a_real_regression_is_not_non_inferior():
+    from evaluation.bootstrap import paired_bootstrap
+
+    current = [0.9] * 40
+    candidate = [0.7] * 40
+    ci = paired_bootstrap("list_field_recall", current, candidate)
+
+    assert not ci.non_inferior(0.010)
+    assert ci.upper < 0
+
+
+def test_a_single_document_is_inconclusive_and_inconclusive_does_not_pass():
+    """One document resamples to itself every time, so a naive interval would be
+    a point and the gate would read it as certainty. Widened to span the whole
+    range instead — which fails non-inferiority, and should: absence of evidence
+    is not evidence of absence, the same rule `require_all_measured` applies to
+    an unmeasured metric."""
+    from evaluation.bootstrap import paired_bootstrap
+
+    ci = paired_bootstrap("field_exact_match", [0.5], [1.0])
+    assert ci.lower == -1.0 and ci.upper == 1.0
+    assert not ci.improved, "one document cannot establish an improvement"
+    assert not ci.non_inferior(0.01), "one document cannot establish non-inferiority either"
+
+
+def test_mismatched_score_lengths_are_refused():
+    """Aligned by index is what the pairing MEANS; a length mismatch is two
+    different document sets being compared."""
+    from evaluation.bootstrap import paired_bootstrap
+
+    with pytest.raises(ValueError, match="aligned by index"):
+        paired_bootstrap("m", [0.1, 0.2], [0.1])
+
+
+def test_the_interval_is_reproducible():
+    """A gate whose verdict changes on re-run is not a gate."""
+    from evaluation.bootstrap import paired_bootstrap
+
+    scores = ([0.8, 0.9, 0.7, 0.85] * 10, [0.82, 0.88, 0.75, 0.9] * 10)
+    first = paired_bootstrap("m", *scores)
+    second = paired_bootstrap("m", *scores)
+    assert (first.lower, first.upper) == (second.lower, second.upper)
+
+
+def test_the_wilson_bound_is_sane_on_a_small_sample():
+    """At n=30 with two errors the normal approximation gives nonsense, and n=30
+    is the size these eval sets actually are."""
+    from evaluation.bootstrap import binomial_upper_bound
+
+    bound = binomial_upper_bound(2, 30)
+    assert 0.06 < bound < 0.25, bound
+    assert binomial_upper_bound(0, 0) == 1.0, "no trials means no evidence, not zero risk"
+
+
+def test_a_floor_failure_blocks_the_first_release():
+    """v1's gate passed a first version on ZERO measured metrics: with no
+    baseline there was nothing to regress against, so nothing blocked."""
+    from evaluation.gating import promotion_gate
+
+    assert not promotion_gate({}, None).passed
+    below = _metrics(field_normalized_match=0.50)
+    result = promotion_gate(below, None)
+    assert not result.passed
+    assert "field_normalized_match" in result.failed_gates
+
+
+def test_the_bootstrap_decides_when_per_document_scores_are_supplied():
+    """A point comparison cannot tell a real 1pp drop from sampling noise on a
+    30-document eval set. The interval can, and it is recorded as the basis."""
+    from evaluation.gating import promotion_gate
+
+    current, candidate = _metrics(), _metrics(field_exact_match=0.955)
+    result = promotion_gate(
+        candidate, current,
+        per_document=_paired("field_exact_match", 0.96, 0.955),
+    )
+    verdict = next(v for v in result.verdicts if v.name == "field_exact_match")
+    assert verdict.basis == "paired_bootstrap"
+    assert verdict.interval is not None
+
+
+def test_a_release_that_is_merely_no_worse_does_not_pass():
+    """Without an improvement requirement a model could pass forever on
+    non-inferiority alone — every release no worse than the last, none better,
+    and the cycle producing nothing."""
+    from evaluation.gating import promotion_gate
+
+    result = promotion_gate(
+        _metrics(), _metrics(),
+        per_document={
+            **_paired("field_normalized_match", 0.96, 0.96),
+            **_paired("list_field_recall", 0.96, 0.96),
+        },
+    )
+    assert not result.passed
+    assert "improvement" in result.failed_gates
+
+
+def test_a_release_that_fixes_a_documented_defect_satisfies_improvement():
+    """Some releases exist to fix something rather than to score higher."""
+    from evaluation.gating import promotion_gate
+
+    result = promotion_gate(
+        _metrics(), _metrics(),
+        per_document={
+            **_paired("field_normalized_match", 0.96, 0.96),
+            **_paired("list_field_recall", 0.96, 0.96),
+        },
+        fixes_defect="FID-204: claim rows dropped on page boundaries",
+    )
+    assert result.passed, result.report()
+
+
+def test_the_improvement_rule_does_not_fire_on_missing_evidence():
+    """No per-document scores means "improved" is unknowable rather than false.
+    Blocking there would make the rule fire on absent evidence rather than on an
+    absent improvement."""
+    from evaluation.gating import promotion_gate
+
+    result = promotion_gate(_metrics(), _metrics())
+    assert "improvement" not in result.failed_gates
+
+
+def test_every_pending_metric_names_what_turns_it_on():
+    """A metric listed as gating that nothing produces makes the gate
+    permanently unpassable — precisely the defect this rewrite exists to fix. So
+    pending ones are separated, and each says which phase activates it."""
+    from evaluation.gating import GATING_METRICS, PENDING_GATING_METRICS
+
+    assert not set(GATING_METRICS) & set(PENDING_GATING_METRICS)
+    for metric, reason in PENDING_GATING_METRICS.items():
+        assert reason.strip(), f"{metric} does not say what turns it on"

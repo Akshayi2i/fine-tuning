@@ -58,6 +58,9 @@ PASSING_METRICS = {
     "lob_detection_accuracy": 0.92,
     "ece_confidence": 0.04,
     "confusable_misattribution_rate": 0.02,
+    # A value on the page that came back null. Produces no tokens, so §5
+    # confidence is blind to it and only this metric sees it (arch v2.1 §15.2).
+    "false_null_rate": 0.03,
 }
 
 
@@ -329,8 +332,28 @@ def test_the_block_names_the_metric_and_its_delta(client, controller):
     blocked = report.results[-1]
 
     assert "lob_detection_accuracy" in blocked.detail
-    assert "0.9200 ↓ 0.5500" in blocked.detail
+    # Both sides of the comparison, so an operator can see the size of the drop
+    # without opening the gate decision file.
+    assert "0.9200" in blocked.detail and "0.5500" in blocked.detail
     assert blocked.data["failed_gates"] == ["lob_detection_accuracy"]
+
+
+def test_the_block_records_the_evidence_not_just_the_verdict(client, controller):
+    """"Why was this blocked" needs the floor, the margin and the basis — a bare
+    delta cannot say whether the drop was outside the noise or inside it."""
+    seed_corpus(client)
+    ctx = make_context(
+        client, controller,
+        baseline_metrics=dict(PASSING_METRICS),
+        metrics_provider=lambda _ctx: {**PASSING_METRICS, "lob_detection_accuracy": 0.55},
+    )
+    run_stages(ctx, stages_for("finetune"), command="finetune")
+
+    decision = client.read_json(paths.gate_decision("v1"))
+    verdict = next(v for v in decision["verdicts"] if v["name"] == "lob_detection_accuracy")
+    assert verdict["non_inferior"] is False
+    assert verdict["basis"] in ("point_estimate", "paired_bootstrap")
+    assert verdict["delta"] > 0
 
 
 def test_all_never_reaches_package_on_a_failed_gate(client, controller):

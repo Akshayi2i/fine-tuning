@@ -249,6 +249,11 @@ def score_subset(
         score_lob,
         score_schema_validity,
     )
+    from evaluation.metrics.extraction_faults import (
+        score_false_nulls,
+        score_hallucinations,
+        score_page_selection,
+    )
     from evaluation.metrics.field_accuracy import score_all_list_fields, score_fields
     from training.vit_gate import classify_error
 
@@ -350,6 +355,34 @@ def score_subset(
         "ece_confidence": (
             expected_calibration_error(confidences, correctness) if confidences else None
         ),
+        # --- arch v2.1 §15.2: faults an aggregate field score cannot see ------
+        #
+        # A false null produces NO tokens, so §5 confidence is blind to it —
+        # only this metric sees a value that was on the page and came back empty.
+        "false_null_rate": score_false_nulls(
+            [(expected, got) for expected, got, _ in scored],
+            source_ids=[m.get("source_id", "") for _, _, m in scored],
+        ).rate,
+        # Scored against the TEXT OF THE PAGES THAT WERE SENT, not against the
+        # golden label: checking against the label alone would call every wrong
+        # value a hallucination, including an honest misread of something
+        # actually printed — and those have different remedies.
+        "hallucination_rate": score_hallucinations([
+            (expected, got, str(metadata.get("ocr_text") or ""))
+            for expected, got, metadata in scored
+        ]).rate if any(m.get("ocr_text") for _, _, m in scored) else None,
+        # Only meaningful where routing ran. A document that sent every page has
+        # no selection to score, and counting it as perfect recall would dilute
+        # the metric toward 1.0 with documents that never exercised it.
+        "page_selection_recall": score_page_selection([
+            (
+                metadata.get("source_id", ""),
+                metadata.get("provenance_pages") or [],
+                metadata.get("selected_pages") or [],
+            )
+            for _, _, metadata in scored
+            if metadata.get("provenance_pages")
+        ]).recall if any(m.get("provenance_pages") for _, _, m in scored) else None,
     }
     report.metrics = {k: v for k, v in report.metrics.items() if v is not None}
     return report

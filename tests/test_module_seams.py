@@ -84,7 +84,12 @@ def test_a_flawless_candidate_is_promotable_and_a_regression_is_not():
     metrics = dict(build_report(
         "v1", _scored_documents(), corpus_version="v1", classifier_scored=True,
     ).gate_metrics())
+    # Two metrics the synthetic fixture cannot produce honestly: it runs no
+    # classifier, and its documents are field dicts rather than schema-valid
+    # instances. Stubbed rather than worked around, because this seam is about
+    # the gate reading the keys the SCORER emits — not about schema validity.
     metrics["doc_type_classifier_accuracy"] = 0.97
+    metrics["schema_validity_rate"] = 1.0
 
     assert promotion_gate(metrics, None).passed, "a flawless first version could not be promoted"
 
