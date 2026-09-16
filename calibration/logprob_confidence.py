@@ -1,16 +1,24 @@
-"""Raw per-field confidence from token logprobs (arch §5).
+"""Raw per-field logprob aggregation (arch v2.1 §5.1).
 
-The model already produces a probability for every token it generates, so
-confidence costs nothing extra at training or inference time. This module turns
-those into one number per field; :mod:`calibration.fit_calibration` then corrects
-them, because raw logprobs from a fine-tuned model are systematically
-overconfident.
+**Superseded as a confidence source.** What this module produces is now one
+*feature* among nine, not the confidence itself — see :mod:`calibration.features`
+and :mod:`calibration.feature_calibrator`.
 
-**Default aggregation is the minimum token probability in the span.** It is the
-most sensitive to the weakest link, which is what you want when the purpose is
-flagging risky fields — a policy number that is nine confident tokens and one
-uncertain one is a policy number worth checking. Mean would average that away.
-The choice is configurable and empirical, and whichever is used is recorded.
+v1 used the minimum token probability in a field's span as its confidence, on the
+reasoning that the weakest link is what makes a field worth reviewing. Good
+instinct, broken statistic: **the minimum of n draws falls as n grows**, so a long
+correct value scores lower than a short wrong one. ``ABC-1234567-01`` is nine
+tokens and ``2026`` is one — under min-aggregation the policy number looks less
+trustworthy than the year, on every document, in the same direction every time.
+
+That is not fixable by choosing a different aggregation. Mean washes out the
+weak link the minimum was there to catch; geometric mean has the same length
+dependence in gentler form. The fix is to hand the calibrator the minimum **and**
+the mean **and** the first token **and** the length, plus the five non-logprob
+features in §5.2, and let it learn what the combination means.
+
+The functions here remain because those aggregates are still computed — as
+inputs. Nothing downstream should treat a value from this module as a confidence.
 """
 
 from __future__ import annotations

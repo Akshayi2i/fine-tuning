@@ -81,11 +81,16 @@ GATING_METRICS: dict[str, Direction] = {
 #: commit as the code that computes it, and `test_module_seams` checks that what
 #: the gate demands is what the scorer emits.
 PENDING_GATING_METRICS: dict[str, str] = {
-    "list_field_precision": "row alignment (§15.1 Hungarian matching)",
-    "page_selection_recall": "serving page_select task (§7b)",
-    "lossrun_totals_reconciliation_rate": "totals reconciliation (§5.5)",
-    "hallucination_rate": "OCR text carried through eval metadata (§15.2)",
-    "auto_accept_error_rate": "calibrated review thresholds (§5.4)",
+    "list_field_precision": "row alignment (§15.1 Hungarian matching) — not written",
+    "page_selection_recall": "serving page_select task (§7b) — metric written, needs the "
+                             "selected/provenance pages in eval metadata",
+    "lossrun_totals_reconciliation_rate": "calibration.reconciliation — WRITTEN; needs the "
+                                          "lossrun_rows total/subtotal rows plumbed through "
+                                          "the serving path (§7b)",
+    "hallucination_rate": "metric written; needs the OCR text of the pages that were sent "
+                          "carried through eval metadata (§15.2)",
+    "auto_accept_error_rate": "calibration.thresholds — WRITTEN; needs the calibrator set and "
+                              "threshold set applied on the serving path (§5.4)",
 }
 
 #: Absolute floors (arch v2.1 §0d, pilot-exit column). The single source of

@@ -925,3 +925,333 @@ def test_every_pending_metric_names_what_turns_it_on():
     assert not set(GATING_METRICS) & set(PENDING_GATING_METRICS)
     for metric, reason in PENDING_GATING_METRICS.items():
         assert reason.strip(), f"{metric} does not say what turns it on"
+
+
+# --------------------------------------------------------------------------
+# Feature-based confidence (arch v2.1 §5.1-5.4)
+# --------------------------------------------------------------------------
+
+def _feat(path="policy_number", value="WC-123", logprobs=None, **over):
+    from calibration.features import build_features
+
+    return build_features(
+        field_path=path, value=value,
+        logprobs=logprobs if logprobs is not None else [-0.1, -0.2, -0.05],
+        document=over.pop("document", {}), **over,
+    )
+
+
+def test_length_is_always_a_feature_because_the_minimum_is_length_biased():
+    """THE v1 defect. The minimum of n draws falls as n grows, so a long correct
+    value scored lower than a short wrong one — 'ABC-1234567-01' is nine tokens
+    and '2026' is one, and min-logprob called the policy number less trustworthy
+    every single time."""
+    from calibration.features import FieldFeatures
+
+    short = _feat(value="2026", logprobs=[-0.3])
+    long = _feat(value="ABC-1234567-01", logprobs=[-0.05] * 9 + [-0.3])
+
+    assert short.min_logprob == long.min_logprob, "same weakest token by construction"
+    assert "log_token_count" in FieldFeatures.feature_names()
+    assert long.vector()[3] > short.vector()[3], "length must reach the calibrator"
+
+
+def test_a_missing_check_is_not_a_failed_check():
+    """Encoding "not checked" as 0 would make it indistinguishable from "checked
+    and failed", and the calibrator would learn to distrust every field in
+    image-only mode — where OCR agreement cannot be computed at all."""
+    from calibration.features import FieldFeatures
+
+    names = FieldFeatures.feature_names()
+    absent = _feat(page_text=None).vector()
+    failed = _feat(value="not-on-the-page", page_text="something else entirely").vector()
+
+    ocr = names.index("ocr_agreement")
+    present = names.index("ocr_agreement_present")
+    assert absent[ocr] == 0.5 and absent[present] == 0.0
+    assert failed[ocr] == 0.0 and failed[present] == 1.0
+
+
+def test_ocr_agreement_is_none_in_image_only_mode():
+    """Scoring it as disagreement would teach the calibrator that every
+    image-only field is untrustworthy — a statement about the input mode rather
+    than about the extraction."""
+    from calibration.features import ocr_agreement
+
+    assert ocr_agreement("WC-123", None) is None
+    assert ocr_agreement("WC-123", "policy WC-123 effective") == 1.0
+    assert ocr_agreement("WC-999", "policy WC-123 effective") == 0.0
+
+
+def test_a_null_is_calibrated_as_its_own_class():
+    """A null has no tokens, so it has no logprob signal at all — and treating
+    the absence as maximum confidence is how a false null ships unreviewed."""
+    empty = _feat(value=None, logprobs=[])
+    assert empty.is_null
+    assert empty.token_count == 0
+    assert empty.vector()[FeatureNames().index("is_null")] == 1.0
+
+
+def FeatureNames():
+    from calibration.features import FieldFeatures
+
+    return FieldFeatures.feature_names()
+
+
+def test_rule_checks_distinguish_not_applicable_from_failed():
+    """None means no rule applies; False means a rule applied and the value
+    broke it. Collapsing them would make every unchecked field look wrong."""
+    from calibration.features import rule_checks
+
+    assert rule_checks("insured_name", "Acme", {}) is None
+    assert rule_checks(
+        "effective_date", "2026-01-01",
+        {"effective_date": "2026-01-01", "expiration_date": "2027-01-01"},
+    ) is True
+    assert rule_checks(
+        "effective_date", "2027-01-01",
+        {"effective_date": "2027-01-01", "expiration_date": "2026-01-01"},
+    ) is False
+
+
+def test_a_total_that_does_not_sum_fails_its_rule_check():
+    """The confident-but-inconsistent case, which logprobs by construction
+    cannot see."""
+    from calibration.features import rule_checks
+
+    document = {"claims": [{"incurred": 100.0}, {"incurred": 50.0}]}
+    assert rule_checks("total_incurred", 150.0, document) is True
+    assert rule_checks("total_incurred", 900.0, document) is False
+
+
+def test_a_field_type_with_too_little_data_gets_no_calibrator():
+    """A calibrator fitted on forty instances produces numbers that look like
+    probabilities and are not — and every §5.4 threshold is defined against a
+    calibrated score."""
+    from calibration.feature_calibrator import CalibratorError, fit_calibrators
+
+    labelled = [(_feat(), i % 4 != 0) for i in range(40)]
+    cal = fit_calibrators(labelled, release_id="release-2026.11.1", serving_format="bf16")
+
+    identifier = cal.calibrators["identifier"]
+    assert not identifier.enforced
+    assert "below the" in (identifier.reason or "")
+    assert cal.predict(_feat()) is None, "no number at all, rather than a default one"
+    with pytest.raises(CalibratorError, match="no enforced calibrator"):
+        identifier.predict(_feat())
+
+
+def test_a_single_outcome_class_cannot_be_fitted():
+    """Any curve fitted on it would report the class prior for every field
+    regardless of its features."""
+    from calibration.feature_calibrator import fit_calibrators
+
+    labelled = [(_feat(), True) for _ in range(400)]
+    cal = fit_calibrators(labelled, release_id="r", serving_format="bf16")
+    assert not cal.calibrators["identifier"].enforced
+    assert "same outcome" in (cal.calibrators["identifier"].reason or "")
+
+
+def test_a_fitted_calibrator_separates_correct_from_incorrect():
+    import random
+
+    from calibration.feature_calibrator import fit_calibrators
+
+    rng = random.Random(11)
+    labelled = []
+    for _ in range(600):
+        correct = rng.random() < 0.8
+        logprobs = [-0.05 - rng.random() * 0.1] * 3 if correct else [-1.5 - rng.random()] * 3
+        labelled.append((
+            _feat(logprobs=logprobs, page_text="WC-123" if correct else "nothing here"),
+            correct,
+        ))
+
+    cal = fit_calibrators(labelled, release_id="r", serving_format="bf16")
+    assert cal.calibrators["identifier"].enforced
+
+    confident = cal.predict(_feat(logprobs=[-0.05] * 3, page_text="WC-123"))
+    doubtful = cal.predict(_feat(logprobs=[-2.5] * 3, page_text="nothing here"))
+    assert confident > doubtful, f"{confident} !> {doubtful}"
+
+
+def test_calibrators_round_trip_through_json():
+    """They ship inside a release bundle, so they have to survive the trip."""
+    import json
+    import random
+
+    from calibration.feature_calibrator import CalibratorSet, fit_calibrators
+
+    rng = random.Random(5)
+    labelled = [(_feat(logprobs=[-rng.random()] * 3), rng.random() < 0.8) for _ in range(400)]
+    original = fit_calibrators(labelled, release_id="release-2026.11.1", serving_format="fp8")
+    restored = CalibratorSet.from_dict(json.loads(original.to_json()))
+
+    probe = _feat()
+    assert restored.predict(probe) == pytest.approx(original.predict(probe))
+
+
+# --------------------------------------------------------------------------
+# Risk-controlled thresholds (arch v2.1 §5.4)
+# --------------------------------------------------------------------------
+
+def test_the_threshold_is_the_lowest_one_that_meets_the_target():
+    """Review is the expensive resource this whole system exists to ration, so a
+    higher-than-necessary threshold is a real cost."""
+    from calibration.thresholds import choose_threshold
+
+    # 500 clean fields, because a 1% guarantee needs ~400 with zero errors —
+    # see the table in calibration/thresholds.py. A perfect run on 200 cannot
+    # buy it, and no threshold choice changes that.
+    scored = [(0.99, True)] * 300 + [(0.60, True)] * 200 + [(0.55, False)] * 3
+    chosen = choose_threshold("identifier", scored)
+
+    assert chosen.enforced, chosen.reason
+    assert chosen.threshold <= 0.60, chosen.guarantee()
+    assert chosen.achieved_upper_bound <= chosen.target_error_rate
+
+
+def test_the_bound_is_the_upper_one_not_the_point_estimate():
+    """Two errors in forty is a 5% point estimate and an 18% upper bound. The
+    promise is about the future, not about those forty."""
+    from calibration.thresholds import choose_threshold
+
+    scored = [(0.95, True)] * 38 + [(0.95, False)] * 2
+    chosen = choose_threshold("identifier", scored, target_error_rate=0.05)
+    assert not chosen.enforced, "a 5% point estimate must not buy a 1% promise"
+
+
+def test_too_few_accepted_fields_supports_no_promise():
+    from calibration.thresholds import choose_threshold
+
+    chosen = choose_threshold("money", [(0.99, True)] * 5)
+    assert not chosen.enforced
+    assert "accepted fields" in (chosen.reason or "")
+
+
+def test_free_text_is_never_auto_accepted():
+    """Absent from the target table rather than set to 1.0 — a field type with
+    no error target is one nobody promised anything about."""
+    from calibration.thresholds import choose_threshold
+
+    chosen = choose_threshold("free_text", [(0.99, True)] * 200)
+    assert not chosen.enforced
+    assert "never auto-accepted" in (chosen.reason or "")
+
+
+def test_an_absent_confidence_routes_to_review():
+    """Absence is never treated as acceptance."""
+    from calibration.thresholds import ThresholdSet, choose_threshold
+
+    thresholds = ThresholdSet("r", "bf16", {
+        "identifier": choose_threshold("identifier", [(0.99, True)] * 200),
+    })
+    assert thresholds.needs_review("identifier", None)
+    assert thresholds.needs_review("entity", 0.99), "no threshold for the type means review"
+
+
+def test_the_guarantee_reads_as_a_sentence_somebody_can_be_held_to():
+    """v1 used 0.70 for every field, marked 'tunable'. It was never tuned and
+    could not be — nothing measured what error rate it bought."""
+    from calibration.thresholds import choose_threshold
+
+    chosen = choose_threshold("money", [(0.99, True)] * 500)
+    assert chosen.enforced, chosen.reason
+    assert "at most" in chosen.guarantee() and "95% confidence" in chosen.guarantee()
+
+
+def test_a_one_percent_target_needs_about_four_hundred_clean_fields():
+    """Not a tuning knob: 0 errors in 200 gives a 1.9% upper bound, so a perfect
+    run on 200 cannot buy a 1% promise. At pilot volume the identifier, money and
+    date targets are unreachable and those types route everything to review —
+    which is the system working, not failing."""
+    from calibration.thresholds import choose_threshold
+
+    assert not choose_threshold("identifier", [(0.99, True)] * 200).enforced
+    assert choose_threshold("identifier", [(0.99, True)] * 400).enforced
+
+
+def test_auto_accept_error_rate_counts_only_what_was_accepted():
+    """The rate of wrong values that reached a user without a human looking."""
+    from calibration.thresholds import ThresholdSet, auto_accept_error_rate, choose_threshold
+
+    scored = [(0.99, True)] * 599 + [(0.99, False)] + [(0.10, False)] * 50
+    thresholds = ThresholdSet("r", "bf16", {"identifier": choose_threshold("identifier", scored)})
+    rate = auto_accept_error_rate({"identifier": scored}, thresholds)
+    assert 0 < rate < 0.01, rate
+    assert rate < 50 / len(scored), "the low-confidence errors were correctly not accepted"
+
+
+# --------------------------------------------------------------------------
+# Loss Run totals reconciliation (arch v2.1 §5.5)
+# --------------------------------------------------------------------------
+
+def test_reconciliation_is_per_policy_period():
+    """A single grand-total check passes whenever two periods' errors cancel —
+    which is how a missing claim in 2024 hides behind an invented one in 2025."""
+    from calibration.reconciliation import reconcile
+
+    claims = [
+        {"policy_period": "2024", "total_incurred": 100.0},
+        {"policy_period": "2025", "total_incurred": 300.0},
+    ]
+    totals = [
+        {"row_type": "subtotal", "policy_period": "2024", "total_incurred": 200.0},
+        {"row_type": "subtotal", "policy_period": "2025", "total_incurred": 200.0},
+    ]
+    # The grand total balances exactly: 400 extracted, 400 printed.
+    report = reconcile(claims, totals, {"total_incurred": 400.0})
+
+    assert not report.grand_total_mismatches, "the cancelling errors hide from the grand total"
+    assert report.flagged, "but not from the per-period check"
+    assert [p.period for p in report.by_period if p.mismatches] == ["2024", "2025"]
+
+
+def test_a_document_with_no_printed_totals_is_unverifiable_not_verified():
+    """It has not demonstrated completeness — it has merely not been caught."""
+    from calibration.reconciliation import reconcile
+
+    report = reconcile([{"policy_period": "2024", "total_incurred": 100.0}], [])
+    assert report.status == "unverifiable"
+    assert report.flagged
+    assert "cannot be verified" in report.reasons()[0]
+
+
+def test_a_balanced_loss_run_reconciles():
+    from calibration.reconciliation import reconcile
+
+    claims = [
+        {"policy_period": "2024", "total_incurred": 100.0, "paid": 60.0},
+        {"policy_period": "2024", "total_incurred": 50.0, "paid": 40.0},
+    ]
+    totals = [{"row_type": "subtotal", "policy_period": "2024",
+               "total_incurred": 150.0, "paid": 100.0}]
+    report = reconcile(claims, totals, {"total_incurred": 150.0, "paid": 100.0})
+
+    assert report.reconciled and not report.flagged
+    assert report.status == "reconciled"
+
+
+def test_rounding_is_not_a_mismatch():
+    """Printed totals round, and a rounding difference is not the omission this
+    check exists to catch."""
+    from calibration.reconciliation import reconcile
+
+    claims = [{"policy_period": "2024", "total_incurred": 100.004}]
+    totals = [{"row_type": "subtotal", "policy_period": "2024", "total_incurred": 100.0}]
+    assert reconcile(claims, totals).reconciled
+
+
+def test_unverifiable_documents_are_excluded_from_the_rate():
+    """Letting them drag the metric down would make it a measure of the CORPUS
+    rather than of the model."""
+    from calibration.reconciliation import reconcile, reconciliation_rate
+
+    good = reconcile(
+        [{"policy_period": "2024", "total_incurred": 100.0}],
+        [{"row_type": "subtotal", "policy_period": "2024", "total_incurred": 100.0}],
+    )
+    silent = reconcile([{"policy_period": "2024", "total_incurred": 100.0}], [])
+
+    assert reconciliation_rate([good, silent]) == 1.0
+    assert reconciliation_rate([silent]) == 0.0
