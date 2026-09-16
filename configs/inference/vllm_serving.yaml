@@ -10,7 +10,13 @@ vision:
   max_image_long_side_px: 1792
 
 sequence:
-  max_seq_len: 8192            # keep in step with base_model.yaml
+  # MUST be at least the largest per-task cap in configs/shared/sequence.yaml
+  # (arch v2.1 7a). It was 8192 here while policy extraction trains at 32768, so
+  # a routed policy would have been truncated AT INFERENCE ONLY - trained on six
+  # pages, served four - and nothing would have reported it as anything but
+  # degraded accuracy on long documents. tests/test_parity.py asserts the
+  # relationship rather than trusting two files to stay in step by hand.
+  max_seq_len: 32768
 
 generation:
   # Greedy by default: extraction is not a creative task, and a sampled output

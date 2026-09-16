@@ -23,11 +23,12 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
-from calibration.apply_calibration import CalibratedResult, apply_calibration
+from calibration.apply_calibration import CalibratedField, CalibratedResult, apply_calibration
 from calibration.fit_calibration import CalibrationParams
 from calibration.list_completeness import check_document, merge_review_flags
 from calibration.logprob_confidence import field_confidences
@@ -218,6 +219,86 @@ def _calibration_for(
     )
 
 
+def _feature_calibrated(
+    *,
+    extraction: dict[str, Any],
+    spans: dict[str, Any],
+    calibrators: Any,
+    thresholds: Any,
+    page_text: str | None,
+) -> CalibratedResult:
+    """Per-field-type feature calibration (arch v2.1 §5.1-5.4).
+
+    Replaces the v1 path, which collapsed each field's span to its MINIMUM token
+    probability and compared it to one hardcoded threshold. The minimum of n
+    draws falls as n grows, so a long correct value scored below a short wrong
+    one — ``ABC-1234567-01`` is nine tokens and ``2026`` is one, and the policy
+    number looked less trustworthy on every document.
+
+    Two absences are routing instructions here, never defaults:
+
+    * **No calibrator for this field type** — the type had too little data to fit
+      one, so every field of it goes to review rather than carrying a number
+      nobody measured.
+    * **No threshold for this field type** — no threshold on the grid achieved
+      the §0d error target with enough accepted fields, so no promise can be
+      made and review is the honest outcome.
+    """
+    from calibration.features import build_document_features
+
+    result = CalibratedResult()
+    usable: list[float] = []
+
+    # The span mapper returns FieldSpan objects; the feature builder takes raw
+    # logprob lists. Unmapped spans are dropped here rather than passed as empty
+    # ones — an empty list is indistinguishable from a null, and a field the
+    # mapper could not locate is a different problem from a field the model
+    # deliberately left empty.
+    logprobs_by_path = {
+        path: span.token_logprobs
+        for path, span in spans.items()
+        if getattr(span, "mapped", False)
+    }
+    for features in build_document_features(
+        extraction=extraction, spans=logprobs_by_path, page_text=page_text
+    ):
+        confidence = calibrators.predict(features) if calibrators else None
+        needs_review = (
+            thresholds.needs_review(features.field_type, confidence)
+            if thresholds else True
+        )
+
+        if confidence is None:
+            reason = (
+                "no span located in the generation" if not features.is_usable
+                else f"no enforced calibrator for {features.field_type} fields"
+            )
+            result.fields[features.field_path] = CalibratedField(
+                field_path=features.field_path, value=features.value,
+                raw_confidence=0.0, confidence=0.0, needs_review=True, reason=reason,
+            )
+            result.review_flags.append(f"{features.field_path}:no_confidence")
+            continue
+
+        result.fields[features.field_path] = CalibratedField(
+            field_path=features.field_path, value=features.value,
+            # The raw minimum is kept as a diagnostic, not as the confidence:
+            # comparing it against the calibrated number is how a miscalibration
+            # is spotted at all.
+            raw_confidence=round(math.exp(features.min_logprob), 4) if features.token_count else 0.0,
+            confidence=confidence, needs_review=needs_review,
+            reason=(
+                f"below the {features.field_type} review threshold" if needs_review else None
+            ),
+        )
+        if needs_review:
+            result.review_flags.append(f"{features.field_path}:low_confidence")
+        usable.append(confidence)
+
+    result.overall_confidence = round(sum(usable) / len(usable), 4) if usable else 0.0
+    return result
+
+
 def _lob_output(fields: dict[str, Any]) -> dict[str, Any] | None:
     """Collapse the per-value LoB spans into one ``{value, confidence}``.
 
@@ -261,6 +342,12 @@ def extract(
     calibration: CalibrationParams | Mapping[str, CalibrationParams],
     *,
     adapter_map: dict[str, Any] | None = None,
+    #: The release bundle's fitted calibrators and thresholds for the serving
+    #: format in use (arch v2.1 §5.3). Per FORMAT, always: quantization moves the
+    #: logprob distribution, so a bf16 calibrator reports confidence for a
+    #: distribution FP8 does not produce.
+    calibrators: Any = None,
+    thresholds: Any = None,
     classifier_threshold: float = 0.70,
     review_threshold: float = DEFAULT_REVIEW_CONFIDENCE_THRESHOLD,
     page_threshold: int = DEFAULT_LONG_DOC_PAGE_THRESHOLD,
@@ -331,8 +418,26 @@ def extract(
     # was the merged document, so fields merged from earlier pages carried no
     # confidence and a field the declarations page won still reported the
     # rejected page's value.
-    raw = field_confidences(all_spans)
-    calibrated: CalibratedResult = apply_calibration(raw, calibration, review_threshold=review_threshold)
+    # The release bundle's calibrator set when the endpoint holds one, the v1
+    # transform otherwise. Not a silent fallback: a release whose calibrate stage
+    # never ran has no per-field-type curves and no measured thresholds, and
+    # serving it through the v1 path is a knowing downgrade rather than an
+    # equivalent.
+    if calibrators is not None:
+        calibrated: CalibratedResult = _feature_calibrated(
+            extraction=extraction, spans=all_spans,
+            calibrators=calibrators, thresholds=thresholds,
+            page_text=request.ocr_text,
+        )
+    else:
+        log.warning(
+            "no calibrator set supplied for %s, so confidence falls back to the v1 raw "
+            "aggregate against a fixed %.2f threshold. That number is length-biased and tied "
+            "to no measured error rate (arch v2.1 §5.1) — load the release bundle's "
+            "calibrators to get the guarantee.", request.source_id, review_threshold,
+        )
+        raw = field_confidences(all_spans)
+        calibrated = apply_calibration(raw, calibration, review_threshold=review_threshold)
 
     # --- list completeness: the signal logprobs cannot see ------------------
     completeness = check_document(

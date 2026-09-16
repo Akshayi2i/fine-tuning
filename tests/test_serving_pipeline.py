@@ -604,3 +604,86 @@ def test_the_serving_config_pins_raw_logprobs():
     generation = serving_config()["generation"]
     assert generation["logprobs_mode"] == "raw_logprobs"
     assert generation["structured_outputs"] is True
+
+
+# --------------------------------------------------------------------------
+# The serving path uses the release bundle's calibrators (arch v2.1 §5.3)
+# --------------------------------------------------------------------------
+
+def _fitted_calibrators():
+    """A calibrator set and thresholds fitted the way the calibrate stage does."""
+    import random
+
+    from calibration.feature_calibrator import fit_calibrators
+    from calibration.features import build_features
+    from calibration.thresholds import fit_thresholds
+
+    rng = random.Random(23)
+
+    def half(offset):
+        rows = []
+        for i in range(500):
+            correct = rng.random() < 0.85
+            logprobs = [-0.05 - rng.random() * 0.1] * 3 if correct else [-2.5 - rng.random()] * 3
+            rows.append((
+                build_features(
+                    field_path="policy_number", value=f"WC-{i + offset}",
+                    logprobs=logprobs, document={},
+                    page_text=f"WC-{i + offset}" if correct else "absent",
+                ),
+                correct,
+            ))
+        return rows
+
+    calibrators = fit_calibrators(half(0), release_id="release-2026.11.1", serving_format="bf16")
+    scored: dict[str, list] = {}
+    for features, correct in half(10_000):
+        confidence = calibrators.predict(features)
+        if confidence is not None:
+            scored.setdefault(features.field_type, []).append((confidence, correct))
+    thresholds = fit_thresholds(scored, release_id="release-2026.11.1", serving_format="bf16")
+    return calibrators, thresholds
+
+
+def test_the_serving_path_uses_the_fitted_calibrators(model):
+    """Phase 10 built the replacement and it sat beside the serving path unused.
+    This is the wire: confidence now comes from the per-field-type calibrator
+    over the §5.2 feature vector, not from a length-biased minimum."""
+    calibrators, thresholds = _fitted_calibrators()
+    result = extract(
+        _request(), model, StaticClassifier("policy"), CALIBRATION,
+        calibrators=calibrators, thresholds=thresholds,
+    )
+    assert result.schema_valid
+    assert result.fields, "no field carried a confidence at all"
+    for body in result.fields.values():
+        assert 0.0 <= body["confidence"] <= 1.0
+
+
+def test_a_field_type_with_no_calibrator_routes_to_review(model):
+    """Not a default number. A calibrator fitted on too little data produces
+    values that look like probabilities and are not, and every §5.4 threshold is
+    defined against a calibrated score."""
+    from calibration.feature_calibrator import CalibratorSet
+    from calibration.thresholds import ThresholdSet
+
+    result = extract(
+        _request(), model, StaticClassifier("policy"), CALIBRATION,
+        calibrators=CalibratorSet(release_id="r", serving_format="bf16"),
+        thresholds=ThresholdSet(release_id="r", serving_format="bf16"),
+    )
+    assert result.review_flags, "an uncalibrated release must flag everything"
+    assert any("no_confidence" in f for f in result.review_flags)
+
+
+def test_without_a_calibrator_set_the_v1_path_is_a_knowing_downgrade(model, caplog):
+    """A release whose calibrate stage never ran has no per-field-type curves and
+    no measured thresholds. Serving it through the v1 transform is a downgrade,
+    not an equivalent, and the log says so rather than passing silently."""
+    import logging
+
+    with caplog.at_level(logging.WARNING):
+        result = extract(_request(), model, StaticClassifier("policy"), CALIBRATION)
+
+    assert result.schema_valid
+    assert any("length-biased" in r.getMessage() for r in caplog.records), caplog.text
