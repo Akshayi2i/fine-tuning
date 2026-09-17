@@ -33,7 +33,7 @@ from calibration.fit_calibration import CalibrationParams
 from calibration.list_completeness import check_document, merge_review_flags
 from calibration.logprob_confidence import field_confidences
 from common.constants import DEFAULT_LONG_DOC_PAGE_THRESHOLD, DEFAULT_REVIEW_CONFIDENCE_THRESHOLD
-from common.schemas import is_valid, iter_validation_errors
+from common.schemas import is_valid, iter_validation_errors, resolved_schema
 from inference_core.input_builder import build_messages
 from inference_core.model_runner import LoadedModel, generate
 from inference_core.span_map import SpanMapError, map_field_spans
@@ -180,7 +180,15 @@ def _generate_once(
         page_numbers=page_numbers,
         total_pages=total_pages,
     )
-    result = generate(model, built.messages, adapter=route_.adapter)
+    # Constrained to the routed type's schema when serving is configured for it
+    # (arch v2.1 §13). Without this the schema-validity floor in §13b measured an
+    # unconstrained model, so one malformed bf16 output made every quantized
+    # format unvalidatable.
+    schema = (
+        resolved_schema(route_.schema_doc_type, route_.schema_acord_form)
+        if getattr(model.config, "structured_outputs", False) else None
+    )
+    result = generate(model, built.messages, adapter=route_.adapter, json_schema=schema)
 
     # Parse and span-map together: both fail for the same underlying reason — the
     # model did not return JSON — and reporting that as two different errors from

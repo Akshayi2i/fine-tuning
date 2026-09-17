@@ -160,9 +160,9 @@ class StageContext:
     fp8_verified: bool = False
 
     #: ``{serving_format: {"calibration": [(features, correct)], "threshold": [...]}}``
-    #: from the two halves of the validation split (arch v2.1 §8.2). A ``"*"``
-    #: key applies to every format — useful only before quantization exists,
-    #: because a calibrator fitted on bf16 is wrong for FP8.
+    #: from the two halves of the validation split (arch v2.1 §8.2). Keyed by the
+    #: exact format: there is no wildcard, because a calibrator fitted on bf16
+    #: logprobs reports confidence for a distribution FP8 does not produce.
     calibration_samples: dict[str, Any] = field(default_factory=dict)
 
     #: The release this cycle produces. Everything gated, promoted and served is
@@ -1129,7 +1129,7 @@ def stage_calibrate(ctx: StageContext) -> StageResult:
     fitted: dict[str, Any] = {}
     for fmt in ctx.formats:
         samples: dict[str, Any] = (
-            ctx.calibration_samples.get(fmt) or ctx.calibration_samples.get("*") or {}
+            ctx.calibration_samples.get(fmt) or {}
         )
         if not samples:
             log.warning(

@@ -119,7 +119,7 @@ def score_fields(
     for path, expected_value in sorted(expected_flat.items()):
         if skip_lists and "[" in path:
             continue
-        got_value = got_flat.get(path)
+        got_value = got_flat.get(path) if path in got_flat else _rows_at(got_flat, path)
         report.results.append(
             FieldResult(
                 field_path=path,
@@ -130,6 +130,28 @@ def score_fields(
             )
         )
     return report
+
+
+def _rows_at(flat: dict[str, Any], path: str) -> list[dict[str, Any]] | None:
+    """The table a flattened extraction holds at ``path``, or ``None``.
+
+    An empty expected table (``claims: []``) flattens to one field, while a
+    populated one flattens to ``claims[0].paid`` ... with no ``claims`` key at all.
+    Looking the field up by path alone therefore found ``None``, and ``[]`` vs
+    ``None`` matches — so a model that invented claims for a document with none
+    scored that field correct. Rebuilding the rows makes it compare as a
+    non-empty table, which does not match an empty one.
+    """
+    marker = f"{path}["
+    rows: dict[int, dict[str, Any]] = {}
+    for key, value in flat.items():
+        if not key.startswith(marker):
+            continue
+        index_text, _, rest = key[len(marker):].partition("]")
+        if not index_text.isdigit():
+            continue
+        rows.setdefault(int(index_text), {})[rest.lstrip(".") or "value"] = value
+    return [rows[i] for i in sorted(rows)] if rows else None
 
 
 # --------------------------------------------------------------------------

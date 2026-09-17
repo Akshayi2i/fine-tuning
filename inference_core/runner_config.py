@@ -51,6 +51,11 @@ class RunnerConfig:
     #: never produced (§5.1). Asserted at load rather than hoped for.
     logprobs_mode: str = "raw_logprobs"
 
+    #: Whether serving constrains generation to the target schema. The schema
+    #: itself is per document type, so it is attached per request
+    #: (``json_schema``); this flag is what the engine is loaded for.
+    structured_outputs: bool = False
+
     @property
     def is_greedy(self) -> bool:
         return self.temperature == 0.0
@@ -63,7 +68,8 @@ class RunnerConfig:
         calibrator on post-mask logprobs produces a number that looks like a
         probability, is not one, and cannot be told apart from one downstream.
         """
-        if self.json_schema is not None and self.logprobs_mode != "raw_logprobs":
+        constrained = self.json_schema is not None or self.structured_outputs
+        if constrained and self.logprobs_mode != "raw_logprobs":
             raise ValueError(
                 f"structured decoding is on with logprobs_mode={self.logprobs_mode!r}. "
                 "Constrained decoding masks invalid tokens, so these are not the model's own "
@@ -91,9 +97,12 @@ class RunnerConfig:
 
         from common.config import resolution_cap_px
 
+        # Constraint and logprob mode change what is generated and what the
+        # confidence features read, so two runs differing in either did not
+        # generate the same way.
         payload = (
             f"{self.backend}|{self.temperature}|{self.top_p}|{self.max_new_tokens}"
-            f"|{self.seed}|{resolution_cap_px()}"
+            f"|{self.seed}|{resolution_cap_px()}|{self.structured_outputs}|{self.logprobs_mode}"
         )
         return hashlib.sha256(payload.encode()).hexdigest()[:12]
 
@@ -125,7 +134,13 @@ def load_runner_config(backend: Backend | None = None) -> RunnerConfig:
         enable_lora=bool(serve.get("enable_lora", True)),
         max_loras=int(serve.get("max_loras", 4)),
         max_lora_rank=int(serve.get("max_lora_rank", 64)),
+        # Read, not defaulted: both were in the YAML and reached nothing, so the
+        # engine loaded with vLLM's own logprobs mode and generation ran
+        # unconstrained while the config said otherwise.
+        logprobs_mode=str(generation.get("logprobs_mode", "raw_logprobs")),
+        structured_outputs=bool(generation.get("structured_outputs", False)),
     )
+    config.assert_logprobs_are_the_models_own()
 
     if not config.is_greedy:
         # Not fatal, but it costs reproducibility: the same document would

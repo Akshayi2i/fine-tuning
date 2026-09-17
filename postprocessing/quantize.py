@@ -238,7 +238,11 @@ def plan_gguf_export(
     return GgufExportPlan(
         merged_model=paths.staging_merged_model_dir(version, None),
         formats=resolved,
-        output_dirs={f: paths.staging_quantized_model_dir(version, f) for f in resolved},
+        # runtime is explicit: bf16 is also a serving format, and inferring the
+        # runtime from the name wrote a bf16 GGUF into the vLLM serving directory.
+        output_dirs={
+            f: paths.staging_quantized_model_dir(version, f, runtime="gguf") for f in resolved
+        },
         version=version,
         mmproj_verified=mmproj_verified,
     )

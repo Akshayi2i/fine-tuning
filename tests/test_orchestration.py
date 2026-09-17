@@ -1246,6 +1246,21 @@ def test_calibration_fits_per_serving_format(client, controller):
     assert stored["thresholds"]["fitted_on"].startswith("validation threshold half")
 
 
+def test_no_calibrator_is_shared_across_serving_formats(client, controller):
+    """A "*" key used to calibrate every format from one sample set, bypassing
+    the per-format rule the stage exists to enforce."""
+    seed_corpus(client)
+    ctx = make_context(
+        client, controller,
+        release_id="release-2026.11.1",
+        calibration_samples={"*": _calibration_samples()},
+    )
+    run_stages(ctx, stages_for("all"), command="all")
+
+    assert "bf16" not in ctx.calibrators
+    assert not client.exists(paths.release_calibrators("release-2026.11.1", "bf16"))
+
+
 def test_a_release_with_no_labelled_features_ships_uncalibrated_and_says_so(client, controller):
     """Honest rather than silent: without labelled validation features there is
     nothing to fit, every field routes to review, and an operator should know

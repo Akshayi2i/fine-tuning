@@ -264,19 +264,32 @@ def _format(fmt: str, allowed: frozenset[str] = SERVING_FORMATS) -> str:
     return fmt
 
 
-def quantized_model_dir(version: str, fmt: str, doc_type: str | None = None) -> str:
+def quantized_model_dir(
+    version: str,
+    fmt: str,
+    doc_type: str | None = None,
+    *,
+    runtime: Literal["vllm", "gguf"] | None = None,
+) -> str:
     """``quantized-models/{scope}/v{n}/{runtime}/{format}/``
 
     The runtime segment is not decoration. A serving format and a GGUF export are
     loaded by different programs — vLLM and llama.cpp — and putting them under one
-    prefix invites deploying the wrong one. ``fp8`` and ``bf16`` land under
-    ``vllm/``; every GGUF format under ``gguf/`` (arch v2.1 §13a).
+    prefix invites deploying the wrong one (arch v2.1 §13a).
+
+    ``runtime`` is inferred when the format names one runtime only. ``bf16`` names
+    both, and defaults to ``vllm`` because that is the serving artifact; a GGUF
+    edge export must pass ``runtime="gguf"``, or it would be written into the
+    directory the serving endpoint loads.
     """
     fmt = _format(fmt, SERVING_FORMATS | GGUF_FORMATS)
-    # bf16 exists in both sets; it is a serving format, and the GGUF build of the
-    # same name is reached through the gguf runtime only when explicitly asked
-    # for by an edge export.
-    runtime = "vllm" if fmt in SERVING_FORMATS else "gguf"
+    if runtime is None:
+        runtime = "vllm" if fmt in SERVING_FORMATS else "gguf"
+    allowed = SERVING_FORMATS if runtime == "vllm" else GGUF_FORMATS
+    if fmt not in allowed:
+        raise PathError(
+            f"{fmt!r} is not a {runtime} format; {runtime} formats are {sorted(allowed)}"
+        )
     scope = _doc_type(doc_type, allow_unified=True) if doc_type else UNIFIED
     return _join("quantized-models", scope, _version(version), runtime, fmt)
 
@@ -475,8 +488,14 @@ def staging_merged_model_dir(version: str, doc_type: str | None = None) -> str:
     return _under_staging(merged_model_dir(version, doc_type))
 
 
-def staging_quantized_model_dir(version: str, fmt: str, doc_type: str | None = None) -> str:
-    return _under_staging(quantized_model_dir(version, fmt, doc_type))
+def staging_quantized_model_dir(
+    version: str,
+    fmt: str,
+    doc_type: str | None = None,
+    *,
+    runtime: Literal["vllm", "gguf"] | None = None,
+) -> str:
+    return _under_staging(quantized_model_dir(version, fmt, doc_type, runtime=runtime))
 
 
 def staging_eval_report(version: str, doc_type: str | None = None) -> str:

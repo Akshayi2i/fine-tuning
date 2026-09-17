@@ -434,3 +434,19 @@ def test_a_line_of_business_list_gets_confidence_from_the_spans_the_mapper_emits
         for f in build_document_features(extraction={"line_of_business": []}, spans={})
     }["line_of_business"]
     assert empty.is_usable and empty.is_null, "an empty list is an answer, not an unmapped field"
+
+
+def test_claims_invented_for_a_document_with_none_are_not_scored_correct():
+    """claims: [] flattened to a field, while the model's invented rows flattened
+    to claims[0].* with no claims key, so the lookup found None and [] vs None
+    matched."""
+    from evaluation.metrics.field_accuracy import score_fields
+
+    expected = {"carrier": "Sentinel", "claims": []}
+    invented = {"carrier": "Sentinel", "claims": [{"claim_number": "WC-1", "paid": 100.0}]}
+    honest = {"carrier": "Sentinel", "claims": []}
+
+    by_path = {r.field_path: r for r in score_fields(expected, invented).results}
+    assert by_path["claims"].correct is False
+    assert {r.field_path: r for r in score_fields(expected, honest).results}["claims"].correct
+    assert by_path["carrier"].correct

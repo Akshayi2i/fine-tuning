@@ -429,6 +429,20 @@ def test_serving_and_edge_artifacts_do_not_share_a_prefix():
     assert "/gguf/" in paths.quantized_model_dir("v2", "q5_k_m")
 
 
+def test_a_bf16_gguf_export_never_lands_in_the_vllm_directory():
+    """bf16 is both a serving format and a GGUF format. Inferring the runtime from
+    the name put a bf16 GGUF where the serving endpoint loads from."""
+    from artifact_registry import paths
+    from postprocessing.quantize import plan_gguf_export
+
+    plan = plan_gguf_export(version="v2", formats=["bf16"], mmproj_verified=True)
+    assert "/gguf/bf16" in plan.output_dirs["bf16"]
+    assert "/vllm/" not in plan.output_dirs["bf16"]
+    assert "/vllm/bf16" in paths.quantized_model_dir("v2", "bf16")
+    with pytest.raises(paths.PathError, match="not a vllm format"):
+        paths.quantized_model_dir("v2", "q5_k_m", runtime="vllm")
+
+
 def test_unknown_quantization_format_is_refused():
     with pytest.raises(QuantizationError, match="unknown serving format"):
         plan_quantization(version="v2", formats=["int2"])
@@ -687,3 +701,32 @@ def test_without_a_calibrator_set_the_v1_path_is_a_knowing_downgrade(model, capl
 
     assert result.schema_valid
     assert any("length-biased" in r.getMessage() for r in caplog.records), caplog.text
+
+
+def test_serving_generation_is_constrained_to_the_routed_schema(client):
+    """structured_outputs and logprobs_mode sat in vllm_serving.yaml and reached
+    nothing: generation ran unconstrained, so the §13b 100% schema-validity floor
+    measured a model with no guarantee behind it."""
+    from common.schemas import resolved_schema
+    from inference_core.runner_config import load_runner_config
+
+    config = load_runner_config()
+    assert config.structured_outputs is True
+    assert config.logprobs_mode == "raw_logprobs"
+
+    backend = EchoBackend(RESPONSE)
+    constrained = load_model("base", client, backend_impl=backend)
+    extract(_request(), constrained, StaticClassifier("policy"), CALIBRATION)
+
+    assert backend.calls, "nothing was generated"
+    assert backend.calls[-1]["json_schema"] == resolved_schema("policy")
+
+
+def test_structured_decoding_on_masked_logprobs_is_refused_at_load():
+    import dataclasses
+
+    from inference_core.runner_config import load_runner_config
+
+    config = dataclasses.replace(load_runner_config(), logprobs_mode="processed_logprobs")
+    with pytest.raises(ValueError, match="raw_logprobs"):
+        config.assert_logprobs_are_the_models_own()

@@ -142,7 +142,8 @@ class EchoBackend(ModelBackend):
 
     def generate(self, messages, config, adapter=None) -> Generation:
         self.calls.append({"messages": messages, "adapter": adapter,
-                           "temperature": config.temperature})
+                           "temperature": config.temperature,
+                           "json_schema": config.json_schema})
         tokens = [self.response[i:i + self.chunk] for i in range(0, len(self.response), self.chunk)]
         return Generation(
             text=self.response,
@@ -171,6 +172,9 @@ class VLLMBackend(ModelBackend):
 
         from vllm import LLM
 
+        # Checked where the engine is built, which is the only place the mode can
+        # still be changed. The comment below used to claim this and nothing did.
+        config.assert_logprobs_are_the_models_own()
         model_path = self.resolved.get("merged_model") or self.resolved.get("base_model")
         if not model_path:
             raise ModelRunnerError(
@@ -187,6 +191,9 @@ class VLLMBackend(ModelBackend):
             max_model_len=config.max_seq_len,
             gpu_memory_utilization=config.gpu_memory_utilization,
             seed=config.seed,
+            # Engine-level, not per request: without it the confidence features
+            # read the post-mask distribution under structured decoding (§5.1).
+            logprobs_mode=config.logprobs_mode,
         )
         log.info("vLLM engine up on %s (lora=%s)", model_path, config.enable_lora)
         return self._engine
@@ -250,10 +257,16 @@ class VLLMBackend(ModelBackend):
         completion = outputs[0].outputs[0]
 
         tokens, logprobs = [], []
-        for step in completion.logprobs or []:
-            # Each step maps token_id -> Logprob; the sampled one is the entry
-            # whose rank is 1.
-            chosen = next((lp for lp in step.values() if getattr(lp, "rank", 1) == 1), None)
+        token_ids = list(getattr(completion, "token_ids", None) or [])
+        for index, step in enumerate(completion.logprobs or []):
+            # Each step maps token_id -> Logprob. The sampled token is looked up
+            # by its id, not as the rank-1 entry: under raw_logprobs with
+            # structured decoding the sampled token is the best VALID one, which
+            # need not be rank 1 in the unmasked distribution — picking rank 1
+            # recorded a token that was never emitted and broke reconstruction.
+            chosen = step.get(token_ids[index]) if index < len(token_ids) else None
+            if chosen is None:
+                chosen = next((lp for lp in step.values() if getattr(lp, "rank", 1) == 1), None)
             if chosen is None:
                 continue
             tokens.append(chosen.decoded_token)
@@ -503,6 +516,7 @@ def generate(
     *,
     adapter: str | None = None,
     want_logprobs: bool = True,
+    json_schema: dict[str, Any] | None = None,
 ) -> Generation:
     """Generate from prepared messages.
 
@@ -510,12 +524,18 @@ def generate(
         adapter: per-type LoRA to apply for this request. ``None`` means
             Foundation-only — the classifier's low-confidence fallback path
             (arch §4a), not an error.
+        json_schema: the resolved target schema to constrain this request to.
+            Per request because it is per document type.
     """
+    import dataclasses
     import time
 
+    config = (
+        dataclasses.replace(model.config, json_schema=json_schema) if json_schema else model.config
+    )
     started = time.perf_counter()
     try:
-        result = model.backend.generate(messages, model.config, adapter=adapter)
+        result = model.backend.generate(messages, config, adapter=adapter)
     except NotImplementedError:
         raise
     except Exception as exc:
