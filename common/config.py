@@ -68,7 +68,7 @@ def serving_config() -> dict[str, Any]:
 
 @cache
 def training_config(name: str) -> dict[str, Any]:
-    """Load ``configs/training/{name}.yaml`` (``unified``, ``per_type_adapter``)."""
+    """Load ``configs/training/{name}.yaml``. ``unified`` is the only one until a type graduates (§4.2)."""
     return load_yaml(CONFIG_DIR / "training" / f"{name}.yaml")
 
 
