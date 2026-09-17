@@ -1326,3 +1326,70 @@ def test_the_staging_precondition_survives_skip_quantize(client, controller):
 
     assert report.failed_at == "quantize"
     assert "not on the staging volume" in report.results[-1].detail
+
+
+# --------------------------------------------------------------------------
+# The release bundle (arch v2.1 §12.3)
+# --------------------------------------------------------------------------
+
+
+def test_package_writes_the_release_bundle_it_pins(client, controller):
+    """stage_push was registered as `package` and never built a ReleaseBundle,
+    so nothing pinned the prompt, schema, calibrators and OCR version that the
+    served weights depend on."""
+    seed_corpus(client)
+    ctx = make_context(client, controller, release_id="release-2026.11.1")
+    report = run_stages(ctx, stages_for("all"), command="all")
+    assert report.ok, report.render()
+
+    bundle = client.read_json(paths.release_bundle("release-2026.11.1"))
+    assert bundle["adapter"] == "extractor-v1"
+    assert bundle["serving_formats"]["bf16"] == paths.merged_model_dir("v1")
+    assert bundle["prompt_hash"] and bundle["vllm_config_hash"] and bundle["lockfile_hash"]
+    assert bundle["ocr_pin"]["mineru_version"] == "2.0.0"
+    assert "bf16" in bundle["gate_reports"]
+
+    index = client.read_json(paths.release_index())
+    assert [row["release_id"] for row in index] == ["release-2026.11.1"]
+
+
+def test_an_uncalibrated_release_is_gated_not_promoted(client, controller):
+    seed_corpus(client)
+    ctx = make_context(client, controller, release_id="release-2026.11.1")
+    run_stages(ctx, stages_for("all"), command="all")
+
+    bundle = client.read_json(paths.release_bundle("release-2026.11.1"))
+    assert bundle["status"] == "gated"
+    reasons = ctx.results["package"].data["not_promoted_because"]
+    assert any("no calibrator" in r for r in reasons)
+
+
+def test_a_calibrated_gated_bf16_release_is_promoted(client, controller):
+    seed_corpus(client)
+    ctx = make_context(
+        client, controller,
+        release_id="release-2026.11.1",
+        calibration_samples={"bf16": _calibration_samples()},
+    )
+    report = run_stages(ctx, stages_for("all"), command="all")
+    assert report.ok, report.render()
+
+    bundle = client.read_json(paths.release_bundle("release-2026.11.1"))
+    assert bundle["status"] == "promoted", ctx.results["package"].data["not_promoted_because"]
+    assert bundle["calibrators"]["bf16"] == paths.release_calibrators("release-2026.11.1", "bf16")
+
+
+def test_a_quantized_format_is_not_promoted_on_the_bf16_gate_run(client, controller):
+    seed_corpus(client)
+    ctx = make_context(
+        client, controller,
+        release_id="release-2026.11.1",
+        formats=["bf16", "fp8"], fp8_verified=True,
+        calibration_samples={"bf16": _calibration_samples(), "fp8": _calibration_samples()},
+    )
+    report = run_stages(ctx, stages_for("all"), command="all")
+    assert report.ok, report.render()
+
+    bundle = client.read_json(paths.release_bundle("release-2026.11.1"))
+    assert bundle["status"] == "gated"
+    assert set(bundle["gate_reports"]) == {"bf16"}

@@ -227,29 +227,78 @@ def select_best(
     return report
 
 
-def vllm_scorer(
-    *,
-    base_model: str,
-    val_path: str,
-    generation_config: dict[str, Any] | None = None,
-) -> Scorer:
-    """A scorer that generates through vLLM with the checkpoint as a decoder LoRA.
+def generation_scorer(rows: list[dict[str, Any]], model: Any) -> Scorer:
+    """Score a checkpoint by generating the validation rows with it as a LoRA.
 
-    One LoRA per request is exactly what vLLM supports, so no checkpoint needs
-    merging to be scored — which is the whole reason this is affordable enough to
-    run on four candidates.
+    Scored through :func:`evaluation.validation_generation.score_generations`,
+    which is the gate's own ``build_report``. A selector scoring by a different
+    definition of "correct" picks a checkpoint the gate rejects.
     """
+    from evaluation.validation_generation import generate_validation, score_generations
 
-    def score(checkpoint: str) -> dict[str, float]:  # pragma: no cover - needs a GPU
-        # Wired in the Phase 8 GPU milestone, against the SAME scorer the gate
-        # uses (evaluation.run_eval.score_subset). A selector scoring by a
-        # different definition of "correct" picks a checkpoint the gate rejects,
-        # so this must not grow its own metric.
-        raise NotImplementedError(
-            "vllm_scorer needs a GPU: load the base in bf16 with enable_lora, apply "
-            f"{checkpoint!r} as a decoder LoRA, generate over {val_path!r} with "
-            f"{generation_config or 'the serving generation config'}, and score through "
-            "evaluation.run_eval.score_subset. Until then, pass an explicit scorer."
+    if not rows:
+        raise CheckpointEvalError(
+            "the validation split is empty, so no checkpoint can be scored. Selecting by "
+            "nothing would ship an arbitrary checkpoint."
         )
 
+    def score(checkpoint: str) -> dict[str, float]:
+        generations = generate_validation(rows, model, adapter=checkpoint)
+        return {
+            k: float(v)
+            for k, v in score_generations(generations, model_version=checkpoint).items()
+            if isinstance(v, (int, float))
+        }
+
     return score
+
+
+def vllm_scorer(*, client: Any, val_path: str, model: Any = None) -> Scorer:
+    """A :func:`generation_scorer` over the stored validation split, on the base.
+
+    The base is loaded in bf16 with LoRA enabled and each checkpoint applied as a
+    decoder LoRA: one LoRA per request is exactly what vLLM supports, so no
+    checkpoint needs merging to be scored.
+    """
+    from evaluation.validation_generation import read_rows
+
+    if model is None:  # pragma: no cover - needs a GPU
+        from inference_core.model_runner import load_model
+
+        model = load_model("base", client)
+    return generation_scorer(read_rows(client.read_text(val_path)), model)
+
+
+def discover_checkpoints(output_dir: str) -> tuple[list[str], str | None]:
+    """The checkpoints a finished run left on disk, and the best-loss one.
+
+    ms-swift writes under a versioned subdirectory (``output_dir/v0-<timestamp>/``),
+    so the search is recursive; when a directory holds several runs, the most
+    recently written one is this run. The best-loss checkpoint comes from the HF
+    Trainer's ``trainer_state.json``, which is where early stopping recorded it.
+
+    Returns ``([], None)`` when the directory does not exist — a dry run, or a
+    trainer that saved nothing, which checkpoint selection then reports.
+    """
+    import json
+    from pathlib import Path
+
+    root = Path(output_dir)
+    if not root.is_dir():
+        return [], None
+    found = [p for p in root.rglob("checkpoint-*") if p.is_dir() and _CHECKPOINT_STEP.search(p.name)]
+    if not found:
+        return [], None
+
+    latest_run = max({p.parent for p in found}, key=lambda d: d.stat().st_mtime)
+    checkpoints = sorted(
+        (str(p) for p in found if p.parent == latest_run), key=checkpoint_step
+    )
+
+    best_loss = None
+    state = Path(checkpoints[-1]) / "trainer_state.json"
+    if state.exists():
+        recorded = json.loads(state.read_text(encoding="utf-8")).get("best_model_checkpoint")
+        if recorded:
+            best_loss = str(latest_run / Path(recorded).name)
+    return checkpoints, best_loss

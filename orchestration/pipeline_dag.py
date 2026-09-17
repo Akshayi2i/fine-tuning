@@ -137,6 +137,9 @@ class StageContext:
     #: Foundation could not pass by ANY input: supply metrics and it read as
     #: empty evidence, supply the booleans and it read as no evidence at all.
     cross_type_evidence: dict[str, dict[str, dict[str, float]]] | None = None
+    #: A named, written waiver of specific gates (arch v2.1 §15.5), recorded in
+    #: the gate decision and the release bundle. ``None`` is the normal case.
+    gate_override: Any = None
 
     #: Staged checkpoint directories from the training run (arch v2.1 §11.2).
     #: Supplied by the trainer in a real cycle; empty in a dry run, where nothing
@@ -152,6 +155,9 @@ class StageContext:
     #: the SAME one the gate uses: a selector scoring by a different definition
     #: of "correct" picks a checkpoint the gate then rejects.
     checkpoint_scorer: Any = None
+    #: ``(ctx, fmt) -> LoadedModel`` for generating with a staged serving format.
+    #: ``None`` loads the staged weights into vLLM; tests pass a stub backend.
+    serving_model_loader: Any = None
 
     #: Set once Phase 0 spike item 9 confirms a decoder-only FP8 export loads and
     #: runs in vLLM. Until then FP8 is refused rather than produced untested: an
@@ -667,6 +673,20 @@ def stage_training(ctx: StageContext) -> StageResult:
         # reading one well-known key. The run_type on the manifest says what it
         # actually is; this is the slot, not the claim.
         ctx.manifests["foundation"] = manifest
+        if not ctx.dry_run and not ctx.checkpoints:
+            # Nothing else fills these in, so checkpoint selection skipped on
+            # every real run and merge took whatever load_best_model_at_end left.
+            from evaluation.checkpoint_eval import discover_checkpoints
+
+            ctx.checkpoints, ctx.best_loss_checkpoint = discover_checkpoints(
+                paths.staging_adapter_dir("foundation", ctx.out_version)
+            )
+            if not ctx.checkpoints:
+                log.warning(
+                    "training finished but no checkpoint-* directory was found under %s, so "
+                    "checkpoint selection will be skipped. Check save_steps.",
+                    paths.staging_adapter_dir("foundation", ctx.out_version),
+                )
         # The staging volume is where merge, quantize and push look for the
         # weights. Without this mark the artifacts exist and the pipeline cannot
         # find them.
@@ -723,14 +743,11 @@ def stage_checkpoint_eval(ctx: StageContext) -> StageResult:
     # meaning the same thing is one that can disagree with the first.
     scorer = ctx.checkpoint_scorer
     if scorer is None:  # pragma: no cover - needs a GPU
-        from common.config import base_model_config, generation_config
         from evaluation.checkpoint_eval import vllm_scorer
 
-        base = base_model_config()["model"]
         scorer = vllm_scorer(
-            base_model=f"{base['model_id']}@{base['revision']}",
+            client=ctx.client,
             val_path=paths.corpus_eval_split(ctx.corpus, "val", ctx.tenant_id),
-            generation_config=generation_config(),
         )
 
     try:
@@ -920,6 +937,7 @@ def stage_evaluation_gate(ctx: StageContext) -> StageResult:
         # Passed through verbatim: the operator supplies both sides, because
         # only they know which promoted per-type report is the baseline.
         cross_type_evidence=ctx.cross_type_evidence or None,
+        override=ctx.gate_override,
     )
 
     # `gate_decision`, not `eval_report`. Writing here used to clobber the
@@ -927,7 +945,7 @@ def stage_evaluation_gate(ctx: StageContext) -> StageResult:
     # record with it — which is what `vit_gate` reads to decide whether the
     # vision encoder is the bottleneck.
     report_key = paths.gate_decision(ctx.out_version)
-    ctx.client.write_json(report_key, {
+    decision = {
         "version": ctx.out_version,
         "candidate_metrics": candidate,
         "gate_metrics": candidate,
@@ -940,7 +958,14 @@ def stage_evaluation_gate(ctx: StageContext) -> StageResult:
         "improved_metrics": result.improved_metrics,
         "waived_gates": sorted(result.waived),
         "override": result.override.as_dict() if result.override else None,
-    })
+    }
+    ctx.client.write_json(report_key, decision)
+    # Also under the release, where the bundle points. The candidate metrics are
+    # the merged bf16 model's, so this is bf16's gate run and no other format's:
+    # a quantized format inherits nothing from it (arch v2.1 §13a).
+    ctx.client.write_json(
+        paths.release_gate_decision(ctx.release_id, "bf16", ctx.tenant_id), decision
+    )
     ctx.volume.write(paths.staging_eval_report(ctx.out_version), json.dumps(candidate))
 
     apply_to_manifest(result, foundation)
@@ -1093,6 +1118,56 @@ def stage_quantize(ctx: StageContext) -> StageResult:
 # --------------------------------------------------------------------------
 
 
+def _staged_serving_model(ctx: StageContext, fmt: str) -> Any:  # pragma: no cover - needs a GPU
+    """The staged model for one serving format, loaded for vLLM generation."""
+    from inference_core.model_runner import LoadedModel, VLLMBackend
+    from inference_core.runner_config import load_runner_config
+    from registry_utils.query_registry import ResolvedModel
+
+    weights = (
+        paths.staging_merged_model_dir(ctx.out_version) if fmt == "bf16"
+        else paths.staging_quantized_model_dir(ctx.out_version, fmt)
+    )
+    config = load_runner_config("vllm")
+    resolved = ResolvedModel(
+        tag=f"{ctx.out_version}:{fmt}", kind="merged", merged_model=weights, from_staging=True,
+    )
+    return LoadedModel(tag=resolved["tag"], resolved=resolved,
+                       backend=VLLMBackend(resolved, config), config=config)
+
+
+def collect_calibration_samples(ctx: StageContext) -> dict[str, Any]:
+    """Generate the validation split with each staged serving format.
+
+    Per format, never shared: quantization moves the logprob distribution, so
+    each format's features come from its own generations (arch v2.1 §5.3).
+    Before this, nothing produced calibration samples, and calibrate skipped on
+    every real run — every field of every release routed to review.
+    """
+    from evaluation.validation_generation import (
+        calibration_samples,
+        generate_validation,
+        read_rows,
+    )
+
+    val_key = paths.corpus_eval_split(ctx.corpus, "val", ctx.tenant_id)
+    if not ctx.client.exists(val_key):
+        log.warning("no validation split at %s; nothing to calibrate on", val_key)
+        return {}
+    rows = read_rows(ctx.client.read_text(val_key))
+    loader = ctx.serving_model_loader or _staged_serving_model
+
+    samples: dict[str, Any] = {}
+    formats = ["bf16"] if ctx.skip_quantize else list(ctx.formats)
+    for fmt in formats:
+        halves = calibration_samples(generate_validation(rows, loader(ctx, fmt)))
+        # Only a format with evidence gets an entry. An empty entry reads as
+        # "samples supplied" and would fit a calibrator on nothing.
+        if any(halves.values()):
+            samples[fmt] = halves
+    return samples
+
+
 def stage_calibrate(ctx: StageContext) -> StageResult:
     """Fit confidence calibrators and review thresholds, per serving format.
 
@@ -1113,6 +1188,9 @@ def stage_calibrate(ctx: StageContext) -> StageResult:
     """
     from calibration.feature_calibrator import fit_calibrators
     from calibration.thresholds import auto_accept_error_rate, fit_thresholds
+
+    if not ctx.calibration_samples and not ctx.dry_run:
+        ctx.calibration_samples = collect_calibration_samples(ctx)
 
     if not ctx.calibration_samples:
         # Honest rather than silent: without labelled validation features there
@@ -1224,6 +1302,115 @@ def assert_staged(ctx: StageContext) -> None:
     )
 
 
+def _file_hash(*files: Path) -> str:
+    """SHA-256 over files, in the order given, each prefixed by its name."""
+    import hashlib
+
+    digest = hashlib.sha256()
+    for path in files:
+        digest.update(path.name.encode())
+        digest.update(path.read_bytes())
+    return digest.hexdigest()
+
+
+def build_release_bundle(ctx: StageContext) -> tuple[Any, list[str]]:
+    """Assemble the release bundle for this cycle (arch v2.1 §12.3).
+
+    Returns ``(bundle, reasons_not_promoted)``. The bundle is ``promoted`` only
+    when every serving format has its own calibrator and its own gate run;
+    otherwise it is ``gated`` (it passed the gate that did run) and the reasons
+    say what is missing. Promoting by default and listing the gaps would make the
+    record claim a guarantee nobody measured.
+    """
+    from common.config import base_model_config
+    from common.prompts import PROMPT_DIR
+    from registry_utils.models import GateOverride, ReleaseBundle
+
+    root = Path(__file__).resolve().parent.parent
+    base = base_model_config()["model"]
+    corpus_manifest = ctx.client.read_json(paths.corpus_manifest(ctx.corpus, ctx.tenant_id))
+
+    formats = ["bf16"] if ctx.skip_quantize else list(ctx.formats)
+    serving_formats = {
+        # bf16 is the merged model itself; it is never re-exported.
+        fmt: paths.merged_model_dir(ctx.out_version) if fmt == "bf16"
+        else paths.quantized_model_dir(ctx.out_version, fmt)
+        for fmt in formats
+    }
+    calibrators = {
+        fmt: paths.release_calibrators(ctx.release_id, fmt, ctx.tenant_id)
+        for fmt in formats if fmt in ctx.calibrators
+    }
+    gate_reports = {
+        fmt: paths.release_gate_decision(ctx.release_id, fmt, ctx.tenant_id)
+        for fmt in formats
+        if ctx.client.exists(paths.release_gate_decision(ctx.release_id, fmt, ctx.tenant_id))
+    }
+
+    reasons = [
+        f"{fmt} has no calibrator, so its confidence is not calibrated (arch v2.1 §5.3)"
+        for fmt in formats if fmt not in calibrators
+    ] + [
+        f"{fmt} has no gate run of its own, and a quantized format inherits nothing from "
+        "the bf16 run (arch v2.1 §13a)"
+        for fmt in formats if fmt not in gate_reports
+    ]
+
+    override = None
+    if ctx.gate_override is not None:
+        override = GateOverride(
+            approver=ctx.gate_override.approver,
+            reason=ctx.gate_override.reason,
+            waived_gates=list(ctx.gate_override.waived_gates),
+        )
+
+    # No lockfile exists in this repo yet, so the dependency pins are hashed from
+    # pyproject.toml. That records the declared ranges, not the resolved
+    # versions, which is weaker than §10.2 asks for and named as such here.
+    lock = root / "uv.lock"
+    lockfile = lock if lock.exists() else root / "pyproject.toml"
+
+    try:
+        bundle = ReleaseBundle(
+            release_id=ctx.release_id,
+            status="gated" if reasons else "promoted",
+            tenant_scope=paths._tenant(ctx.tenant_id),
+            base_model=f"{base['model_id']}@{base['revision']}",
+            adapter=f"extractor-{ctx.out_version}",
+            merged_model=paths.merged_model_dir(ctx.out_version),
+            serving_formats=serving_formats,
+            calibrators=calibrators,
+            gate_reports=gate_reports,
+            prompt_hash=_file_hash(*sorted(Path(PROMPT_DIR).glob("*.jinja"))),
+            schema_versions={
+                str(k): str(v) for k, v in (corpus_manifest.get("schema_versions") or {}).items()
+            },
+            ocr_pin={
+                "mineru_version": corpus_manifest.get("mineru_version"),
+                "ocr_device": corpus_manifest.get("ocr_device"),
+            },
+            vision_config_hash=_file_hash(root / "configs" / "shared" / "vision.yaml"),
+            vllm_config_hash=_file_hash(root / "configs" / "inference" / "vllm_serving.yaml"),
+            lockfile_hash=_file_hash(lockfile),
+            override=override,
+        )
+    except ValueError as exc:
+        raise PipelineError(f"the release bundle for {ctx.release_id} is invalid: {exc}") from exc
+    return bundle, reasons
+
+
+def write_release_bundle(ctx: StageContext, bundle: Any) -> None:
+    """Write the bundle, and replace its row in the tenant's release index."""
+    ctx.client.write_json(
+        paths.release_bundle(bundle.release_id, ctx.tenant_id),
+        json.loads(bundle.model_dump_json()),
+    )
+    index_key = paths.release_index(ctx.tenant_id)
+    rows = ctx.client.read_json(index_key) if ctx.client.exists(index_key) else []
+    rows = [r for r in rows if r.get("release_id") != bundle.release_id] + [bundle.index_row()]
+    ctx.client.write_json(index_key, sorted(rows, key=lambda r: r["release_id"]))
+
+
 def stage_push(ctx: StageContext) -> StageResult:
     """Copy adapters, merged model and quantized models into Blob, then flip the
     manifest from ``staged`` to ``published``.
@@ -1310,6 +1497,13 @@ def stage_push(ctx: StageContext) -> StageResult:
         )
         published.append(run_id)
 
+    # The unit of promotion (arch v2.1 §12.3). Built after the artifacts are
+    # pushed, so every path it pins exists in Blob.
+    bundle, not_promoted = build_release_bundle(ctx)
+    write_release_bundle(ctx, bundle)
+    for reason in not_promoted:
+        log.warning("%s is %s, not promoted: %s", bundle.release_id, bundle.status, reason)
+
     cleared = 0
     if not ctx.keep_staging and published:
         # Only after something was actually published. The comment used to claim
@@ -1326,9 +1520,14 @@ def stage_push(ctx: StageContext) -> StageResult:
 
     return StageResult(
         "package", "completed",
-        f"pushed {len(pushed)} artifact location(s), published {len(published)} manifest(s)"
+        f"pushed {len(pushed)} artifact location(s), published {len(published)} manifest(s), "
+        f"release {bundle.release_id} {bundle.status}"
         + (f", cleared {cleared} staged path(s)" if cleared else ""),
-        {"pushed": pushed, "published": published, "staging_cleared": cleared},
+        {
+            "pushed": pushed, "published": published, "staging_cleared": cleared,
+            "release_id": bundle.release_id, "release_status": bundle.status,
+            "not_promoted_because": not_promoted,
+        },
     )
 
 
