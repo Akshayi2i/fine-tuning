@@ -32,7 +32,7 @@ v1's own module docstring had the right of it: *"GGUF is the portable/edge path 
 | **AWQ INT4 (W4A16)** | llm-compressor | Modern NVIDIA | VRAM-constrained serving only, if it meets threshold |
 
 ```bash
-python -m orchestration.run package --run extractor-v2.0 --formats bf16 fp8
+python -m orchestration.run package --version v2 --release-id release-2026.11.1 --formats bf16 fp8
 ```
 
 **bf16 is never re-exported.** It *is* the merged model; a copy would be a second 16 GB artifact identical to the first.
@@ -63,6 +63,8 @@ Serving and edge artifacts are stored under **different runtime prefixes** — `
 | Confusable misattribution (increase) | 0.5 pp | 1.0 pp |
 | ECE (increase) | 0.01 | 0.02 |
 | Schema validity (constrained) | 100% | 100% |
+
+`field_normalized_match` is judged on the **names, addresses** row and `field_exact_match` on the **identifiers, money, dates** row, each against its own allowance.
 
 Three things about this table are deliberate:
 

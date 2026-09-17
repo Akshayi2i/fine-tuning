@@ -1656,7 +1656,7 @@ v1's own module docstring had the right of it: *"GGUF is the portable/edge path 
 | **AWQ INT4 (W4A16)** | llm-compressor | Modern NVIDIA | VRAM-constrained serving only, if it meets threshold |
 
 ```bash
-python -m orchestration.run package --run extractor-v2.0 --formats bf16 fp8
+python -m orchestration.run package --version v2 --release-id release-2026.11.1 --formats bf16 fp8
 ```
 
 **bf16 is never re-exported.** It *is* the merged model; a copy would be a second 16 GB artifact identical to the first.
@@ -1687,6 +1687,8 @@ Serving and edge artifacts are stored under **different runtime prefixes** — `
 | Confusable misattribution (increase) | 0.5 pp | 1.0 pp |
 | ECE (increase) | 0.01 | 0.02 |
 | Schema validity (constrained) | 100% | 100% |
+
+`field_normalized_match` is judged on the **names, addresses** row and `field_exact_match` on the **identifiers, money, dates** row, each against its own allowance.
 
 Three things about this table are deliberate:
 
@@ -2050,6 +2052,7 @@ python -m orchestration.run finetune \
 # 2 — quantize, calibrate, gate, then publish the release bundle.
 python -m orchestration.run package \
        --version v2 \
+       --release-id release-2026.11.1 \
        --formats bf16 fp8
 
 # 3 — extraction, model chosen by the operator.
@@ -2059,7 +2062,7 @@ python -m orchestration.run extract --model v2   --input testing/test_data/ \
 
 # all — commands 1 and 2 back to back. Extraction excluded by design.
 python -m orchestration.run all \
-       --input ./intake --out-version v2 --formats bf16 fp8
+       --input ./intake --out-version v2 --release-id release-2026.11.1 --formats bf16 fp8
 ```
 
 Each subcommand is a thin argument-parsing shell over `pipeline_dag.py` stage functions (§4). No orchestration logic lives in the CLI layer.
@@ -2133,7 +2136,9 @@ Runs: **quantize → push adapters + merged model + quantized model(s) to Azure 
 - `--keep-staging` retains the volume copy (default: clear it after a verified push, so the volume doesn't fill).
 - Quantization threshold validation (SPEC_10 / arch §13b) is **deferred this cycle** — the serving path is merged fp16/bf16 via vLLM. When it ships it becomes a gate inside `package`, between quantize and push.
 
-**Flags:** `--version`, `--formats`, `--skip-quantize` (push adapters + merged only), `--keep-staging`, `--from-blob`, `--dtype`, **`--foundation-only`**, **`--doc-types`**, **`--tenant`**.
+**Flags:** `--version`, **`--release-id release-YYYY.M.N`** (required), `--formats`, `--skip-quantize` (push adapters + merged only), `--keep-staging`, `--from-blob`, `--dtype`, **`--foundation-only`**, **`--doc-types`**, **`--tenant`**.
+
+**`--release-id` is checked before any stage runs** — under `all`, before training. Calibrators, gate decisions and the bundle are all addressed by it, and an invalid one used to surface only when calibrate tried to save what it had already fitted. It is named by the operator, never derived: a derived id would move between a failed run and its `--from-stage` resume and split one release across two ids. A missing or malformed id fails with the next free id for the month as the suggested fix; pass the same id when resuming.
 
 The last three must match the `finetune` run that produced the version. `finetune` decides *which* models get built; `package` publishes their locations, so without them a standalone `package` fell back to `foundation_only=False` and all three doc types however finetune had actually run — writing three adapter prefixes and three merged-model prefixes into Blob for artifacts that were never built. An empty Blob prefix later reads as a published model. (Under `all` they come from the finetune flag set; adding them twice is an argparse conflict.)
 

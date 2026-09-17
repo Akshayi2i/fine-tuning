@@ -296,6 +296,12 @@ class GateResult:
     #: "passed with a waiver" is never indistinguishable from "passed".
     waived: list[str] = field(default_factory=list)
 
+    #: ``(gate, reason)`` for every block, so an override removes a reason by the
+    #: gate that raised it. Matching on the reason's opening words missed every
+    #: reason not phrased as "<gate> ...", so waiving ``improvement`` or a
+    #: ``cross_type:`` gate left the release blocked with the waiver recorded.
+    blocks: list[tuple[str, str]] = field(default_factory=list)
+
     @property
     def improved_metrics(self) -> list[str]:
         return [v.name for v in self.verdicts if v.improved]
@@ -421,10 +427,8 @@ def promotion_gate(
         waived = sorted(set(result.override.waived_gates) & set(result.failed_gates))
         result.waived = waived
         result.failed_gates = [g for g in result.failed_gates if g not in waived]
-        result.blocking_reasons = [
-            r for r in result.blocking_reasons
-            if not any(r.startswith(f"{g} ") or r.startswith(f"{g}:") for g in waived)
-        ]
+        result.blocks = [(g, r) for g, r in result.blocks if g not in waived]
+        result.blocking_reasons = [r for _, r in result.blocks]
         unused = sorted(set(result.override.waived_gates) - set(waived))
         if unused:
             log.warning(
@@ -441,6 +445,7 @@ def _block(result: GateResult, gate: str, reason: str) -> None:
     if gate not in result.failed_gates:
         result.failed_gates.append(gate)
     result.blocking_reasons.append(reason)
+    result.blocks.append((gate, reason))
 
 
 def _require_improvement(result: GateResult, fixes_defect: str | None) -> None:

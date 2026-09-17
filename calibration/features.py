@@ -230,7 +230,14 @@ def build_features(
     and treating the absence as maximum confidence is how a false null ships
     unreviewed.
     """
-    is_null = value is None or (isinstance(value, str) and not value.strip())
+    is_null = (
+        value is None
+        or (isinstance(value, str) and not value.strip())
+        # An empty scalar list (``line_of_business: []``) emits no value tokens
+        # either, so it is calibrated with the nulls rather than as a field the
+        # span mapper failed to find.
+        or (isinstance(value, list) and not value)
+    )
     spans = list(logprobs or [])
 
     features = FieldFeatures(
@@ -272,18 +279,44 @@ def build_document_features(
 
     out: list[FieldFeatures] = []
     for path, value in sorted(flatten_scalars(extraction).items()):
-        located = path in spans
+        logprobs = _span_logprobs(path, value, spans)
+        located = logprobs is not None
+        empty = value is None or (isinstance(value, list) and not value)
         out.append(build_features(
             field_path=path,
             value=value,
-            logprobs=spans.get(path),
+            logprobs=logprobs,
             document=extraction,
             page_text=page_text,
             cross_mode_value=(cross_mode or {}).get(path),
-            mapped=located or value is None,
-            reason=None if located or value is None else "no span located in the generation",
+            mapped=located or empty,
+            reason=None if located or empty else "no span located in the generation",
         ))
     return out
+
+
+def _span_logprobs(
+    path: str, value: Any, spans: dict[str, list[float]]
+) -> list[float] | None:
+    """The token logprobs behind one flattened field.
+
+    ``flatten_scalars`` keeps a list of scalars whole (``line_of_business``), but
+    the span mapper locates each element separately (``line_of_business[0]``,
+    ``[1]`` ...), because each value has its own tokens. Looking up the whole path
+    alone found nothing, so every document with a line of business went to
+    review at confidence 0. The elements' tokens are pooled: the minimum is then
+    the weakest value's, which is what makes a set worth reviewing.
+
+    Every element must be located. Pooling only the ones that were would score
+    the list on the values the mapper happened to find.
+    """
+    if path in spans:
+        return spans[path]
+    if isinstance(value, list) and value:
+        elements = [spans.get(f"{path}[{index}]") for index in range(len(value))]
+        if all(e is not None for e in elements):
+            return [lp for element in elements for lp in (element or [])]
+    return None
 
 
 @dataclass

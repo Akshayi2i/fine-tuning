@@ -383,6 +383,25 @@ def test_an_override_lifts_only_the_gates_it_names():
     assert "doc_type_classifier_accuracy" not in result.failed_gates
 
 
+def test_an_override_clears_gates_whose_reasons_do_not_start_with_their_name():
+    """The waiver matched reasons by their opening words. The cross-type reason
+    starts "cross-type evidence ..." / "the continued run ...", never with its gate
+    name, so waiving it recorded the waiver and left the release blocked."""
+    from evaluation.gating import GateOverrideRecord
+
+    result = promotion_gate(
+        _metrics(), _metrics(), continued_from="foundation-v1",
+        override=GateOverrideRecord(
+            "A. Reviewer",
+            "cross-type slices are being relabelled under FID-120; this patch is acord-only",
+            ["cross_type_regression_evidence"],
+        ),
+    )
+    assert result.waived == ["cross_type_regression_evidence"]
+    assert result.passed, result.report()
+    assert not result.blocking_reasons
+
+
 def test_a_waived_pass_is_not_recorded_as_a_clean_pass():
     """"Passed with a waiver" must never be indistinguishable from "passed"."""
     from evaluation.gating import GateOverrideRecord, apply_to_manifest

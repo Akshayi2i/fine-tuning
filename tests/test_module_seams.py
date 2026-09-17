@@ -390,3 +390,47 @@ def test_no_gating_metric_is_emitted_under_a_near_miss_name():
         f"{sorted(collisions)} look like near-misses of a gating metric name; a metric emitted "
         "under the wrong name never reaches the gate"
     )
+
+
+def test_every_reconciled_column_is_a_loss_run_claim_field():
+    """RECONCILED_COLUMNS named "reserve"; the schema says "reserved". A column
+    no row carries is skipped without a word, so reserves were never checked."""
+    import json
+
+    from calibration.reconciliation import RECONCILED_COLUMNS
+
+    schema = json.loads((ROOT / "schemas" / "lossrun.schema.json").read_text(encoding="utf-8"))
+    claim_fields = set(schema["properties"]["claims"]["items"]["properties"])
+    unknown = sorted(set(RECONCILED_COLUMNS) - claim_fields)
+    assert not unknown, f"reconciliation sums {unknown}, which no Loss Run claim row carries"
+
+
+def test_a_line_of_business_list_gets_confidence_from_the_spans_the_mapper_emits():
+    """The span mapper names list elements line_of_business[0], [1]; the feature
+    builder looked up line_of_business, found nothing, and every document with a
+    line of business went to review at confidence 0."""
+    import json
+
+    from calibration.features import build_document_features
+    from inference_core.span_map import map_field_spans
+
+    extraction = {"carrier": "Sentinel", "line_of_business": ["workers_comp", "general_liability"]}
+    text = json.dumps(extraction, separators=(",", ":"))
+    tokens = [text[i:i + 4] for i in range(0, len(text), 4)]
+    spans = map_field_spans(text, tokens, [-0.05] * len(tokens))
+    # Exactly the reduction serving/pipeline.py applies before building features.
+    logprobs_by_path = {p: s.token_logprobs for p, s in spans.items() if s.mapped}
+
+    features = {
+        f.field_path: f
+        for f in build_document_features(extraction=extraction, spans=logprobs_by_path)
+    }
+    lob = features["line_of_business"]
+    assert lob.is_usable, lob.reason
+    assert lob.token_count > 0
+
+    empty = {
+        f.field_path: f
+        for f in build_document_features(extraction={"line_of_business": []}, spans={})
+    }["line_of_business"]
+    assert empty.is_usable and empty.is_null, "an empty list is an answer, not an unmapped field"

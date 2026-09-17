@@ -1183,6 +1183,32 @@ def stage_calibrate(ctx: StageContext) -> StageResult:
 # --------------------------------------------------------------------------
 
 
+def assert_release_id(ctx: StageContext) -> None:
+    """Refuse to package without a valid, operator-named release id.
+
+    Everything calibrate, the gate and the bundle write is addressed by it
+    (arch v2.1 §12.3). It is named explicitly rather than derived: a derived id
+    moves between a failed run and its ``--from-stage`` resume, splitting one
+    release's calibrators and gate decisions across two ids.
+    """
+    if paths.is_valid_release_id(ctx.release_id):
+        return
+    from datetime import UTC, datetime
+
+    now = datetime.now(UTC)
+    existing = {
+        key[len(paths.releases_root(ctx.tenant_id)):].strip("/").split("/", 1)[0]
+        for key in ctx.client.list(paths.releases_root(ctx.tenant_id) + "/")
+    }
+    suggestion = paths.next_release_id(existing, now.year, now.month)
+    given = f"{ctx.release_id!r} is not a valid release id" if ctx.release_id else "no --release-id"
+    raise PipelineError(
+        f"{given}. package addresses every calibrator, gate decision and bundle by release "
+        f"id (release-YYYY.M.N). The next free id this month is {suggestion}: re-run with "
+        f"--release-id {suggestion}, and pass the same id when resuming."
+    )
+
+
 def assert_staged(ctx: StageContext) -> None:
     """Fail loudly, with remediation, when the version is not on the volume."""
     if ctx.from_blob:
@@ -1433,9 +1459,16 @@ def run_stages(ctx: StageContext, stages: Sequence[Stage], *, command: str = "fi
     # a stage: --skip-quantize turned the first stage into a no-op, and the check
     # disappeared with it.
     report = RunReport(command=command, version=ctx.out_version)
+    preconditions = []
     if command == "package" and stages:
+        preconditions.append(assert_staged)
+    if any(stage.command == "package" for stage in stages):
+        # Before any work, including a whole `all` training run: an invalid id
+        # used to surface only when calibrate tried to SAVE, after fitting.
+        preconditions.append(assert_release_id)
+    for precondition in preconditions:
         try:
-            assert_staged(ctx)
+            precondition(ctx)
         except PipelineError as exc:
             # Reported, not raised: the operator should get the same rendered
             # remediation as any other failure rather than a traceback. Attached

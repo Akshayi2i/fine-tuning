@@ -56,6 +56,7 @@ def build_context(args: argparse.Namespace, *, client: BlobClient | None = None,
         "doc_types": list(getattr(args, "doc_types", None) or ACTIVE_DOC_TYPES),
         "tenant_id": getattr(args, "tenant", None),
         "formats": list(getattr(args, "formats", None) or ["bf16"]),
+        "release_id": getattr(args, "release_id", "") or "",
         "dtype": getattr(args, "dtype", "fp16"),
         "gpu_class": getattr(args, "gpu", None),
         "dry_run": getattr(args, "dry_run", False),
@@ -146,6 +147,8 @@ def _add_package_flags(parser: argparse.ArgumentParser, *, version_required: boo
     if version_required:
         parser.add_argument("--version", required=True)
     parser.add_argument("--formats", nargs="+", default=list(defaults().get("formats", ["bf16"])))
+    parser.add_argument("--release-id", dest="release_id", default="",
+                        help="release-YYYY.M.N; required, and the same on a --from-stage resume")
     parser.add_argument("--skip-quantize", dest="skip_quantize", action="store_true")
     parser.add_argument("--keep-staging", dest="keep_staging", action="store_true")
     parser.add_argument("--from-blob", dest="from_blob", action="store_true",

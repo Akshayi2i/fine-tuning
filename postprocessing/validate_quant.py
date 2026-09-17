@@ -180,11 +180,16 @@ def validate_format(fmt: str, metrics: dict[str, Any], reference: dict[str, Any]
     result.field_f1_drop = float(ref_f1) - result.field_f1
     result.ece_increase = result.ece - float(ref_ece)
 
-    allowance = threshold.max_exact_match_drop_pp / 100.0
+    # Normalized match is the forgiving comparison — the §13b "Match — names,
+    # addresses" row — so it takes the fuzzy allowance. Holding it to the
+    # exact-match allowance rejected formats at half the drop §13b permits, while
+    # max_fuzzy_match_drop_pp was read by nothing. The unforgiving class is held
+    # to its own margin through field_exact_match below.
+    allowance = threshold.max_fuzzy_match_drop_pp / 100.0
     if result.field_f1_drop > allowance + EPSILON:
         result.reasons.append(
-            f"field match dropped {result.field_f1_drop * 100:.2f}pp against a "
-            f"{threshold.max_exact_match_drop_pp:.1f}pp allowance"
+            f"normalized field match dropped {result.field_f1_drop * 100:.2f}pp against a "
+            f"{threshold.max_fuzzy_match_drop_pp:.1f}pp allowance"
         )
 
     # Each field class carries its own margin, because a wrong policy number is a
@@ -246,7 +251,7 @@ def validate_quant(
 
     Args:
         metrics_by_format: format -> metrics from the SPEC_12 extraction routine
-            over the frozen golden eval set. Must include ``fp16``.
+            over the frozen golden eval set. Must include ``bf16``.
         serving_formats: the formats actually intended for serving. A format
             produced but not served still gets a result, because knowing which
             formats *would* pass is what makes the trade-off a decision.
@@ -257,7 +262,8 @@ def validate_quant(
     if REFERENCE_FORMAT not in metrics_by_format:
         raise QuantValidationError(
             f"no {REFERENCE_FORMAT} metrics supplied. Every threshold is a degradation relative "
-            "to fp16, so validating without it would be comparing each format to nothing."
+            f"to {REFERENCE_FORMAT}, so validating without it would be comparing each format "
+            "to nothing."
         )
 
     reference = metrics_by_format[REFERENCE_FORMAT]

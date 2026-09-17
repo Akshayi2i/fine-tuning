@@ -38,7 +38,10 @@ MONEY_TOLERANCE = 0.51
 
 #: The money columns reconciled. A Loss Run that balances on incurred but not on
 #: paid has a real problem, so each is checked separately rather than summed.
-RECONCILED_COLUMNS = ("total_incurred", "paid", "reserve")
+#: Spelled exactly as the Loss Run claim schema spells them: a column the rows
+#: never carry is skipped silently, which is how ``reserve`` (the schema says
+#: ``reserved``) left reserves unreconciled.
+RECONCILED_COLUMNS = ("total_incurred", "paid", "reserved")
 
 
 @dataclass

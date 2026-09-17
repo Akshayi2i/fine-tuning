@@ -139,6 +139,7 @@ def make_context(client: BlobClient, controller: RunPodController, **over) -> St
         raw_client=ingestion_client(client),
         controller=controller,
         out_version="v1",
+        release_id="release-2026.9.1",
         tenant_id=None,
         dry_run=True,
         skip_ingest=True,
@@ -858,9 +859,33 @@ def test_build_context_carries_the_flags_through(client, controller):
     assert ctx.corpus == "v3"  # corpus defaults to the output version
 
 
+def test_all_without_a_release_id_stops_before_training(client, controller):
+    """release_id defaulted to "" and nothing set it, so calibrate fitted every
+    calibrator and then failed to save them. Under `all` that was after a whole
+    training run."""
+    seed_corpus(client)
+    ctx = make_context(client, controller, release_id="")
+    report = run_stages(ctx, stages_for("all"), command="all")
+
+    assert not report.ok
+    assert report.failed_at == "ingestion"
+    assert [r.name for r in report.results] == ["ingestion"]
+    assert "--release-id release-" in report.results[0].detail
+    assert not ctx.volume.exists(paths.staging_adapter_dir("foundation", "v1"))
+
+
+def test_the_suggested_release_id_is_the_next_free_one_this_month():
+    used = ["release-2026.9.1", "release-2026.9.3", "release-2026.8.7", "release-2026.10.9"]
+    assert paths.next_release_id(used, 2026, 9) == "release-2026.9.4"
+    assert paths.next_release_id([], 2026, 9) == "release-2026.9.1"
+    assert paths.is_valid_release_id(paths.next_release_id(used, 2026, 9))
+
+
 def test_run_command_dispatches_all_through_both_commands(client, controller):
     seed_corpus(client)
-    args = cli.build_parser().parse_args(["all", "--input", "./intake", "--out-version", "v1"])
+    args = cli.build_parser().parse_args([
+        "all", "--input", "./intake", "--out-version", "v1", "--release-id", "release-2026.9.1",
+    ])
     ctx = cli.build_context(
         args, client=client, controller=controller, raw_client=ingestion_client(client),
         skip_ingest=True, dry_run=True, min_labels_per_type=1,

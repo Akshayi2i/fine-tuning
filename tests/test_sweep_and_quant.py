@@ -233,7 +233,7 @@ def test_margins_are_absolute_percentage_points_not_relative():
     """v1 allowed a 2% RELATIVE drop, which is 1.9pp at F1 0.95 and 1.4pp at
     0.70 — so the rule got stricter as the model got worse. The same number
     should mean the same thing whatever the baseline."""
-    allowance_pp = threshold_for("fp8").max_exact_match_drop_pp / 100.0
+    allowance_pp = threshold_for("fp8").max_fuzzy_match_drop_pp / 100.0
 
     high = {**BF16, "field_normalized_match": 0.95}
     low = {**BF16, "field_normalized_match": 0.70}
@@ -254,11 +254,26 @@ def test_a_format_over_its_allowance_is_blocked():
 
 
 def test_the_boundary_is_evaluated_exactly():
-    allowance = threshold_for("fp8").max_exact_match_drop_pp / 100.0
+    allowance = threshold_for("fp8").max_fuzzy_match_drop_pp / 100.0
     at = BF16["field_normalized_match"] - allowance
 
     assert validate_quant({"bf16": BF16, "fp8": _metrics(at)}).all_passed
-    assert not validate_quant({"bf16": BF16, "fp8": _metrics(at - 0.01)}).all_passed
+    assert not validate_quant({"bf16": BF16, "fp8": _metrics(at - 0.001)}).all_passed
+
+
+def test_normalized_match_takes_the_fuzzy_allowance_and_exact_match_its_own():
+    """Normalized match was held to the 0.5pp exact-match allowance, rejecting FP8
+    at half the drop §13b permits, and max_fuzzy_match_drop_pp was read by
+    nothing. Each class is held to its own margin."""
+    reference = {**BF16, "field_exact_match": 0.90}
+
+    fuzzy_only = {**_metrics(0.892), "field_exact_match": 0.90}       # 0.8pp normalized
+    assert validate_quant({"bf16": reference, "fp8": fuzzy_only}).all_passed
+
+    exact_drop = {**_metrics(0.90), "field_exact_match": 0.892}       # 0.8pp exact
+    report = validate_quant({"bf16": reference, "fp8": exact_drop})
+    assert "fp8" in report.blocked_formats
+    assert any("exact match" in r for r in report.results[-1].reasons)
 
 
 def test_row_recall_is_checked_on_its_own_margin():

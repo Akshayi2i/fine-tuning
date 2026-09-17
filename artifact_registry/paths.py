@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import os
 import re
+from collections.abc import Iterable
 from pathlib import PurePosixPath
 from typing import Final, Literal
 
@@ -344,6 +345,30 @@ def _release(release_id: str) -> str:
             f"invalid release id {release_id!r}; expected release-YYYY.M.N (e.g. release-2026.11.1)"
         )
     return release_id
+
+
+def is_valid_release_id(release_id: str) -> bool:
+    return bool(_RELEASE_RE.match(release_id or ""))
+
+
+def releases_root(tenant_id: str | None = None) -> str:
+    """``releases/{tenant}/`` — every release this tenant has."""
+    return _join("releases", _tenant(tenant_id))
+
+
+def next_release_id(existing: Iterable[str], year: int, month: int) -> str:
+    """The next free ``release-YYYY.M.N`` for a month, given the ids already used.
+
+    A suggestion for the operator, never assigned silently: a derived id changes
+    between a failed run and its ``--from-stage`` resume whenever the first
+    attempt wrote anything, which would split one release across two ids.
+    """
+    prefix = f"release-{year}.{month}."
+    used = [
+        int(rid[len(prefix):]) for rid in existing
+        if rid.startswith(prefix) and rid[len(prefix):].isdigit()
+    ]
+    return f"{prefix}{max(used, default=0) + 1}"
 
 
 def release_bundle(release_id: str, tenant_id: str | None = None) -> str:
