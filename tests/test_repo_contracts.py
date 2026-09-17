@@ -164,8 +164,8 @@ REQUIRED_TRAINING_PARAMS: dict[str, tuple[str, ...]] = {
     "lora": ("rank", "alpha", "dropout", "target_modules", "bias"),
 }
 
-#: ONE config under arch v2.1 §4.1. `per_type_adapter` exists but is reachable
-#: only through the §4.2 graduation gate, so it is not a launch-path config.
+#: ONE config under arch v2.1 §4.1. No per-type training config exists until a
+#: type passes the §4.2 graduation gate.
 TRAINING_CONFIGS = ("unified",)
 
 
@@ -344,12 +344,22 @@ def test_the_phases_are_ordered_by_dependency():
     assert phase3["depends_on"] == "phase2_epochs"
 
 
-def test_the_epoch_phase_optimises_f1_not_loss():
+def test_the_sweep_ranks_on_the_metric_checkpoint_selection_reads():
     """Validation loss can fall while field extraction gets worse, and F1 is
     what the promotion gate reads."""
-    config = load_yaml(ROOT / "configs" / "sweeps" / "phase2_epochs.yaml")
-    assert config["metric"]["name"] == "field_f1"
-    assert config["metric"]["goal"] == "maximize"
+    from evaluation.checkpoint_eval import CheckpointScore
+
+    # The name checkpoint selection reads, so the sweep and the selector cannot
+    # rank on differently named metrics. "field_f1" matched nothing the scorer
+    # emits, which would have left every candidate unmeasured.
+    selection_metric = "field_normalized_match"
+    assert CheckpointScore("x/checkpoint-1", 1, {selection_metric: 0.5}).field_f1 == 0.5, (
+        "checkpoint selection no longer reads field_normalized_match; update the sweep with it"
+    )
+    for phase in ("phase2_epochs.yaml", "phase3_rank.yaml"):
+        config = load_yaml(ROOT / "configs" / "sweeps" / phase)
+        assert config["metric"]["name"] == selection_metric, phase
+        assert config["metric"]["goal"] == "maximize"
 
 
 def test_the_rank_phase_is_not_run_by_default():

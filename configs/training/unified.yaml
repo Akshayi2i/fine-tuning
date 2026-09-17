@@ -18,7 +18,8 @@
 # Per-type adapters return only through the §4.2 graduation gate: >= 500 labeled
 # documents of that type AND a measured >2pp win outside the paired-bootstrap
 # 95% CI. Even then they train on the MERGED foundation, decoder-only, one LoRA
-# per request - never stacked. See per_type_adapter.yaml.
+# per request - never stacked. No per-type training config exists until a type
+# graduates; SPEC_06 §4 describes what one must satisfy.
 
 run_type: unified
 

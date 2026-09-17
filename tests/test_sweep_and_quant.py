@@ -102,7 +102,8 @@ def test_phase_two_optimises_f1_not_loss():
     the promotion gate reads."""
     from training.sweep import load_phase
 
-    assert load_phase("epochs")["metric"] == {"name": "field_f1", "goal": "maximize"}
+    assert load_phase("epochs")["metric"] == {"name": "field_normalized_match", "goal": "maximize"}
+    assert load_phase("rank")["metric"]["name"] == "field_normalized_match"
     assert load_phase("lr")["metric"]["goal"] == "minimize"
 
 
@@ -152,7 +153,7 @@ def test_phase_two_is_conditioned_on_phase_one_s_winner():
         score = {"learning_rate": 1e-4, "num_train_epochs": 3}.get(c.parameter)
         good = c.value == score
         return CandidateResult(c, {"eval_loss": 0.1 if good else 0.5,
-                                   "field_f1": 0.9 if good else 0.5})
+                                   "field_normalized_match": 0.9 if good else 0.5})
 
     result = run_sweep(train, documents_per_type=AT_SCALE)
 
@@ -166,7 +167,7 @@ def test_phase_two_is_conditioned_on_phase_one_s_winner():
 def test_rank_is_not_swept_by_default():
     """Least likely bottleneck; the spec runs it only if F1 plateaus."""
     def train(c: Candidate) -> CandidateResult:
-        return CandidateResult(c, {"eval_loss": 0.1, "field_f1": 0.9})
+        return CandidateResult(c, {"eval_loss": 0.1, "field_normalized_match": 0.9})
 
     result = run_sweep(train, documents_per_type=AT_SCALE)
     rank = next(p for p in result["phases"] if p["phase"] == "rank")
@@ -178,7 +179,7 @@ def test_rank_is_not_swept_by_default():
 
 def test_the_full_budget_stays_inside_nine_to_twelve_runs():
     def train(c: Candidate) -> CandidateResult:
-        return CandidateResult(c, {"eval_loss": 0.1, "field_f1": 0.9})
+        return CandidateResult(c, {"eval_loss": 0.1, "field_normalized_match": 0.9})
 
     result = run_sweep(train, documents_per_type=AT_SCALE, include_rank=True)
     assert result["total_runs"] == 9

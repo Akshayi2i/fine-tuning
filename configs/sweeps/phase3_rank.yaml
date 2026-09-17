@@ -3,7 +3,10 @@
 phase: rank
 depends_on: phase2_epochs
 run_by_default: false
-metric: {name: "field_f1", goal: "maximize"}
+# field_normalized_match: the metric checkpoint selection and the gate read
+# (evaluation.validation_generation.score_generations). Ranking a sweep on a
+# differently named metric makes every candidate "unmeasured".
+metric: {name: "field_normalized_match", goal: "maximize"}
 budget_runs: 3
 # Both adapter types, like every other phase. Sweeping rank for the Foundation
 # only meant `--adapter-type per_type` raised "defines no grid" at phase 3 —

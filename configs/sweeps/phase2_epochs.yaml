@@ -3,7 +3,10 @@
 # extraction gets worse, and F1 is what the promotion gate actually reads.
 phase: epochs
 depends_on: phase1_lr
-metric: {name: "field_f1", goal: "maximize"}
+# field_normalized_match: the metric checkpoint selection and the gate read
+# (evaluation.validation_generation.score_generations). Ranking a sweep on a
+# differently named metric makes every candidate "unmeasured".
+metric: {name: "field_normalized_match", goal: "maximize"}
 early_stopping_patience: 2
 budget_runs_per_adapter_type: 3
 grid:

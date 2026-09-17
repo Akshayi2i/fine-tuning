@@ -896,11 +896,13 @@ def default_baseline_metrics(ctx: StageContext) -> dict[str, Any] | None:
 def stage_evaluation_gate(ctx: StageContext) -> StageResult:
     """Score the candidate against the frozen golden eval set, then gate.
 
-    **This stage is a hard stop.** A candidate that regresses on any gating
-    metric does not merge, the command exits non-zero with per-metric deltas, and
-    ``all`` never reaches ``package``. There is no ``--force``: an override that
-    exists gets used on the afternoon someone is in a hurry, which is exactly the
-    afternoon the gate was built for.
+    **This stage is a hard stop inside ``package``** (arch v2.1 §13). It runs
+    after merge, quantize and calibrate, so a regression stops the RELEASE, not
+    the build: the merged model exists on the staging volume, but nothing is
+    published, the release bundle is never written, and the command exits
+    non-zero with per-metric verdicts. There is no ``--force``. There is a named,
+    written override (``ctx.gate_override``, §15.5), recorded in the gate decision
+    and the bundle.
     """
     from evaluation.gating import apply_to_manifest, promotion_gate
 
@@ -975,7 +977,7 @@ def stage_evaluation_gate(ctx: StageContext) -> StageResult:
 
     if not result.passed:
         raise GateBlocked(
-            f"promotion gate blocked {ctx.out_version} — not merging.\n{result.report()}",
+            f"promotion gate blocked {ctx.out_version} — not packaging.\n{result.report()}",
             gate_result=result,
         )
 
@@ -1257,7 +1259,7 @@ def stage_calibrate(ctx: StageContext) -> StageResult:
 
 
 # --------------------------------------------------------------------------
-# Stage 9 — push artifacts (package)
+# Stage 11 — package: push artifacts and write the release bundle
 # --------------------------------------------------------------------------
 
 

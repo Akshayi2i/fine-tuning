@@ -1,14 +1,17 @@
-"""Early stopping on validation loss AND field-level F1 (arch §11).
+"""Early stopping (arch v2.1 §11.1, §11.2).
 
-Two signals, not one, because they can disagree: validation loss can keep
-improving while field extraction gets worse. Loss is averaged over every token
-the model produces, so it rewards fluent, well-formed JSON — and a confidently
-wrong value is fluent. Field F1 measures whether the values are right, which is
-what the promotion gate actually reads.
+**Inside the trainer, early stopping reads validation loss.** Field F1 needs
+generation, which the training loop's eval does not do efficiently for a VLM, so
+`swift_early_stopping_args` is configured from `unified.yaml` with
+`metric_for_best_model: eval_loss`, `greater_is_better: false`. Patience is
+counted in evaluations, not epochs: at pilot volume an epoch is a handful of
+steps.
 
-So `metric_for_best_model` is `field_f1`, and patience is counted in evaluations
-rather than epochs: at pilot volume an epoch is a handful of steps, and patience
-measured in epochs would stop almost immediately.
+**Loss never selects what ships.** It can keep improving while field extraction
+gets worse — it rewards fluent JSON, and a confidently wrong value is fluent. The
+checkpoint that is merged is chosen afterwards by generated field F1
+(`evaluation.checkpoint_eval`). `EarlyStoppingState` is the field-F1 tracker for
+that offline setting, and warns when the two signals diverge.
 """
 
 from __future__ import annotations
@@ -18,7 +21,7 @@ from dataclasses import dataclass, field
 
 log = logging.getLogger(__name__)
 
-DEFAULT_PATIENCE = 2
+DEFAULT_PATIENCE = 3
 
 
 @dataclass
@@ -82,8 +85,8 @@ class EarlyStoppingState:
 def swift_early_stopping_args(
     patience: int = DEFAULT_PATIENCE,
     *,
-    metric_for_best_model: str = "field_f1",
-    greater_is_better: bool = True,
+    metric_for_best_model: str = "eval_loss",
+    greater_is_better: bool = False,
     load_best_model_at_end: bool = True,
 ) -> dict[str, object]:
     """Early-stopping arguments for the ms-swift invocation.

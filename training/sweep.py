@@ -300,7 +300,7 @@ def run_sweep(
         fixed[outcome.winner.candidate.parameter] = outcome.winner.candidate.value
     else:
         phases.append(PhaseResult(
-            phase="rank", metric="field_f1", goal="maximize",
+            phase="rank", metric="field_normalized_match", goal="maximize",
             skipped="not run by default — rank is the least likely bottleneck and the spec "
                     "runs it only if F1 plateaus after phases 1 and 2",
         ))
