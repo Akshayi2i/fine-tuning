@@ -30,7 +30,6 @@ from __future__ import annotations
 
 import argparse
 import logging
-import re
 from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Any
@@ -43,6 +42,7 @@ from common.config import (
     training_config,
     validate_all,
 )
+from common.run_ids import UNIFIED_LINEAGE, build_run_id, is_valid_run_id
 from common.tasks import Task
 from registry_utils.models import (
     Artifacts,
@@ -374,7 +374,7 @@ def train(
     # the §11a sweep tests up to four passes (§6.1), and a sweep that regenerates
     # its own data is not comparing what it thinks it is.
     manifest = build_manifest(
-        run_id=f"extractor-{out_version}",
+        run_id=build_run_id(UNIFIED_LINEAGE, out_version),
         corpus_version=corpus_version,
         corpus_manifest=corpus_manifest,
         training_cfg=recorded,
@@ -392,18 +392,19 @@ def train(
     return swift, manifest
 
 
-#: A registry run-id, which is exactly what must NOT be passed as a checkpoint.
-_RUN_ID_SHAPE = re.compile(r"^(extractor|foundation|[a-z]+-adapter)-v[\d.]+$")
-
-
 def assert_checkpoint_path(continue_from: str) -> None:
     """Refuse a registry run-id where a checkpoint directory is required.
 
     ms-swift's ``resume_from_checkpoint`` reads a directory. Handed a run-id it
     finds nothing, trains from base, and the manifest records a lineage that
     never happened — a run that claims to continue v2 while being v1 again.
+
+    The shape comes from :mod:`common.run_ids`, so a scoped id (``policy-v2``) is
+    refused for the same reason ``extractor-v2`` is. The three-alternative regex
+    this replaced listed the lineages v1 happened to mint, and would have waved
+    every scoped id straight through.
     """
-    if _RUN_ID_SHAPE.match(continue_from.strip().rstrip("/").split("/")[-1]) and "/" not in continue_from:
+    if is_valid_run_id(continue_from.strip().rstrip("/").split("/")[-1]) and "/" not in continue_from:
         raise TrainingError(
             f"--continue-from got {continue_from!r}, which is a registry run-id, not a "
             "checkpoint path. ms-swift resumes from a DIRECTORY; given a run-id it silently "

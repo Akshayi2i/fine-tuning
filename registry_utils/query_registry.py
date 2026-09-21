@@ -25,6 +25,7 @@ from typing import Any
 from artifact_registry import paths
 from artifact_registry.blob_client import BlobClient, BlobError
 from common.config import base_model_config
+from common.run_ids import is_valid_run_id, version_of
 from registry_utils.models import RunManifest, RunStatus, RunType
 
 
@@ -175,11 +176,20 @@ def resolve_model_version(
             from_staging=False,
         )
 
-    foundation_run = _find_run(client, "foundation", tag)
+    # BOTH run types. The trainer writes `run_type="unified"` (arch v2.1 §4.1)
+    # while this looked only for `"foundation"`, so no run produced by the
+    # current code was resolvable by tag at all — `extract --model v2` could not
+    # find the model it had just trained.
+    lineage_types: tuple[RunType, ...] = ("unified", "foundation")
+    foundation_run = _find_run(client, lineage_types, tag)
     if foundation_run is None:
+        known = sorted({
+            str(r.get("run_id", ""))
+            for one in lineage_types
+            for r in list_runs(client, run_type=one)
+        })
         raise RegistryQueryError(
-            f"no Foundation run found for tag {tag!r}. Known versions: "
-            f"{sorted({r.get('run_id', '') for r in list_runs(client, run_type='foundation')})}"
+            f"no unified or Foundation run found for tag {tag!r}. Known versions: {known}"
         )
 
     manifest = get(foundation_run, client)
@@ -218,15 +228,26 @@ def resolve_model_version(
 def _tag_of(run_id: str) -> str:
     """The version tag inside a run_id: ``foundation-v2`` -> ``v2``.
 
-    Per-type runs are ``{doc_type}-adapter-{tag}``, Foundation runs are
-    ``foundation-{tag}``; both put the tag last.
+    Parsed by :mod:`common.run_ids` rather than by ``rsplit("-", 1)``, which is
+    right only by luck: it reads ``extractor-v2.1`` correctly but has no idea
+    whether what it returned is a version at all, so a malformed id resolved to
+    a tag that matched nothing and reported "no run found" instead of "that is
+    not a run id".
     """
-    return run_id.rsplit("-", 1)[-1] if "-" in run_id else run_id
+    return version_of(run_id) if is_valid_run_id(run_id) else run_id
 
 
-def _find_run(client: BlobClient, run_type: RunType, tag: str) -> str | None:
-    """Find the run_id whose version tag matches, preferring a promoted one."""
-    rows = list_runs(client, run_type=run_type)
+def _find_run(
+    client: BlobClient, run_type: RunType | tuple[RunType, ...], tag: str
+) -> str | None:
+    """Find the run_id whose version tag matches, preferring a promoted one.
+
+    Takes several run types because one lineage is written under more than one:
+    the trainer records ``unified`` while v1 recorded ``foundation``, and both
+    resolve to the same artifacts.
+    """
+    wanted = (run_type,) if isinstance(run_type, str) else tuple(run_type)
+    rows = [row for one in wanted for row in list_runs(client, run_type=one)]
     # Exact tag match on the run_id's final segment. `tag in run_id` made "v1"
     # match "foundation-v10" and "v1.1", so resolve_model_version("v1") could
     # pick v10, read ITS artifact status, and return a staging path built from

@@ -279,8 +279,23 @@ def test_quantized_artifact_refused_while_staged(client):
 
 
 def test_unknown_version_fails_loudly(client):
-    with pytest.raises(Q.RegistryQueryError, match="no Foundation run"):
+    with pytest.raises(Q.RegistryQueryError, match="no unified or Foundation run"):
         Q.resolve_model_version("v99", client)
+
+
+def test_a_unified_run_resolves_by_tag(client):
+    """The trainer writes run_type="unified" (arch v2.1 §4.1) while this resolver
+    looked only for "foundation", so NO run produced by the current code could be
+    resolved by tag — `extract --model v4` could not find what training had just
+    written."""
+    W.write_manifest(
+        RunManifest(run_id="extractor-v4", run_type="unified",
+                    dependencies=_deps(), training_config=_tc(), data_stats=_DS),
+        client,
+    )
+    resolved = Q.resolve_model_version("v4", client)
+    assert resolved["tag"] == "v4"
+    assert resolved["foundation_adapter"]
 
 
 def test_diff_surfaces_what_would_explain_a_regression(client):

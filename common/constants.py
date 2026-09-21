@@ -16,6 +16,15 @@ from typing import Final, NamedTuple
 # --------------------------------------------------------------------------
 
 #: Active document types. Quote and Endorsement are deferred (master §1).
+#:
+#: This is the **write** vocabulary: what may be labeled, minted as a new
+#: ``source_id``, and served. It is deliberately NOT the set a given training run
+#: covers — that is ``common.scopes.Scope.doc_types``, which may be narrower (a
+#: policy-only run). Three sets, three jobs:
+#:
+#: * ``KNOWN_DOC_TYPES``  — every type this repo has ever named (read path).
+#: * ``ACTIVE_DOC_TYPES`` — what may be minted and served today (write path).
+#: * ``Scope.doc_types``  — what one run trains.
 ACTIVE_DOC_TYPES: Final[tuple[str, ...]] = ("acord", "policy", "lossrun")
 
 #: ACORD form numbers with their own schema. One shared `acord` ADAPTER covers
@@ -50,6 +59,13 @@ DOC_TYPE_TO_CANONICAL: Final[dict[str, CanonicalModel]] = {
 CANONICAL_TO_DOC_TYPE: Final[dict[str, str]] = {
     v.canonical_key: k for k, v in DOC_TYPE_TO_CANONICAL.items()
 }
+
+#: Every document type this repo has ever named, active or not — the **read**
+#: vocabulary. Historical artifacts must stay readable after a type is retired
+#: from ``ACTIVE_DOC_TYPES``: a corpus, a golden label and every ``source_id``
+#: that names a retired type were all valid when written, and refusing to parse
+#: them would strand the artifacts rather than pause the type.
+KNOWN_DOC_TYPES: Final[tuple[str, ...]] = tuple(DOC_TYPE_TO_CANONICAL)
 
 
 #: The holding bucket for documents whose type is not yet known. Ingestion

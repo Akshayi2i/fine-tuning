@@ -16,7 +16,7 @@ from __future__ import annotations
 import re
 from typing import NamedTuple
 
-from common.constants import ACTIVE_DOC_TYPES, UNCLASSIFIED
+from common.constants import ACTIVE_DOC_TYPES, KNOWN_DOC_TYPES, UNCLASSIFIED
 
 #: Width of the zero-padded index. Four digits carries 9,999 documents per type;
 #: the parser accepts more, so passing this is not a silent failure.
@@ -65,8 +65,16 @@ def parse_source_id(source_id: str) -> ParsedSourceId:
             f"malformed source_id {source_id!r}; expected {{doc_type}}_{{index}} such as 'acord_0001'"
         )
     doc_type = match.group("doc_type")
-    if doc_type not in ACTIVE_DOC_TYPES:
-        raise SourceIdError(f"source_id {source_id!r} names unknown doc_type {doc_type!r}")
+    # KNOWN, not ACTIVE: reading is not minting. A `lossrun_0001` written while
+    # Loss Runs were active must stay parseable after the type is paused, or
+    # every path, corpus row and golden label naming it becomes unreadable —
+    # pausing a type would strand its artifacts instead of just stopping new
+    # ones. `build_source_id` still refuses to MINT an inactive type.
+    if doc_type not in KNOWN_DOC_TYPES and doc_type != UNCLASSIFIED:
+        raise SourceIdError(
+            f"source_id {source_id!r} names unknown doc_type {doc_type!r}; "
+            f"known types: {KNOWN_DOC_TYPES}"
+        )
     return ParsedSourceId(doc_type, int(match.group("index")), source_id.strip())
 
 

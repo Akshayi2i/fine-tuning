@@ -32,6 +32,7 @@ from typing import Any, Literal
 from artifact_registry import paths
 from artifact_registry.blob_client import BlobClient
 from common.constants import ACTIVE_DOC_TYPES, DAY_ZERO_MIN_LABELS_PER_TYPE
+from common.run_ids import UNIFIED_LINEAGE, build_run_id, is_valid_run_id, version_of
 from orchestration.runpod_controller import RunPodController, StagingVolume
 
 log = logging.getLogger(__name__)
@@ -773,7 +774,7 @@ def stage_checkpoint_eval(ctx: StageContext) -> StageResult:
 
 def _major(version: str) -> str:
     """The major component of ``v2``, ``v2.1``, ``foundation-v3`` — all ``2``/``3``."""
-    tag = version.rsplit("-", 1)[-1].lstrip("vV")
+    tag = (version_of(version) if is_valid_run_id(version) else version).lstrip("vV")
     return tag.split(".")[0] or tag
 
 
@@ -923,11 +924,12 @@ def stage_evaluation_gate(ctx: StageContext) -> StageResult:
         from registry_utils.query_registry import get as get_manifest
 
         try:
-            foundation = get_manifest(f"extractor-{ctx.out_version}", ctx.client)
+            run_id = build_run_id(UNIFIED_LINEAGE, ctx.out_version)
+            foundation = get_manifest(run_id, ctx.client)
             ctx.manifests["foundation"] = foundation
         except (RegistryQueryError, KeyError, FileNotFoundError) as exc:
             raise PipelineError(
-                f"no run manifest for extractor-{ctx.out_version}, so the gate cannot tell "
+                f"no run manifest for {run_id}, so the gate cannot tell "
                 "whether this Foundation continued from a previous checkpoint — and a continued "
                 "one must show cross-type regression evidence before promotion (arch §12). "
                 f"Re-run training for this version rather than gating blind ({exc})."
@@ -1378,7 +1380,7 @@ def build_release_bundle(ctx: StageContext) -> tuple[Any, list[str]]:
             status="gated" if reasons else "promoted",
             tenant_scope=paths._tenant(ctx.tenant_id),
             base_model=f"{base['model_id']}@{base['revision']}",
-            adapter=f"extractor-{ctx.out_version}",
+            adapter=build_run_id(UNIFIED_LINEAGE, ctx.out_version),
             merged_model=paths.merged_model_dir(ctx.out_version),
             serving_formats=serving_formats,
             calibrators=calibrators,
