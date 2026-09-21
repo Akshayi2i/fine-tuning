@@ -118,6 +118,17 @@ def _scope(scope: str) -> str:
     return name
 
 
+def _scope_segment(scope: str | None) -> str:
+    """How a training scope renders inside an artifact path.
+
+    THE COMPATIBILITY RULE, in one place: the unified scope renders exactly what
+    every path rendered before scopes existed, so no artifact already in Blob
+    moves. Every other scope lands under ``scope/{name}/``.
+    """
+    name = (scope or UNIFIED).strip().lower()
+    return UNIFIED if name == UNIFIED else _join("scope", _scope(name))
+
+
 def is_valid_scope(scope: str) -> bool:
     """Whether a name could be a scope path segment. Non-raising."""
     return bool(_SCOPE_RE.match(str(scope).strip().lower()))
@@ -260,10 +271,37 @@ def adapter_dir(kind: AdapterKind, version: str, doc_type: str | None = None) ->
     raise PathError(f"unknown adapter kind {kind!r}; expected 'foundation' or 'doc_type'")
 
 
-def merged_model_dir(version: str, doc_type: str | None = None) -> str:
-    """``merged-models/{doc_type|unified}/v{n}/`` — fp16/bf16, post ``merge_and_unload``."""
-    scope = _doc_type(doc_type, allow_unified=True) if doc_type else UNIFIED
-    return _join("merged-models", scope, _version(version))
+def scoped_adapter_dir(scope: str | None, version: str) -> str:
+    """``adapters/foundation/v{n}/`` for unified, ``adapters/scope/{name}/v{n}/`` otherwise.
+
+    A sibling of :func:`adapter_dir` rather than another ``kind``, because
+    ``adapter_dir("doc_type", v, "policy")`` already owns ``adapters/policy/``.
+    A policy-SCOPE adapter (trained on the base, covering policies) and a §4.2
+    graduated policy adapter (trained on the merged foundation) are different
+    artifacts, and one prefix for both is the collision this avoids.
+    """
+    tag = _version(version)
+    if not scope or scope == UNIFIED:
+        return adapter_dir("foundation", tag)
+    return _join("adapters", "scope", _scope(scope), tag)
+
+
+def merged_model_dir(
+    version: str, doc_type: str | None = None, *, scope: str | None = None
+) -> str:
+    """``merged-models/{scope|doc_type|unified}/v{n}/`` — bf16, post ``merge_and_unload``.
+
+    ``doc_type`` is the §4.2 graduated lineage and ``scope`` is the training
+    scope; they are different axes, so naming both is refused rather than
+    silently resolved to one.
+    """
+    if doc_type and scope and scope != UNIFIED:
+        raise PathError(
+            f"merged model cannot be both scope {scope!r} and doc_type {doc_type!r} — "
+            "a scoped run covers document types, a graduated adapter IS one"
+        )
+    segment = _doc_type(doc_type, allow_unified=True) if doc_type else _scope_segment(scope)
+    return _join("merged-models", segment, _version(version))
 
 
 #: Formats a release can be served in (arch v2.1 §13a). bf16 is the reference
@@ -289,6 +327,7 @@ def quantized_model_dir(
     doc_type: str | None = None,
     *,
     runtime: Literal["vllm", "gguf"] | None = None,
+    scope: str | None = None,
 ) -> str:
     """``quantized-models/{scope}/v{n}/{runtime}/{format}/``
 
@@ -309,8 +348,12 @@ def quantized_model_dir(
         raise PathError(
             f"{fmt!r} is not a {runtime} format; {runtime} formats are {sorted(allowed)}"
         )
-    scope = _doc_type(doc_type, allow_unified=True) if doc_type else UNIFIED
-    return _join("quantized-models", scope, _version(version), runtime, fmt)
+    if doc_type and scope and scope != UNIFIED:
+        raise PathError(
+            f"quantized model cannot be both scope {scope!r} and doc_type {doc_type!r}"
+        )
+    segment = _doc_type(doc_type, allow_unified=True) if doc_type else _scope_segment(scope)
+    return _join("quantized-models", segment, _version(version), runtime, fmt)
 
 
 def run_manifest(
@@ -357,12 +400,22 @@ def calibration_params(version: str, doc_type: str) -> str:
     return _join("calibration", _version(version), f"{_doc_type(doc_type)}.json")
 
 
-def eval_report(version: str, doc_type: str | None = None) -> str:
-    base = _join("eval-reports", _version(version))
+def eval_report(version: str, doc_type: str | None = None, *, scope: str | None = None) -> str:
+    base = _join("eval-reports", _version(version), _scope_suffix(scope))
     return _join(base, _doc_type(doc_type), "report.json") if doc_type else _join(base, "summary.json")
 
 
-def gate_decision(version: str) -> str:
+def _scope_suffix(scope: str | None) -> str:
+    """``""`` for unified, ``scope/{name}`` otherwise.
+
+    Empty for unified so the key is byte-identical to what has always been
+    written: ``_join`` drops empty parts.
+    """
+    name = (scope or UNIFIED).strip().lower()
+    return "" if name == UNIFIED else _join("scope", _scope(name))
+
+
+def gate_decision(version: str, *, scope: str | None = None) -> str:
     """Where the promotion gate's own verdict is written.
 
     Deliberately NOT ``eval_report(version)``. The gate used to write its thin
@@ -372,7 +425,7 @@ def gate_decision(version: str) -> str:
     scanned documents and returned ``insufficient_data`` for ever, so the ViT
     escalation decision could never be made on real evidence again.
     """
-    return _join("eval-reports", _version(version), "gate_decision.json")
+    return _join("eval-reports", _version(version), _scope_suffix(scope), "gate_decision.json")
 
 
 _RELEASE_RE = re.compile(r"^release-\d{4}\.\d{1,2}\.\d+$")
@@ -470,7 +523,9 @@ def corpus_epoch_file(version: str, epoch: int, tenant_id: str | None = None) ->
     return _join(corpus_dir(version, tenant_id), "train", f"epoch_{int(epoch)}.jsonl")
 
 
-def checkpoint_selection(version: str, tenant_id: str | None = None) -> str:
+def checkpoint_selection(
+    version: str, tenant_id: str | None = None, *, scope: str | None = None
+) -> str:
     """Which checkpoint shipped, and what it beat (arch v2.1 §11.2).
 
     Recorded because the merged weights do not say. Once the staging volume is
@@ -478,7 +533,9 @@ def checkpoint_selection(version: str, tenant_id: str | None = None) -> str:
     the selection margin is what tells a later regression review whether the
     choice was decisive or inside eval noise.
     """
-    return _join("eval-reports", _version(version), "checkpoint_selection.json")
+    return _join(
+        "eval-reports", _version(version), _scope_suffix(scope), "checkpoint_selection.json"
+    )
 
 
 def golden_eval_set_dir() -> str:
@@ -513,8 +570,10 @@ def staging_adapter_dir(kind: AdapterKind, version: str, doc_type: str | None = 
     return _under_staging(adapter_dir(kind, version, doc_type))
 
 
-def staging_merged_model_dir(version: str, doc_type: str | None = None) -> str:
-    return _under_staging(merged_model_dir(version, doc_type))
+def staging_merged_model_dir(
+    version: str, doc_type: str | None = None, *, scope: str | None = None
+) -> str:
+    return _under_staging(merged_model_dir(version, doc_type, scope=scope))
 
 
 def staging_quantized_model_dir(
@@ -523,12 +582,17 @@ def staging_quantized_model_dir(
     doc_type: str | None = None,
     *,
     runtime: Literal["vllm", "gguf"] | None = None,
+    scope: str | None = None,
 ) -> str:
-    return _under_staging(quantized_model_dir(version, fmt, doc_type, runtime=runtime))
+    return _under_staging(
+        quantized_model_dir(version, fmt, doc_type, runtime=runtime, scope=scope)
+    )
 
 
-def staging_eval_report(version: str, doc_type: str | None = None) -> str:
-    return _under_staging(eval_report(version, doc_type))
+def staging_eval_report(
+    version: str, doc_type: str | None = None, *, scope: str | None = None
+) -> str:
+    return _under_staging(eval_report(version, doc_type, scope=scope))
 
 
 def staging_run_manifest(run_id: str) -> str:
