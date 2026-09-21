@@ -870,7 +870,10 @@ def eval_report_metrics(ctx: StageContext) -> dict[str, Any]:
 
     assert_eval_set_disjoint(ctx.client, ctx.corpus, ctx.tenant_id)
 
-    summary_key = paths.eval_report(ctx.out_version)
+    # This scope's report, not the unified one. Reading the unscoped key gated a
+    # policy candidate on the UNIFIED model's numbers — or found no report and
+    # failed — while stage_push recorded the scoped key on the manifest.
+    summary_key = paths.eval_report(ctx.out_version, scope=ctx.scope.name)
     if ctx.client.exists(summary_key):
         report = ctx.client.read_json(summary_key)
         metrics = report.get("gate_metrics") or report.get("candidate_metrics") or {}
@@ -899,10 +902,12 @@ def default_baseline_metrics(ctx: StageContext) -> dict[str, Any] | None:
     )
     if not promoted:
         return None
-    # Strip whichever lineage prefix the run id carries. A run id is
-    # "<lineage>-<version>" and eval reports are keyed by version alone, so
-    # hardcoding one prefix broke the moment the lineage was renamed.
-    key = paths.eval_report(promoted.rsplit("-", 1)[-1])
+    # The promoted run's OWN scope decides where its report lives, and it is this
+    # scope's previous release by construction — `latest_promoted` was already
+    # filtered by scope. Reading the unscoped key compared a policy candidate
+    # against unified numbers, or silently degraded to "first version" and
+    # dropped the regression check altogether.
+    key = paths.eval_report(version_of(promoted), scope=ctx.scope.name)
     if not ctx.client.exists(key):
         log.warning(
             "promoted version %s has no eval report at %s, so this candidate is gated as a first "

@@ -1571,3 +1571,32 @@ def test_scope_choices_come_from_the_config_file():
     )
     assert args.scopes == ["policy", "unified"]
     assert set(load_scopes()) >= {"unified", "policy", "lossrun"}
+
+
+def test_the_gate_reads_its_own_scopes_eval_report(client, controller):
+    """The gate became scope-aware while its INPUT did not, so a policy run was
+    judged on the unified model's numbers — or found no report and failed."""
+    from orchestration.pipeline_dag import eval_report_metrics
+
+    seed_corpus(client)
+    ctx = _scoped_ctx(client, controller, "policy")
+
+    client.write_json(paths.eval_report("v1"), {"gate_metrics": {"field_exact_match": 0.10}})
+    client.write_json(
+        paths.eval_report("v1", scope="policy"), {"gate_metrics": {"field_exact_match": 0.99}}
+    )
+
+    assert eval_report_metrics(ctx)["field_exact_match"] == 0.99
+
+
+def test_two_scopes_cannot_share_one_release_id():
+    """Each scope produces its own release, all addressed by the id, so the
+    second bundle would overwrite the first and delete its index row."""
+    from common.scopes import get_scope
+
+    with pytest.raises(cli.ReleaseIdError, match="cannot share an id"):
+        cli.release_id_for(["release-2026.9.1"], get_scope("policy"), scope_count=2)
+
+    assert cli.release_id_for(
+        ["release-2026.9.1"], get_scope("policy"), scope_count=1
+    ) == "release-2026.9.1"

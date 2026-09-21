@@ -358,7 +358,35 @@ def serving_thresholds() -> dict[str, Any]:
     ):
         if isinstance(value, (int, float)) and not isinstance(value, bool):
             tuning[key] = value
+
+    # An operator-chosen schema for a document nobody could identify. Absent by
+    # default, and then an unroutable document is refused rather than extracted
+    # against a schema nobody chose.
+    fallback = routing.get("fallback_doc_type")
+    if isinstance(fallback, str) and fallback.strip():
+        tuning["fallback_doc_type"] = fallback.strip()
     return tuning
+
+
+def long_doc_types_for(plan: Any) -> tuple[str, ...]:
+    """Which served types get page routing, from their releases' own scopes.
+
+    The page signals are policy vocabulary (declarations, schedule, endorsement),
+    so routing a Loss Run through them spends a pass to select every page anyway.
+    """
+    from common.scopes import ScopeError, get_scope
+
+    if plan is None:
+        return ("policy",)
+    found: set[str] = set()
+    for release in plan.by_doc_type.values():
+        try:
+            found.update(get_scope(release.scope).long_doc_types)
+        except ScopeError:
+            # A release from a scope this deployment no longer declares still
+            # serves; it simply gets the default.
+            found.add("policy")
+    return tuple(sorted(found))
 
 
 def handler(event: dict[str, Any], state: EndpointState) -> dict[str, Any]:
@@ -402,6 +430,12 @@ def handler(event: dict[str, Any], state: EndpointState) -> dict[str, Any]:
             state.classifier,
             state.calibration,
             adapter_map=state.adapter_map,
+            # The serving plan reaches `extract`, or the refusal it exists for
+            # never happens: a document type no promoted release covers would be
+            # extracted by a model that never trained on it, against a schema it
+            # has never seen (arch v2.1 §12.3).
+            plan=state.plan,
+            long_doc_types=long_doc_types_for(state.plan),
             **tuning,
         )
     except ServingError as exc:

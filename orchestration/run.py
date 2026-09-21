@@ -52,7 +52,8 @@ def build_context(args: argparse.Namespace, *, client: BlobClient | None = None,
     from registry_utils.write_run_manifest import capture_git_commit
 
     commit = getattr(args, "commit", None) or capture_git_commit()
-    scope = scope or parse_scopes(getattr(args, "scopes", None))[0]
+    scopes = parse_scopes(getattr(args, "scopes", None))
+    scope = scope or scopes[0]
     controller = controller or RunPodController(git_commit=commit)
 
     kwargs: dict[str, object] = {
@@ -67,7 +68,9 @@ def build_context(args: argparse.Namespace, *, client: BlobClient | None = None,
         "doc_types": list(getattr(args, "doc_types", None) or ACTIVE_DOC_TYPES),
         "tenant_id": getattr(args, "tenant", None),
         "formats": list(getattr(args, "formats", None) or ["bf16"]),
-        "release_id": release_id_for(getattr(args, "release_id", None), scope),
+        "release_id": release_id_for(
+            getattr(args, "release_id", None), scope, scope_count=len(scopes)
+        ),
         "scope": scope,
         "dtype": getattr(args, "dtype", "bf16"),
         "gpu_class": getattr(args, "gpu", None),
@@ -87,25 +90,42 @@ def build_context(args: argparse.Namespace, *, client: BlobClient | None = None,
     return StageContext(**kwargs)  # type: ignore[arg-type]
 
 
-def release_id_for(given: list[str] | str | None, scope: Scope) -> str:
+class ReleaseIdError(ValueError):
+    """Raised when --release-id cannot be resolved for the scopes being run."""
+
+
+def release_id_for(
+    given: list[str] | str | None, scope: Scope, *, scope_count: int = 1
+) -> str:
     """This scope's release id, from ``--release-id``.
 
-    Accepts one bare id when a single scope is named, and ``scope=id`` pairs when
-    several are. Each scope produces its own release — its own calibrators, gate
-    decision and bundle — so sharing one id across scopes would write them all to
-    one prefix and leave the last one standing.
+    One bare id when a single scope is named; ``scope=id`` pairs when several
+    are. Each scope produces its OWN release — its own calibrators, gate decision
+    and bundle, all addressed by the id — so two scopes sharing one id means the
+    second bundle overwrites the first and deletes its index row, taking the
+    first release's calibrators and gate decision with it.
+
+    That is refused here, before any work, rather than discovered afterwards as a
+    release that quietly lost half its record.
     """
     values = [given] if isinstance(given, str) else list(given or [])
-    bare = [v for v in values if "=" not in v]
+    bare = [v.strip() for v in values if "=" not in v and v.strip()]
     pairs = dict(v.split("=", 1) for v in values if "=" in v)
 
     if scope.name in pairs:
         return pairs[scope.name].strip()
+    if bare and scope_count > 1:
+        raise ReleaseIdError(
+            f"--release-id {bare[0]!r} was given for {scope_count} scopes. Each scope produces "
+            "its own release, so they cannot share an id — the second bundle would overwrite "
+            "the first. Name one per scope: --release-id "
+            f"{scope.name}={bare[0]} --release-id <other-scope>=<its-id>"
+        )
     if pairs and not bare:
-        # Pairs were given and this scope is not among them: say so rather than
-        # falling back to a bare id that was never offered.
+        # Pairs were given and this scope is not among them: left empty so
+        # `assert_release_id` refuses it by name, with the next free id.
         return ""
-    return bare[0].strip() if len(bare) == 1 else ""
+    return bare[0] if len(bare) == 1 else ""
 
 
 def _selected_stages(command: str, from_stage: str | None) -> Sequence[pipeline_dag.Stage]:

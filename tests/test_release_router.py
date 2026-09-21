@@ -218,3 +218,43 @@ def test_one_base_model_is_checked_on_the_served_set_only(client):
     promote(client, "release-2026.9.1", scope="unified")
     plan = build_serving_plan(client)
     assert_one_base_model(plan)
+
+
+def test_the_endpoint_hands_the_serving_plan_to_every_extraction(client, monkeypatch):
+    """The plan was built at cold start and passed to nothing, so the refusal it
+    exists for never ran in the real endpoint — only in tests that passed
+    `plan=` themselves."""
+    from serving import vllm_entrypoint as entry
+
+    promote(client, "release-2026.10.1", scope="policy", doc_types=["policy"])
+    plan = build_serving_plan(client)
+    seen: dict = {}
+
+    def fake_extract(request, model, classifier, calibration, **kwargs):
+        seen.update(kwargs)
+        raise entry.ServingError("stop here — the arguments are what this asserts")
+
+    monkeypatch.setattr(entry, "extract", fake_extract)
+    state = entry.EndpointState(
+        model_version="v1", ready=True, calibration=object(), plan=plan,
+    )
+    entry.handler({"input": {
+        "source_id": "policy_0001",
+        "image_paths": ["processed/default/policy/policy_0001/page_1.png"],
+        "ocr_text": "Named Insured",
+    }}, state)
+
+    assert seen.get("plan") is plan, "the serving plan never reached extract"
+    assert "long_doc_types" in seen
+
+
+def test_page_routing_follows_the_served_releases_own_scopes(client):
+    """The page signals are policy vocabulary, so a lossrun-only deployment
+    should not spend a routing pass selecting every page anyway."""
+    from serving.vllm_entrypoint import long_doc_types_for
+
+    promote(client, "release-2026.10.1", scope="lossrun", doc_types=["lossrun"])
+    assert long_doc_types_for(build_serving_plan(client)) == ()
+
+    promote(client, "release-2026.10.2", scope="policy", doc_types=["policy"])
+    assert "policy" in long_doc_types_for(build_serving_plan(client))
