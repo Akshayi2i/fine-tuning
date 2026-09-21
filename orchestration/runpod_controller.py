@@ -38,14 +38,19 @@ PodStatus = Literal["pending", "running", "terminated", "failed"]
 #: GPU class per stage. MinerU does not need an A100 — layout detection and the
 #: OCR models saturate a much cheaper card — and reserving the A100 for Foundation
 #: training is what keeps preprocessing inexpensive (SPEC_13 §7).
+#: Fallbacks keyed by the stage names the DAG actually uses; `pipeline.yaml`
+#: overrides them. Both were keyed by v1 lineage names (train_foundation /
+#: train_adapter) that no stage asks for, so every training pod fell back to the
+#: default card while the A100-80G line described a request nobody made.
 GPU_CLASS_BY_STAGE: dict[str, str] = {
     "preprocessing": "L40S",
     "dataset_build": "L40S",
-    "train_foundation": "A100-80G",
-    "train_adapter": "A100-40G",
-    "evaluation": "A100-40G",
+    "training": "A100-80G",
+    "checkpoint_eval": "A100-40G",
     "merge": "A100-40G",
     "quantize": "L40S",
+    "calibrate": "A100-40G",
+    "evaluation_gate": "A100-40G",
 }
 
 DEFAULT_VOLUME_MOUNT = "/runpod-volume"
@@ -367,7 +372,7 @@ class RunPodController:
             return JobResult(pod_id="", stage=spec.stage, ok=False, error=str(exc))
 
     @contextmanager
-    def session_pod(self, stage: str = "train_foundation", *, gpu_class: str | None = None) -> Iterator[PodHandle]:
+    def session_pod(self, stage: str = "training", *, gpu_class: str | None = None) -> Iterator[PodHandle]:
         """One pod for a whole command.
 
         ``finetune`` runs OCR, dataset build and training back to back, all

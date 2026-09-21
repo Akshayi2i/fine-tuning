@@ -1,0 +1,75 @@
+# Training scopes (arch v2.1 §4.1, §4.2) - WHAT one run covers.
+#
+# A scope is the answer to "which adapter am I training?". Each one is an
+# INDEPENDENT LoRA on the bf16 base, with its own run id, checkpoints, merge,
+# quantization, calibration, gate, release bundle and metrics. Scopes are never
+# stacked: vLLM applies one LoRA per request, which is the same constraint that
+# killed v1's Foundation-plus-per-type topology.
+#
+# Training one, another, or several is `--scope NAME` (repeatable), never a code
+# change:
+#
+#   python -m orchestration.run all --scope unified --out-version v2 ...
+#   python -m orchestration.run all --scope policy  --out-version v2 ...
+#   python -m orchestration.run all --scope unified --scope policy ...
+#
+# WHAT EACH FIELD MEANS
+#
+#   lineage      the run-id prefix. `unified` keeps `extractor` so every artifact
+#                already in Blob (extractor-v1, extractor-v2) stays addressable.
+#   doc_types    the types this run TRAINS. Narrower than ACTIVE_DOC_TYPES is the
+#                point; wider is refused.
+#   tasks        the tasks its corpus rows carry. Decides the run's max_length,
+#                and which gating metrics are structurally not applicable.
+#   serves       the types a release from this scope may serve. Defaults to
+#                doc_types. Serving routes each type to the narrowest promoted
+#                release that covers it.
+#   floors       per-scope overrides on the §0d promotion floors.
+#   not_applicable_metrics
+#                metrics this scope cannot produce. Checked against what the
+#                scope's SHAPE implies - declaring more is refused at load, so
+#                this cannot become a way to waive a gate by configuration.
+#   long_doc_types
+#                types that get page routing at serving time. The page signals
+#                are policy vocabulary (declarations, schedule, endorsement), so
+#                applying them to a Loss Run only wastes a pass.
+#
+# `classify` stays in EVERY scope's task set, including single-type ones: a
+# policy-only release still has to recognise an ACORD and refuse it, so the
+# classifier floor keeps meaning something.
+
+default_scope: unified
+
+scopes:
+
+  # The v2.1 topology: one adapter over every document type and task.
+  unified:
+    lineage: extractor
+    doc_types: [acord, policy, lossrun]
+    tasks: [classify, page_select, extract, lossrun_header, lossrun_rows, lossrun_totals]
+    training_config: unified
+    long_doc_types: [policy]
+
+  # Policy only. Everything else is paused, not deleted: the unified scope above
+  # is unchanged and can be trained again by naming it.
+  #
+  # Loss Run reconciliation is not applicable here because no Loss Run is in the
+  # corpus - there is nothing to reconcile, which is a statement about the eval
+  # set rather than a pass.
+  policy:
+    lineage: policy
+    doc_types: [policy]
+    tasks: [classify, page_select, extract]
+    training_config: unified
+    long_doc_types: [policy]
+    not_applicable_metrics: [lossrun_totals_reconciliation_rate]
+
+  # Declared now so the shape is settled before it is needed. Loss Runs carry no
+  # routed page selection, so page_selection_recall has no producer.
+  lossrun:
+    lineage: lossrun
+    doc_types: [lossrun]
+    tasks: [classify, extract, lossrun_header, lossrun_rows, lossrun_totals]
+    training_config: unified
+    long_doc_types: []
+    not_applicable_metrics: [page_selection_recall]

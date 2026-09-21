@@ -659,7 +659,7 @@ def stage_training(ctx: StageContext) -> StageResult:
         tenant_ids=[paths._tenant(ctx.tenant_id)],
     )
 
-    with ctx.controller.session_pod("train", gpu_class=ctx.gpu_class):
+    with ctx.controller.session_pod("training", gpu_class=ctx.gpu_class):
         _swift, manifest = train(
             corpus_version=ctx.corpus,
             out_version=ctx.out_version,

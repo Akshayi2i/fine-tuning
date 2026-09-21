@@ -37,6 +37,12 @@ SERVING_CONFIG = CONFIG_DIR / "inference" / "vllm_serving.yaml"
 SHARED_VISION_CONFIG = CONFIG_DIR / "shared" / "vision.yaml"
 SHARED_SEQUENCE_CONFIG = CONFIG_DIR / "shared" / "sequence.yaml"
 
+#: WHAT a run covers — which document types and tasks (arch v2.1 §4.1). Read by
+#: training, orchestration, the gate and serving alike, for the same reason the
+#: shared files above are: a scope two stages disagree about is a model gated on
+#: one coverage and served as another.
+SCOPES_CONFIG = CONFIG_DIR / "scopes.yaml"
+
 
 class ConfigError(RuntimeError):
     """Raised on a missing config, a missing required env var, or a broken invariant."""
@@ -84,6 +90,12 @@ def env(name: str, default: str | None = None, *, required: bool = False) -> str
             f"required environment variable {name} is not set — see .env.example for the full list"
         )
     return value
+
+
+@lru_cache(maxsize=1)
+def scopes_config() -> dict[str, Any]:
+    """The raw scope declarations. Parsed and validated by :mod:`common.scopes`."""
+    return load_yaml(SCOPES_CONFIG)
 
 
 @lru_cache(maxsize=1)
@@ -271,10 +283,14 @@ def validate_all(*, require_pinned_revision: bool = False) -> None:
     resolution_cap_px()
     assert_resolution_parity()
     assert_task_budgets_are_coherent()
-    # One config under arch v2.1 §4.1. The per-type config exists but is only
-    # reached through the §4.2 graduation gate, so it is validated when it is
-    # used rather than on every launch.
-    assert_effective_batch(training_config("unified"))
+    # Every scope's training config, not one literal name: a scope pointing at a
+    # missing or incoherent config must fail at launch rather than when that
+    # scope is first trained.
+    from common.scopes import assert_scopes_are_coherent, load_scopes
+
+    assert_scopes_are_coherent()
+    for name in sorted({scope.training_config for scope in load_scopes().values()}):
+        assert_effective_batch(training_config(name))
     if require_pinned_revision:
         assert_model_revision_pinned()
 

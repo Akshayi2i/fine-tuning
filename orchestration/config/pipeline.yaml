@@ -13,16 +13,27 @@ staging_volume:
   staging_prefix: /runpod-volume/staging
 
 gpu_class_by_stage:
-  # MinerU does not need an A100 — a cheaper card saturates on layout detection
-  # and the OCR models, and reserving the A100 for Foundation training is what
-  # keeps preprocessing inexpensive.
+  # Keys are STAGE NAMES as the DAG names them. They used to be v1 lineage names
+  # (train_foundation / train_adapter), which stage_training never asks for - it
+  # asks for "training" - so every training pod silently fell back to L40S and
+  # the A100-80G line described a card nothing requested.
+  #
+  # MinerU does not need an A100 - a cheaper card saturates on layout detection
+  # and the OCR models, and reserving the A100 for training is what keeps
+  # preprocessing inexpensive.
   preprocessing: L40S
   dataset_build: L40S
-  train_foundation: A100-80G
-  train_adapter: A100-40G
-  evaluation: A100-40G
+  training: A100-80G
+  checkpoint_eval: A100-40G
   merge: A100-40G
   quantize: L40S
+  calibrate: A100-40G
+  evaluation_gate: A100-40G
+
+# Per-scope overrides, applied over gpu_class_by_stage. A scope whose largest
+# task cap is 32k (policy extraction) may not fit a card that a 20480-cap scope
+# fits comfortably, and that is a property of the scope, not of the stage.
+gpu_class_by_scope: {}
 
 pod:
   image: runpod/pytorch:2.4.0-py3.11-cuda12.4.1-devel-ubuntu22.04

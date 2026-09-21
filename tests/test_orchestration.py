@@ -742,10 +742,36 @@ def test_run_job_reports_a_failure_instead_of_leaking_a_pod(controller):
 
 
 def test_ocr_does_not_get_the_a100(controller):
-    """MinerU saturates a much cheaper card; reserving the A100 for Foundation
-    training is what keeps preprocessing inexpensive (SPEC_13 §7)."""
+    """MinerU saturates a much cheaper card; reserving the A100 for training is
+    what keeps preprocessing inexpensive (SPEC_13 §7)."""
     assert "A100" not in GPU_CLASS_BY_STAGE["preprocessing"]
-    assert GPU_CLASS_BY_STAGE["train_foundation"].startswith("A100")
+    assert GPU_CLASS_BY_STAGE["training"].startswith("A100")
+
+
+def test_every_gpu_stage_has_a_declared_class(controller):
+    """The keys were v1 lineage names (train_foundation / train_adapter) while
+    the DAG asks for "training", so every training pod silently took the default
+    card and the A100-80G line described a request nobody made."""
+    from orchestration import settings
+
+    for stage in (s for s in STAGES if s.gpu):
+        assert stage.name in GPU_CLASS_BY_STAGE, f"{stage.name} has no GPU class"
+        assert settings.gpu_class_for(stage.name, "UNSET") != "UNSET", stage.name
+
+
+def test_a_scope_can_override_the_card_a_stage_runs_on(controller, monkeypatch):
+    """Whether a run fits a card is decided by its largest task cap, which is a
+    property of the scope: a policy run at 32k against a lossrun run at 20480."""
+    from orchestration import settings
+
+    monkeypatch.setattr(
+        settings, "pipeline_config",
+        lambda: {"gpu_class_by_stage": {"training": "A100-40G"},
+                 "gpu_class_by_scope": {"policy": {"training": "A100-80G"}}},
+    )
+    assert settings.gpu_class_for("training") == "A100-40G"
+    assert settings.gpu_class_for("training", scope="policy") == "A100-80G"
+    assert settings.gpu_class_for("training", scope="lossrun") == "A100-40G"
 
 
 def test_finetune_uses_one_pod_for_the_whole_training_fan_out(client, controller):
@@ -1106,7 +1132,7 @@ def test_the_config_file_is_actually_read():
     """A config file nothing reads documents a policy the system does not follow."""
     from orchestration import settings
 
-    assert settings.gpu_class_for("train_foundation").startswith("A100")
+    assert settings.gpu_class_for("training").startswith("A100")
     assert "A100" not in settings.gpu_class_for("preprocessing")
     assert settings.retry_policy()["retry_on_gate_block"] is False
     assert settings.defaults()["formats"] == ["bf16"]
