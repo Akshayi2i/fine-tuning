@@ -25,7 +25,8 @@ from typing import Any
 from artifact_registry import paths
 from artifact_registry.blob_client import BlobClient, BlobError
 from common.config import base_model_config
-from common.run_ids import is_valid_run_id, version_of
+from common.constants import ACTIVE_DOC_TYPES
+from common.run_ids import is_valid_run_id, lineage_of, version_of
 from registry_utils.models import RunManifest, RunStatus, RunType
 
 
@@ -74,14 +75,23 @@ def get(run_id: str, client: BlobClient) -> RunManifest:
     say which."""
     row = next((r for r in _index(client) if r.get("run_id") == run_id), None)
     candidates = (
-        [paths.run_manifest(run_id, row["run_type"], row.get("doc_type"))]
+        [paths.run_manifest(
+            run_id, row["run_type"], row.get("doc_type"), scope=row.get("scope"),
+        )]
         if row
         # "unified" and "foundation" resolve to the same prefix, so this one
         # candidate covers both lineages when the index has no row yet.
         else [paths.run_manifest(run_id, "unified")]
+        # A scoped run is filed under its own lineage, which the run id names.
+        # A per-type lineage like `acord-adapter` is not a scope name, so it is
+        # skipped rather than probed — its own candidate is built below.
+        + ([paths.run_manifest(run_id, "scoped", scope=lineage_of(run_id))]
+           if is_valid_run_id(run_id) and paths.is_valid_scope(lineage_of(run_id)) else [])
+        # ACTIVE_DOC_TYPES rather than a second copy of the same tuple: a
+        # hand-written list here stops covering a type the moment one is added.
         + [
             paths.run_manifest(run_id, "per_type_adapter", dt)
-            for dt in ("acord", "policy", "lossrun")
+            for dt in ACTIVE_DOC_TYPES
         ]
     )
     for key in candidates:
@@ -95,6 +105,7 @@ def list_runs(
     *,
     run_type: RunType | None = None,
     doc_type: str | None = None,
+    scope: str | None = None,
     status: RunStatus | None = None,
     include_sweeps: bool = False,
 ) -> list[dict[str, Any]]:
@@ -107,6 +118,10 @@ def list_runs(
         rows = [r for r in rows if r.get("run_type") == run_type]
     if doc_type:
         rows = [r for r in rows if r.get("doc_type") == doc_type]
+    if scope:
+        # Rows written before scopes existed carry no `scope` — they are the
+        # unified run, which is what absence means.
+        rows = [r for r in rows if (r.get("scope") or "unified") == scope]
     if status:
         rows = [r for r in rows if r.get("status") == status]
     return rows
@@ -127,11 +142,24 @@ def adapters_depending_on(foundation_version: str, client: BlobClient) -> list[s
     )
 
 
-def latest_promoted(client: BlobClient, run_type: RunType, doc_type: str | None = None) -> str | None:
-    """The run currently serving for this lineage, or ``None``."""
+def latest_promoted(
+    client: BlobClient,
+    run_type: RunType,
+    doc_type: str | None = None,
+    *,
+    scope: str | None = None,
+) -> str | None:
+    """The run currently serving for this lineage, or ``None``.
+
+    ``scope`` matters once more than one adapter is in flight: the baseline a
+    policy run is gated against is the previous POLICY run, not whichever run
+    happens to be newest.
+    """
     rows = [
         r
-        for r in list_runs(client, run_type=run_type, doc_type=doc_type, status="promoted")
+        for r in list_runs(
+            client, run_type=run_type, doc_type=doc_type, scope=scope, status="promoted"
+        )
     ]
     if not rows:
         return None
@@ -238,7 +266,11 @@ def _tag_of(run_id: str) -> str:
 
 
 def _find_run(
-    client: BlobClient, run_type: RunType | tuple[RunType, ...], tag: str
+    client: BlobClient,
+    run_type: RunType | tuple[RunType, ...],
+    tag: str,
+    *,
+    scope: str | None = None,
 ) -> str | None:
     """Find the run_id whose version tag matches, preferring a promoted one.
 
@@ -247,7 +279,7 @@ def _find_run(
     resolve to the same artifacts.
     """
     wanted = (run_type,) if isinstance(run_type, str) else tuple(run_type)
-    rows = [row for one in wanted for row in list_runs(client, run_type=one)]
+    rows = [row for one in wanted for row in list_runs(client, run_type=one, scope=scope)]
     # Exact tag match on the run_id's final segment. `tag in run_id` made "v1"
     # match "foundation-v10" and "v1.1", so resolve_model_version("v1") could
     # pick v10, read ITS artifact status, and return a staging path built from

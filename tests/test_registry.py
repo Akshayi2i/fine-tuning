@@ -517,3 +517,99 @@ def test_the_v1_unscoped_trees_are_not_misread_as_tenant_scoped():
     scattered into the v1 trees."""
     assert paths.tenant_of(paths.eval_report("v2")) is None
     assert paths.tenant_of(paths.calibration_params("v2", "acord")) is None
+
+
+# --------------------------------------------------------------------------
+# Scoped runs (arch v2.1 §4.1) — additive, and the old guarantees kept
+# --------------------------------------------------------------------------
+
+
+def _scoped(run_id: str, scope: str, doc_types: list[str], **over) -> RunManifest:
+    body = dict(
+        run_id=run_id, run_type="scoped", scope=scope, doc_types=doc_types,
+        dependencies=_deps(), training_config=_tc(), data_stats=_DS,
+    )
+    body.update(over)
+    return RunManifest(**body)
+
+
+def test_a_manifest_written_before_scopes_existed_still_loads(client):
+    """Every manifest in Blob predates the scope fields. They are optional
+    precisely so those files keep loading — pydantic forbids extras, so the
+    reverse (old code, new manifest) is the direction that breaks, which is why
+    this lands one deploy early."""
+    W.write_manifest(
+        RunManifest(run_id="extractor-v1", run_type="unified",
+                    dependencies=_deps(), training_config=_tc(), data_stats=_DS),
+        client,
+    )
+    manifest = Q.get("extractor-v1", client)
+
+    assert manifest.scope is None, "absence must stay absence, not be backfilled"
+    assert manifest.doc_types == []
+    assert manifest.index_row()["scope"] == "unified", "absence READS as unified"
+
+
+def test_a_scoped_run_must_say_what_it_covers():
+    """What it covers is the one thing a scoped run exists to state, and the gate
+    reads it to decide which metrics are not applicable."""
+    with pytest.raises(ValueError, match="records no doc_types"):
+        _scoped("policy-v2", "policy", [])
+    with pytest.raises(ValueError, match="must name its scope"):
+        RunManifest(run_id="policy-v2", run_type="scoped", doc_types=["policy"],
+                    dependencies=_deps(), training_config=_tc(), data_stats=_DS)
+
+
+def test_a_unified_run_still_cannot_name_a_doc_type():
+    """The v1 guarantee, kept: a run claiming to span everything must not
+    secretly be one type. A narrower run is run_type='scoped', which says so."""
+    with pytest.raises(ValueError, match="must not name one"):
+        RunManifest(run_id="extractor-v2", run_type="unified", doc_type="policy",
+                    dependencies=_deps(), training_config=_tc(), data_stats=_DS)
+    with pytest.raises(ValueError, match="cannot name scope"):
+        RunManifest(run_id="extractor-v2", run_type="unified", scope="policy",
+                    dependencies=_deps(), training_config=_tc(), data_stats=_DS)
+
+
+def test_a_scoped_run_records_coverage_not_a_graduated_lineage():
+    """doc_type means "the §4.2 adapter this IS"; doc_types means "what this
+    covers". Naming both makes the lineage ambiguous."""
+    with pytest.raises(ValueError, match="doc_types .* not doc_type"):
+        _scoped("policy-v2", "policy", ["policy"], doc_type="policy")
+
+
+def test_two_scopes_at_one_version_resolve_to_their_own_artifacts(client):
+    """The collision this phase exists to prevent: policy-v2 and lossrun-v2 are
+    the same version tag. Resolving by tag alone would hand one scope the
+    other's weights."""
+    W.write_manifest(_scoped("policy-v2", "policy", ["policy"]), client)
+    W.write_manifest(_scoped("lossrun-v2", "lossrun", ["lossrun"]), client)
+
+    assert Q.get("policy-v2", client).scope == "policy"
+    assert Q.get("lossrun-v2", client).scope == "lossrun"
+    assert Q._find_run(client, "scoped", "v2", scope="policy") == "policy-v2"
+    assert Q._find_run(client, "scoped", "v2", scope="lossrun") == "lossrun-v2"
+
+
+def test_scoped_manifests_are_filed_apart_from_the_foundation_prefix(client):
+    """A unified run and a scoped run can share a version, so filing them
+    together would make "which manifest is v2's" ambiguous."""
+    unified = paths.run_manifest("extractor-v2", "unified")
+    scoped = paths.run_manifest("policy-v2", "scoped", scope="policy")
+
+    assert unified != scoped
+    assert "/scope/policy/" in scoped
+    with pytest.raises(paths.PathError, match="needs the scope"):
+        paths.run_manifest("policy-v2", "scoped")
+
+
+def test_listing_by_scope_reads_an_absent_scope_as_unified(client):
+    W.write_manifest(
+        RunManifest(run_id="extractor-v1", run_type="unified",
+                    dependencies=_deps(), training_config=_tc(), data_stats=_DS),
+        client,
+    )
+    W.write_manifest(_scoped("policy-v1", "policy", ["policy"]), client)
+
+    assert [r["run_id"] for r in Q.list_runs(client, scope="unified")] == ["extractor-v1"]
+    assert [r["run_id"] for r in Q.list_runs(client, scope="policy")] == ["policy-v1"]

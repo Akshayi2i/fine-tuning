@@ -66,6 +66,9 @@ SHARED: Final[frozenset[str]] = frozenset(
 
 _VERSION_RE = re.compile(r"^v\d+(\.\d+)*$")
 _TENANT_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,62}$")
+#: Matches ``common.scopes`` — validated by shape here rather than by importing
+#: the scope registry, so a path never depends on config being loadable.
+_SCOPE_RE = re.compile(r"^[a-z][a-z0-9_]*$")
 
 #: Used where an artifact is not per-document-type (a Foundation-only merge).
 UNIFIED = "unified"
@@ -102,6 +105,22 @@ def _version(version: str) -> str:
             "Untagged artifacts cannot be traced back to the run that made them."
         )
     return tag
+
+
+def _scope(scope: str) -> str:
+    """A training scope name, as a path segment."""
+    name = str(scope).strip().lower()
+    if not _SCOPE_RE.match(name):
+        raise PathError(
+            f"invalid scope {scope!r}; expected lowercase alphanumeric with underscores "
+            "(it becomes a path segment and a run-id lineage)"
+        )
+    return name
+
+
+def is_valid_scope(scope: str) -> bool:
+    """Whether a name could be a scope path segment. Non-raising."""
+    return bool(_SCOPE_RE.match(str(scope).strip().lower()))
 
 
 def _doc_type(doc_type: str, *, allow_unified: bool = False) -> str:
@@ -294,7 +313,9 @@ def quantized_model_dir(
     return _join("quantized-models", scope, _version(version), runtime, fmt)
 
 
-def run_manifest(run_id: str, run_type: str, doc_type: str | None = None) -> str:
+def run_manifest(
+    run_id: str, run_type: str, doc_type: str | None = None, *, scope: str | None = None
+) -> str:
     """``registry/foundation/{run_id}/run_manifest.json`` or
     ``registry/adapters/{doc_type}/{run_id}/run_manifest.json``
 
@@ -312,8 +333,16 @@ def run_manifest(run_id: str, run_type: str, doc_type: str | None = None) -> str
         if doc_type is None:
             raise PathError("a per-type adapter manifest needs a doc_type")
         return _join("registry", "adapters", _doc_type(doc_type), run_id, "run_manifest.json")
+    if run_type == "scoped":
+        # Its own prefix, not the Foundation one: two scoped runs and a unified
+        # run can share a version, and filing them together would make
+        # "which manifest is v2's" ambiguous.
+        if not scope:
+            raise PathError("a scoped run manifest needs the scope that produced it")
+        return _join("registry", "scope", _scope(scope), run_id, "run_manifest.json")
     raise PathError(
-        f"unknown run_type {run_type!r}; expected 'unified', 'foundation' or 'per_type_adapter'"
+        f"unknown run_type {run_type!r}; expected 'unified', 'foundation', "
+        "'per_type_adapter' or 'scoped'"
     )
 
 

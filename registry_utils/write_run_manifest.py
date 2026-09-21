@@ -78,7 +78,9 @@ def write_manifest(
     Always writes to **Blob**, never only to staging, regardless of whether the
     weights are staged or published.
     """
-    key = paths.run_manifest(manifest.run_id, manifest.run_type, manifest.doc_type)
+    key = paths.run_manifest(
+        manifest.run_id, manifest.run_type, manifest.doc_type, scope=manifest.scope
+    )
     payload = manifest.model_dump(mode="json")
     try:
         client.write_json(key, payload)

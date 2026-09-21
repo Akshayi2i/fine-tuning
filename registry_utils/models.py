@@ -26,7 +26,14 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 #: types and all tasks. ``foundation`` and ``per_type_adapter`` remain for the
 #: §4.2 graduation path — and so that manifests written under v1 still load,
 #: which is the whole point of a lineage record.
-RunType = Literal["unified", "foundation", "per_type_adapter"]
+#:
+#: ``scoped`` is a run covering a NAMED SUBSET of document types — a policy-only
+#: or lossrun-only adapter (``common.scopes``). It is its own kind because it
+#: sits between the other two: trained on the base like a unified run, but
+#: covering part of the corpus like a per-type one, and addressed by its scope
+#: rather than by a doc_type. A unified-scope run keeps writing ``unified``, so
+#: ``extractor-v1`` and ``extractor-v2`` stay the same kind of thing.
+RunType = Literal["unified", "foundation", "per_type_adapter", "scoped"]
 #: ``training`` exists because the manifest is written BEFORE ms-swift is
 #: launched — the run_id has to be reserved and the config recorded even if
 #: the run dies. Without it the pre-launch manifest defaulted to "trained",
@@ -231,7 +238,22 @@ class RunManifest(_Base):
 
     run_id: str
     run_type: RunType
+
+    #: The §4.2 graduated per-type adapter this run IS — never the set it covers.
+    #: Kept exactly as it was so `index_row`, `list_runs(doc_type=)` and
+    #: `adapters_depending_on` keep meaning what they meant.
     doc_type: str | None = None
+
+    #: Which training scope produced this run (``common.scopes``). ``None`` reads
+    #: as ``unified``, which is correct for every manifest already in Blob —
+    #: that is why it is optional rather than required.
+    scope: str | None = None
+
+    #: The document types this run actually trained on. Empty reads as "the
+    #: active set at the time", again correct for existing manifests. This is
+    #: what a scoped run records instead of ``doc_type``.
+    doc_types: list[str] = Field(default_factory=list)
+
     tenant_id: str | None = None
     status: RunStatus = "trained"
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
@@ -267,9 +289,34 @@ class RunManifest(_Base):
                     "a manual audit instead of a query (arch §12)."
                 )
         if self.run_type in ("unified", "foundation") and self.doc_type:
+            # Kept exactly as it was. The guarantee — a run claiming to span
+            # everything must not secretly be one type — matters MORE once scopes
+            # exist, not less. A narrower run is `scoped`, which says so.
             raise ValueError(
                 f"a {self.run_type} run spans all doc types and must not name one"
             )
+        if self.run_type in ("unified", "foundation") and self.scope not in (None, "unified"):
+            raise ValueError(
+                f"a {self.run_type} run is the unified scope; it cannot name scope "
+                f"{self.scope!r}. A narrower run is run_type='scoped'."
+            )
+        if self.run_type == "scoped":
+            if not self.scope:
+                raise ValueError(
+                    "a scoped run must name its scope — it is the run-id lineage and the "
+                    "artifact path segment, so without it the artifacts are unaddressable"
+                )
+            if not self.doc_types:
+                raise ValueError(
+                    f"scoped run {self.run_id!r} records no doc_types. What it covers is the "
+                    "one thing a scoped run exists to state, and the gate reads it to decide "
+                    "which metrics are not applicable."
+                )
+            if self.doc_type:
+                raise ValueError(
+                    "a scoped run records doc_types (what it covers), not doc_type (the §4.2 "
+                    "graduated adapter it would be). Naming both makes the lineage ambiguous."
+                )
         if self.is_sweep_run and not self.sweep_id:
             raise ValueError("a sweep run must carry its sweep_id to be groupable")
         if self.status == "promoted" and not self.promotion.promoted_at:
@@ -282,6 +329,10 @@ class RunManifest(_Base):
             "run_id": self.run_id,
             "run_type": self.run_type,
             "doc_type": self.doc_type,
+            # Absent on every row written before scopes existed; readers take
+            # `row.get("scope") or "unified"`, which is what those rows mean.
+            "scope": self.scope or "unified",
+            "doc_types": list(self.doc_types),
             "status": self.status,
             "artifact_status": self.artifacts.status,
             "created_at": self.created_at.isoformat(),
@@ -351,6 +402,17 @@ class ReleaseBundle(_Base):
     release_id: str = Field(..., description="e.g. release-2026.11.1")
     status: ReleaseStatus = "candidate"
     tenant_scope: str
+
+    #: The training scope behind this release (``common.scopes``). Defaulted so
+    #: every bundle already in Blob loads unchanged.
+    scope: str = "unified"
+
+    #: The document types this release may SERVE. **Empty means "every active
+    #: type"**, which is exactly what an existing unified bundle means — so no
+    #: backfill is needed. Serving routes each type to the narrowest promoted
+    #: release covering it, which is what lets a policy release take policies
+    #: while an older unified release keeps the rest.
+    doc_types: list[str] = Field(default_factory=list)
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
     base_model: str = Field(..., description="Qwen/Qwen3-VL-8B-Instruct@<hf_revision>")
@@ -413,6 +475,8 @@ class ReleaseBundle(_Base):
             "release_id": self.release_id,
             "status": self.status,
             "tenant_scope": self.tenant_scope,
+            "scope": self.scope,
+            "doc_types": list(self.doc_types),
             "created_at": self.created_at.isoformat(),
             "adapter": self.adapter,
             "base_model": self.base_model,
