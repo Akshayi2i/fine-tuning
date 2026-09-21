@@ -129,14 +129,18 @@ def count_confusable_examples(
 
 def _schema_pins(doc_types: list[str]) -> dict[str, str]:
     """``{"policy": "1.0.0", "acord:25": "1.0.0", ...}`` for the types present."""
-    from common.schemas import all_schema_keys
+    from common.schemas import schema_selectors
 
     pins: dict[str, str] = {}
-    for doc_type, acord_form in all_schema_keys():
+    for doc_type, acord_form, lob in schema_selectors():
         if doc_type not in doc_types:
             continue
-        key = f"{doc_type}:{acord_form}" if acord_form else doc_type
-        pins[key] = schema_version(doc_type, acord_form)
+        qualifier = acord_form or lob
+        key = f"{doc_type}:{qualifier}" if qualifier else doc_type
+        # Passed in the right slot: handing a line of business to `acord_form`
+        # made schema_key ignore it and pin the GENERIC policy version under the
+        # per-LOB key, so a schema change to one line would not force a rebuild.
+        pins[key] = schema_version(doc_type, acord_form, lob)
     return dict(sorted(pins.items()))
 
 

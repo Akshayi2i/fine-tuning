@@ -1365,8 +1365,9 @@ def test_a_unified_run_still_blocks_on_the_same_missing_metric():
 
 
 def test_a_scope_cannot_waive_a_metric_it_can_produce():
-    """not_applicable_for intersects what the scope DECLARES with what its shape
-    implies, so a declaration alone never excuses a gate."""
+    """The scope's SHAPE decides; its declaration is documentation. This scope is
+    built in code, so it never passed the config-load check — and is still not
+    excused from a metric it can produce."""
     from dataclasses import replace
 
     from common.scopes import get_scope
@@ -1421,3 +1422,18 @@ def test_an_eval_set_warns_only_about_subsets_its_scope_could_contain():
     # The modality subsets are required of every corpus (§6), whatever it covers.
     for scope_name in ("unified", "policy", "lossrun"):
         assert {"image_only", "scanned", "noisy_ocr"} <= expected_subsets(get_scope(scope_name))
+
+
+def test_a_scope_that_forgot_to_declare_a_metric_is_still_not_blocked_by_it():
+    """The derivation is what excuses a metric, so a scope that structurally
+    cannot produce one is not blocked for ever because nobody wrote it down."""
+    from dataclasses import replace
+
+    from common.scopes import get_scope
+    from evaluation.gating import not_applicable_for
+
+    forgetful = replace(get_scope("policy"), not_applicable_metrics=frozenset())
+    metrics = _without(_passing(), "lossrun_totals_reconciliation_rate")
+
+    assert "lossrun_totals_reconciliation_rate" in not_applicable_for(forgetful)
+    assert promotion_gate(metrics, None, scope=forgetful).passed

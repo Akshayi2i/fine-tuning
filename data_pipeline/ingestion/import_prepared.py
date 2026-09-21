@@ -49,6 +49,14 @@ log = logging.getLogger(__name__)
 
 _PAGE_RE = re.compile(r"page[_-]?(\d+)", re.I)
 
+#: Image formats an import may supply. Everything is stored as PNG whatever
+#: arrives: `processed/.../page_N.png` is what every reader asks for by name
+#: (`input_builder.page_images_for`, the dataset build, pre-annotation), so a
+#: stored .jpg would leave a document that looks complete and whose pages
+#: nothing can find.
+IMAGE_SUFFIXES = (".png", ".jpg", ".jpeg", ".webp", ".tif", ".tiff")
+STORED_SUFFIX = "png"
+
 
 class ImportError_(RuntimeError):
     """Raised when a prepared bundle cannot be imported safely."""
@@ -96,9 +104,14 @@ def _page_number(path: Path) -> int:
 def read_prepared(directory: Path) -> PreparedDocument:
     """Load one prepared directory, in page order."""
     doc = PreparedDocument(directory=directory)
+    # One list sorted by PAGE NUMBER across every image extension. Sorting each
+    # extension separately and concatenating put page_1.jpg after page_9.png, so
+    # a mixed bundle paired images with another page's markdown — the exact
+    # failure `_page_number` refuses an unnumbered file to prevent.
     doc.images = sorted(
-        (p for p in directory.glob("*.png")), key=_page_number
-    ) + sorted((p for p in directory.glob("*.jpg")), key=_page_number)
+        (path for path in directory.iterdir() if path.suffix.lower() in IMAGE_SUFFIXES),
+        key=_page_number,
+    )
     doc.markdown = sorted((p for p in directory.glob("*.md")), key=_page_number)
 
     golden_path = directory / "golden.json"
@@ -119,6 +132,31 @@ def read_prepared(directory: Path) -> PreparedDocument:
             "a different page's image."
         )
     return doc
+
+
+def _as_png(image: Path) -> bytes:
+    """The page as PNG bytes, converting only when it is not one already.
+
+    Converted here rather than stored as-is because the whole pipeline addresses
+    pages as ``page_N.png``. Lossless, and it happens once at import rather than
+    on every read.
+    """
+    if image.suffix.lower() == ".png":
+        return image.read_bytes()
+    try:
+        from PIL import Image
+    except ImportError as exc:  # pragma: no cover - Pillow is a declared dependency
+        raise ImportError_(
+            f"{image.name} is not a PNG and Pillow is not installed to convert it. Pages are "
+            "stored as page_N.png because that is what every reader asks for by name."
+        ) from exc
+
+    import io
+
+    with Image.open(image) as opened:
+        buffer = io.BytesIO()
+        opened.convert("RGB").save(buffer, format="PNG")
+    return buffer.getvalue()
 
 
 def _checksum(doc: PreparedDocument) -> str:
@@ -178,8 +216,8 @@ def import_document(
 
     for page, image in enumerate(doc.images, start=1):
         client.write_bytes(
-            paths.processed_page(doc_type, source_id, page, image.suffix.lstrip("."), tenant_id),
-            image.read_bytes(),
+            paths.processed_page(doc_type, source_id, page, STORED_SUFFIX, tenant_id),
+            _as_png(image),
         )
     for page, markdown in enumerate(doc.markdown, start=1):
         client.write_text(

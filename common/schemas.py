@@ -268,6 +268,27 @@ def assert_all_fields_described(doc_type: str, acord_form: str | None = None) ->
         )
 
 
+def schema_selectors() -> list[tuple[str, str | None, str | None]]:
+    """Every registered schema as ``(doc_type, acord_form, lob)``.
+
+    The second level means different things per type — an ACORD form number, a
+    policy's line of business — so a caller that reads it positionally pins the
+    wrong thing. ``all_schema_keys`` keeps its two-tuple shape for the callers
+    that only ever see ACORD.
+    """
+    out: list[tuple[str, str | None, str | None]] = []
+    for key in _SCHEMA_FILES:
+        if ":" not in key:
+            out.append((key, None, None))
+            continue
+        doc_type, qualifier = key.split(":", 1)
+        if doc_type == "acord":
+            out.append((doc_type, qualifier, None))
+        else:
+            out.append((doc_type, None, qualifier))
+    return out
+
+
 def all_schema_keys() -> list[tuple[str, str | None]]:
     """Every (doc_type, acord_form) pair with a schema — for tests and sweeps."""
     out: list[tuple[str, str | None]] = []

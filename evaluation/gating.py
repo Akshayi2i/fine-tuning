@@ -110,12 +110,13 @@ CONDITIONAL_METRICS: frozenset[str] = frozenset({
 
 
 def not_applicable_for(scope: Any) -> frozenset[str]:
-    """What this scope structurally cannot produce, plus what it declares.
+    """What this scope structurally cannot produce.
 
-    The declared set is narrowed to the structural one when the scope is loaded
-    (``common.scopes``), so this cannot become a way to waive a gate by
-    configuration: a metric the scope CAN produce and did not is unmeasured,
-    which blocks.
+    Derived from the scope's own shape, never from what it claims: a metric the
+    scope CAN produce and did not is unmeasured, which blocks. ``scopes.yaml``
+    still declares them, and ``_build`` refuses a declaration wider than the
+    shape — but the declaration is documentation, not authority, so a Scope
+    constructed in code cannot excuse itself either.
 
     ``CONDITIONAL_METRICS`` stays on top of it. That set is about the eval SET
     (an eval run with no Loss Run in it), which is a different question from what
@@ -126,7 +127,11 @@ def not_applicable_for(scope: Any) -> frozenset[str]:
 
     if scope is None:
         return CONDITIONAL_METRICS
-    return CONDITIONAL_METRICS | (structural_not_applicable(scope) & scope.not_applicable_metrics)
+    # The SHAPE decides; the declaration is documentation. A scope that
+    # genuinely cannot produce a metric is excused whether or not it wrote the
+    # metric down, and a scope that declares one it CAN produce is not — so this
+    # holds even for a Scope built in code, which never passed `_build`.
+    return CONDITIONAL_METRICS | structural_not_applicable(scope)
 
 
 def floors_for(scope: Any) -> dict[str, float]:

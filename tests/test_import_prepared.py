@@ -199,3 +199,48 @@ def test_one_bad_bundle_does_not_lose_the_batch(tmp_path, client):
     assert len(report.imported) == 2
     assert [name for name, _ in report.skipped] == ["bad"]
     assert "bad" in report.describe()
+
+
+def test_pages_are_stored_as_png_whatever_arrives(tmp_path, client):
+    """`processed/.../page_N.png` is what every reader asks for by name, so a
+    stored .jpg leaves a document that looks complete and whose pages nothing can
+    find."""
+    from PIL import Image
+
+    directory = tmp_path / "jpg_bundle"
+    directory.mkdir()
+    for page in (1, 2):
+        Image.new("RGB", (8, 8), (page * 10, 0, 0)).save(directory / f"page_{page}.jpg")
+        (directory / f"page_{page}.md").write_text(f"# page {page}", encoding="utf-8")
+    (directory / "golden.json").write_text(json.dumps(GOLDEN), encoding="utf-8")
+
+    source_id = import_document(
+        read_prepared(directory), "policy", client, mineru_version="2.0.0"
+    )
+
+    for page in (1, 2):
+        stored = paths.processed_page("policy", source_id, page, "png")
+        assert client.exists(stored)
+        assert client.read_bytes(stored).startswith(b"\x89PNG")
+    assert not client.exists(paths.processed_page("policy", source_id, 1, "jpg"))
+
+
+def test_a_mixed_extension_bundle_keeps_its_page_order(tmp_path, client):
+    """Sorting each extension separately and concatenating put page_1.jpg after
+    page_9.png, so images were paired with another page's markdown."""
+    from PIL import Image
+
+    directory = tmp_path / "mixed"
+    directory.mkdir()
+    for page in range(1, 11):
+        if page == 1:
+            Image.new("RGB", (8, 8)).save(directory / "page_1.jpg")
+        else:
+            (directory / f"page_{page}.png").write_bytes(b"\x89PNG" + str(page).encode())
+        (directory / f"page_{page}.md").write_text(f"# page {page}", encoding="utf-8")
+    (directory / "golden.json").write_text(json.dumps(GOLDEN), encoding="utf-8")
+
+    doc = read_prepared(directory)
+
+    assert [p.stem for p in doc.images] == [f"page_{i}" for i in range(1, 11)]
+    assert [p.stem for p in doc.markdown] == [f"page_{i}" for i in range(1, 11)]

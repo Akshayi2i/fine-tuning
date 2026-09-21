@@ -163,12 +163,12 @@ def structural_not_applicable(scope: Scope) -> frozenset[str]:
 
 def _has_list_field(doc_types: tuple[str, ...]) -> bool:
     """Whether any of these types' schemas declares a table of rows."""
-    from common.schemas import all_schema_keys, resolved_schema
+    from common.schemas import resolved_schema, schema_selectors
 
-    for doc_type, acord_form in all_schema_keys():
+    for doc_type, acord_form, lob in schema_selectors():
         if doc_type not in doc_types:
             continue
-        properties = (resolved_schema(doc_type, acord_form) or {}).get("properties", {})
+        properties = (resolved_schema(doc_type, acord_form, lob) or {}).get("properties", {})
         for definition in properties.values():
             if not isinstance(definition, dict):
                 continue
