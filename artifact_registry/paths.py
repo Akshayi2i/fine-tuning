@@ -238,6 +238,41 @@ def corpus_eval_split(version: str, split: str, tenant_id: str | None = None) ->
     return _join(corpus_dir(version, tenant_id), split, f"{split}.jsonl")
 
 
+def corpus_scope_epoch_file(
+    version: str, epoch: int, scope: str | None = None, tenant_id: str | None = None
+) -> str:
+    """One epoch file, filtered to a scope's document types.
+
+    The unified scope returns the UNSCOPED key — the corpus as built — so no copy
+    and no migration. A narrower scope reads its own filtered view, written by
+    ``training.corpus_view``.
+
+    The corpus itself is built ONCE, for every type, and filtered per scope. A
+    per-scope BUILD would draw its own split, groups and modality regimes, so a
+    document could be train in one scope and test in another: the two releases
+    would be incomparable, and a document the policy model trained on could sit
+    in the unified model's test set.
+    """
+    if not scope or scope == UNIFIED:
+        return corpus_epoch_file(version, epoch, tenant_id)
+    if not 1 <= int(epoch) <= 4:
+        raise PathError(f"epoch {epoch} is outside 1-4")
+    return _join(
+        corpus_dir(version, tenant_id), "train", "scope", _scope(scope), f"epoch_{int(epoch)}.jsonl"
+    )
+
+
+def corpus_scope_eval_split(
+    version: str, split: str, scope: str | None = None, tenant_id: str | None = None
+) -> str:
+    """``val``/``test`` filtered to a scope's document types."""
+    if not scope or scope == UNIFIED:
+        return corpus_eval_split(version, split, tenant_id)
+    if split not in ("val", "test"):
+        raise PathError(f"unknown eval split {split!r}; expected 'val' or 'test'")
+    return _join(corpus_dir(version, tenant_id), split, "scope", _scope(scope), f"{split}.jsonl")
+
+
 def corpus_manifest(version: str, tenant_id: str | None = None) -> str:
     """Pins everything the corpus depends on: MinerU version and device, schema
     and prompt-template versions, LoB and alias coverage, de-identification status."""
@@ -568,6 +603,11 @@ def _under_staging(*parts: str) -> str:
 def staging_adapter_dir(kind: AdapterKind, version: str, doc_type: str | None = None) -> str:
     """Mirrors :func:`adapter_dir` so ``package`` copies rather than translates."""
     return _under_staging(adapter_dir(kind, version, doc_type))
+
+
+def scoped_staging_adapter_dir(scope: str | None, version: str) -> str:
+    """The staging mirror of :func:`scoped_adapter_dir`."""
+    return _under_staging(scoped_adapter_dir(scope, version))
 
 
 def staging_merged_model_dir(

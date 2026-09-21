@@ -64,6 +64,7 @@ def plan_merge(
     version: str,
     dtype: Dtype = "bf16",
     selected_checkpoint: str | None = None,
+    scope: str | None = None,
 ) -> MergePlan:
     """Assemble a merge plan without touching any weights.
 
@@ -71,11 +72,16 @@ def plan_merge(
     a bf16 base, and FP8 is quantized from this artifact (§13a). Merging to fp16
     would introduce a precision change between training and every serving format
     for no reason.
+
+    ``scope`` selects which run's adapter is folded in and where the merged model
+    lands. It defaults to the unified scope, whose paths are unchanged — and it
+    matters because two scoped runs can share a version, so an unscoped merge
+    would fold whichever adapter happened to be staged at that tag.
     """
     return MergePlan(
         base_model=base_model,
-        adapter=selected_checkpoint or paths.staging_adapter_dir("foundation", version),
-        output_dir=paths.staging_merged_model_dir(version, None),
+        adapter=selected_checkpoint or paths.scoped_staging_adapter_dir(scope, version),
+        output_dir=paths.staging_merged_model_dir(version, scope=scope),
         dtype=dtype,
         selected_checkpoint=selected_checkpoint,
     )

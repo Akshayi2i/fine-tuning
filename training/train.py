@@ -42,7 +42,8 @@ from common.config import (
     training_config,
     validate_all,
 )
-from common.run_ids import UNIFIED_LINEAGE, build_run_id, is_valid_run_id
+from common.run_ids import is_valid_run_id
+from common.scopes import Scope, default_scope, get_scope
 from common.tasks import Task
 from registry_utils.models import (
     Artifacts,
@@ -54,6 +55,7 @@ from registry_utils.models import (
 from registry_utils.write_run_manifest import capture_git_commit, is_dirty_worktree, write_manifest
 from training.base_precision import manifest_descriptor, swift_quantization_args, technique
 from training.callbacks.early_stopping import swift_early_stopping_args
+from training.corpus_view import materialize
 
 log = logging.getLogger(__name__)
 
@@ -101,7 +103,7 @@ class SwiftConfig:
         return argv
 
 
-def corpus_max_length() -> int:
+def corpus_max_length(scope: Scope | None = None) -> int:
     """The single ``max_length`` for a mixed-task corpus.
 
     ms-swift takes one value and the corpus interleaves every task, so this is
@@ -111,12 +113,21 @@ def corpus_max_length() -> int:
 
     It is the cap that decides whether a run fits on one 80GB card, which is why
     ``use_logits_to_keep`` and padding-free batching are not optional here.
+
+    **Scoped to what the run actually carries.** Taking the maximum over every
+    task and every document type gives 32768 — the policy extraction override —
+    to a lossrun-only run whose largest cap is 20480, and that cap is what
+    decides the card. A scope narrows both dimensions: its own tasks, and only
+    the per-doc-type overrides for types it trains.
     """
     from common.config import shared_sequence_config
 
     declared = shared_sequence_config().get("tasks", {})
+    tasks = tuple(scope.tasks) if scope else tuple(Task)
+    doc_types = set(scope.doc_types) if scope else None
+
     caps: list[int] = []
-    for task in Task:
+    for task in tasks:
         name = str(task)
         caps.append(int(sequence_for_task(name)["max_seq_len"]))
         # Per-doc-type overrides are separate caps, not variations on one.
@@ -124,6 +135,8 @@ def corpus_max_length() -> int:
         # override is 32768, so every routed policy would have been TRUNCATED —
         # which is the exact failure the §7a caps exist to prevent.
         for doc_type in (declared.get(name, {}).get("by_doc_type") or {}):
+            if doc_types is not None and doc_type not in doc_types:
+                continue
             caps.append(int(sequence_for_task(name, doc_type)["max_seq_len"]))
     return max(caps)
 
@@ -136,7 +149,8 @@ def build_training_config(
     train_vit: bool = False,
     deepspeed: str | None = None,
     resume_from: str | None = None,
-    config_name: str = "unified",
+    config_name: str | None = None,
+    scope: Scope | None = None,
 ) -> tuple[SwiftConfig, TrainingConfig]:
     """Assemble the ms-swift arguments and the manifest's record of them.
 
@@ -148,7 +162,8 @@ def build_training_config(
     below for why ms-swift is told one epoch.
     """
     base = base_model_config()
-    cfg = training_config(config_name)
+    scope = scope or default_scope()
+    cfg = training_config(config_name or scope.training_config)
     lora, opt, batch = cfg["lora"], cfg["optimization"], cfg["batch"]
     evaluation, memory = cfg["evaluation"], cfg.get("memory", {})
 
@@ -167,7 +182,7 @@ def build_training_config(
         # hot-swapped — tower/connector LoRA in vLLM is experimental.
         target_modules.append("merger")
 
-    max_length = corpus_max_length()
+    max_length = corpus_max_length(scope)
 
     args: dict[str, Any] = {
         "model_type": "qwen3-vl-8b-instruct",
@@ -292,6 +307,7 @@ def build_manifest(
     data_stats: DataStats,
     staging_path: str,
     continued_from: str | None = None,
+    scope: Scope | None = None,
 ) -> RunManifest:
     """Build the run manifest. Written to Blob even while weights are staged."""
     base = base_model_config()["model"]
@@ -301,9 +317,15 @@ def build_manifest(
             "describe what ran — this run is not exactly reproducible."
         )
 
+    scope = scope or default_scope()
     return RunManifest(
         run_id=run_id,
-        run_type="unified",
+        # A unified-scope run keeps writing "unified", so extractor-v1 and
+        # extractor-v2 remain the same kind of thing in the registry. Anything
+        # narrower is "scoped" and says what it covers.
+        run_type="unified" if scope.is_unified else "scoped",
+        scope=None if scope.is_unified else scope.name,
+        doc_types=[] if scope.is_unified else list(scope.doc_types),
         continued_from=continued_from,
         dependencies=Dependencies(
             base_model=f"{base['model_id']}@{base['revision']}",
@@ -333,8 +355,9 @@ def train(
     continue_from: str | None = None,
     dry_run: bool = False,
     tenant_id: str | None = None,
+    scope: Scope | None = None,
 ) -> tuple[SwiftConfig, RunManifest]:
-    """Configure and launch the unified extractor run.
+    """Configure and launch one training run.
 
     Args:
         continue_from: **a filesystem checkpoint path**, not a registry run-id.
@@ -346,6 +369,9 @@ def train(
         dry_run: assemble and record everything without launching.
         tenant_id: whose corpus to read. Omitting it reads the default tenant's
             files, which for any other tenant do not exist — or worse, do.
+        scope: what this run covers (``common.scopes``). Defaults to the unified
+            scope, which trains every document type and writes exactly the run
+            id, staging path and manifest shape it always did.
     """
     validate_all(require_pinned_revision=not dry_run)
 
@@ -353,11 +379,14 @@ def train(
     # treat the validation split as training data and then carve its own eval
     # split out of the union, so the selected checkpoint was chosen on documents
     # the model had memorised — and the promotion gate read that number.
-    corpus_paths = [
-        paths.corpus_epoch_file(corpus_version, epoch, tenant_id) for epoch in (1, 2, 3, 4)
-    ]
-    val_paths = [paths.corpus_eval_split(corpus_version, "val", tenant_id)]
-    staging = paths.staging_adapter_dir("foundation", out_version)
+    scope = scope or default_scope()
+    # The corpus is built once for every type; a narrower scope reads a filtered
+    # VIEW of it rather than a corpus of its own, so the split and the group
+    # assignment are shared and the two runs stay comparable.
+    view = materialize(scope, corpus_version, client, tenant_id=tenant_id)
+    corpus_paths = list(view.epoch_files)
+    val_paths = [view.val_path]
+    staging = paths.scoped_staging_adapter_dir(scope.name, out_version)
 
     if continue_from:
         assert_checkpoint_path(continue_from)
@@ -369,18 +398,20 @@ def train(
         train_vit=train_vit,
         deepspeed=deepspeed,
         resume_from=continue_from,
+        scope=scope,
     )
     # Only the epochs this run uses. Four files are always materialized because
     # the §11a sweep tests up to four passes (§6.1), and a sweep that regenerates
     # its own data is not comparing what it thinks it is.
     manifest = build_manifest(
-        run_id=build_run_id(UNIFIED_LINEAGE, out_version),
+        run_id=scope.run_id(out_version),
         corpus_version=corpus_version,
         corpus_manifest=corpus_manifest,
         training_cfg=recorded,
         data_stats=data_stats,
         staging_path=staging,
         continued_from=continue_from,
+        scope=scope,
     )
     write_manifest(manifest, client)
 
@@ -482,6 +513,8 @@ def main(argv: Iterable[str] | None = None) -> int:  # pragma: no cover - thin C
     parser.add_argument("--continue-from", default=None, help="a checkpoint DIRECTORY, not a run-id")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--tenant", default=None, help="whose corpus to read; defaults from env")
+    parser.add_argument("--scope", default=None,
+                        help="what this run covers (configs/scopes.yaml); defaults to unified")
     args = parser.parse_args(list(argv) if argv is not None else None)
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
@@ -503,6 +536,7 @@ def main(argv: Iterable[str] | None = None) -> int:  # pragma: no cover - thin C
         continue_from=args.continue_from,
         dry_run=args.dry_run,
         tenant_id=args.tenant,
+        scope=get_scope(args.scope) if args.scope else None,
     )
     return 0
 
