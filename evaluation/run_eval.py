@@ -426,12 +426,29 @@ def score_subset(
     return report
 
 
+def expected_subsets(scope: Any = None) -> set[str]:
+    """Which eval subsets this run should contain documents for.
+
+    ``long_policy`` only exists where policies do, so warning about its absence
+    on a Loss Run scope reports a gap that cannot be filled. The modality subsets
+    are NOT scope-dependent: §6 requires every corpus to cover all three regimes,
+    so their absence is a real defect whatever the scope covers.
+    """
+    if scope is None:
+        return set(EVAL_SUBSETS)
+    covered = set(EVAL_SUBSETS)
+    if "policy" not in getattr(scope, "doc_types", ()):
+        covered.discard("long_policy")
+    return covered
+
+
 def build_report(
     model_version: str,
     documents: Sequence[tuple[dict[str, Any], dict[str, Any], dict[str, Any]]],
     *,
     corpus_version: str = "",
     classifier_scored: bool = False,
+    scope: Any = None,
 ) -> EvalReport:
     """Score every doc type × subset from one flat list of results.
 
@@ -455,7 +472,7 @@ def build_report(
     for (doc_type, subset), rows in sorted(buckets.items()):
         report.subsets.append(score_subset(doc_type, subset, rows))
 
-    missing = set(EVAL_SUBSETS) - {s.subset for s in report.subsets}
+    missing = expected_subsets(scope) - {s.subset for s in report.subsets}
     if missing:
         # Reported rather than raised: an eval set with no scanned documents is
         # a coverage gap in the eval set, and pretending it scored 100% would be

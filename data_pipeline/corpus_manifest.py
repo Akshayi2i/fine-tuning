@@ -127,6 +127,19 @@ def count_confusable_examples(
     return count, warnings
 
 
+def _schema_pins(doc_types: list[str]) -> dict[str, str]:
+    """``{"policy": "1.0.0", "acord:25": "1.0.0", ...}`` for the types present."""
+    from common.schemas import all_schema_keys
+
+    pins: dict[str, str] = {}
+    for doc_type, acord_form in all_schema_keys():
+        if doc_type not in doc_types:
+            continue
+        key = f"{doc_type}:{acord_form}" if acord_form else doc_type
+        pins[key] = schema_version(doc_type, acord_form)
+    return dict(sorted(pins.items()))
+
+
 def build_manifest(
     *,
     corpus_version: str,
@@ -185,9 +198,12 @@ def build_manifest(
         # ---- reproducibility pins: a change to any forces a rebuild + retrain ----
         "mineru_version": ocr_environment.get("mineru_version"),
         "ocr_device": ocr_environment.get("ocr_device"),
-        "schema_versions": {
-            dt: schema_version(dt, "25" if dt == "acord" else None) for dt in sorted(doc_types)
-        },
+        # Every schema the corpus could have used, keyed as `acord:125` where a
+        # type has per-form schemas. Pinning only ACORD 25 meant a corpus holding
+        # 125s and 140s recorded no version for them — and this pin is what
+        # forces a rebuild when a schema changes, so those forms could change
+        # underneath a corpus that claimed to be reproducible.
+        "schema_versions": _schema_pins(doc_types),
         "prompt_template_version": PROMPT_TEMPLATE_VERSION,
         "builder_git_commit": git_commit,
         "seed": seed,

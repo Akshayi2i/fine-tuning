@@ -962,6 +962,10 @@ def stage_evaluation_gate(ctx: StageContext) -> StageResult:
         # only they know which promoted per-type report is the baseline.
         cross_type_evidence=ctx.cross_type_evidence or None,
         override=ctx.gate_override,
+        # Decides which metrics are NOT APPLICABLE and supplies this scope's
+        # floors. Without it a policy-only run blocks for ever on Loss Run
+        # reconciliation, which nothing it covers could have produced.
+        scope=ctx.scope,
     )
 
     # `gate_decision`, not `eval_report`. Writing here used to clobber the
@@ -983,6 +987,8 @@ def stage_evaluation_gate(ctx: StageContext) -> StageResult:
         "waived_gates": sorted(result.waived),
         "override": result.override.as_dict() if result.override else None,
     }
+    decision["scope"] = ctx.scope.name
+    decision["doc_types"] = list(ctx.scope.doc_types)
     ctx.client.write_json(report_key, decision)
     # Also under the release, where the bundle points. The candidate metrics are
     # the merged bf16 model's, so this is bf16's gate run and no other format's:

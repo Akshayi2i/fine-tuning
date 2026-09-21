@@ -108,6 +108,40 @@ CONDITIONAL_METRICS: frozenset[str] = frozenset({
     "page_selection_recall",
 })
 
+
+def not_applicable_for(scope: Any) -> frozenset[str]:
+    """What this scope structurally cannot produce, plus what it declares.
+
+    The declared set is narrowed to the structural one when the scope is loaded
+    (``common.scopes``), so this cannot become a way to waive a gate by
+    configuration: a metric the scope CAN produce and did not is unmeasured,
+    which blocks.
+
+    ``CONDITIONAL_METRICS`` stays on top of it. That set is about the eval SET
+    (an eval run with no Loss Run in it), which is a different question from what
+    the scope covers — a unified run whose eval set happens to hold no Loss Run
+    is still not evidence about reconciliation.
+    """
+    from common.scopes import structural_not_applicable
+
+    if scope is None:
+        return CONDITIONAL_METRICS
+    return CONDITIONAL_METRICS | (structural_not_applicable(scope) & scope.not_applicable_metrics)
+
+
+def floors_for(scope: Any) -> dict[str, float]:
+    """The §0d floors, with this scope's overrides applied.
+
+    Floors are per scope because the same number means different things to
+    different coverage: `list_field_recall` on a Loss Run corpus is claim rows,
+    on a policy corpus it is coverage schedules, and the volumes differ by an
+    order of magnitude.
+    """
+    floors = dict(PILOT_FLOORS)
+    if scope is not None:
+        floors.update(getattr(scope, "floors", {}) or {})
+    return floors
+
 #: NOT conditional, deliberately: image_only_accuracy, scanned_accuracy and
 #: ocr_arbitration_accuracy. They look like subset metrics, but §6 REQUIRES the
 #: corpus and the golden eval set to cover all three modality regimes — so an
@@ -173,6 +207,11 @@ class MetricVerdict:
     interval: ConfidenceInterval | None = None
     delta: float = DEFAULT_DELTA
 
+    #: Nothing in this run could have produced this metric — no Loss Run in the
+    #: scope, no page-selection task. Distinct from `unmeasured`, which means
+    #: something could have produced it and did not: that blocks, this does not.
+    applicable: bool = True
+
     @property
     def unmeasured(self) -> bool:
         return self.candidate is None
@@ -221,7 +260,10 @@ class MetricVerdict:
 
     def describe(self) -> str:
         if self.candidate is None:
-            return f"{self.name}: NOT MEASURED"
+            # Two different statements, never collapsed into one: "nothing here
+            # could produce it" is a fact about coverage, "it was not measured"
+            # is a missing result.
+            return f"{self.name}: {'NOT APPLICABLE' if not self.applicable else 'NOT MEASURED'}"
         parts = [f"{self.name}: {self.candidate:.4f}"]
         if self.floor is not None:
             parts.append(f"floor {self.floor:.4f} {'✓' if self.meets_floor else '✗'}")
@@ -242,6 +284,7 @@ class MetricVerdict:
             "non_inferior": self.non_inferior,
             "improved": self.improved,
             "basis": self.basis,
+            "applicable": self.applicable,
             "interval": self.interval.as_dict() if self.interval else None,
         }
 
@@ -292,6 +335,11 @@ class GateResult:
     is_first_version: bool = False
     override: GateOverrideRecord | None = None
 
+    #: Which training scope this verdict is about. A gate decision read later has
+    #: to say what it judged: "v2 passed" means nothing when two scopes share a
+    #: version.
+    scope: str | None = None
+
     #: Gates that failed but were waived. Kept separate from `failed_gates` so
     #: "passed with a waiver" is never indistinguishable from "passed".
     waived: list[str] = field(default_factory=list)
@@ -314,7 +362,13 @@ class GateResult:
         if self.is_first_version:
             lines.append("  first release — gated on absolute floors alone (arch v2.1 §15.5)")
         lines.extend(f"  {v.describe()}" for v in self.verdicts if not v.unmeasured)
-        lines.extend(f"  UNMEASURED: {v.name}" for v in self.verdicts if v.unmeasured)
+        lines.extend(
+            f"  UNMEASURED: {v.name}" for v in self.verdicts if v.unmeasured and v.applicable
+        )
+        lines.extend(
+            f"  not applicable: {v.name}"
+            for v in self.verdicts if v.unmeasured and not v.applicable
+        )
         lines.extend(f"  BLOCKED: {reason}" for reason in self.blocking_reasons)
         if self.override:
             lines.append(
@@ -326,7 +380,11 @@ class GateResult:
     def as_dict(self) -> dict[str, Any]:
         return {
             "passed": self.passed,
+            "scope": self.scope,
             "is_first_version": self.is_first_version,
+            "not_applicable": sorted(
+                v.name for v in self.verdicts if v.unmeasured and not v.applicable
+            ),
             "failed_gates": sorted(self.failed_gates),
             "waived_gates": sorted(self.waived),
             "blocking_reasons": list(self.blocking_reasons),
@@ -347,6 +405,7 @@ def promotion_gate(
     require_all_measured: bool = True,
     fixes_defect: str | None = None,
     override: GateOverrideRecord | None = None,
+    scope: Any = None,
 ) -> GateResult:
     """Decide whether a candidate release may be promoted.
 
@@ -357,7 +416,12 @@ def promotion_gate(
             index. Supplied, each metric is judged by a paired bootstrap rather
             than by comparing two point estimates — which is the whole reason
             this gate can be passed at all.
-        floors: absolute floors, defaulting to the §0d pilot-exit table.
+        floors: absolute floors, defaulting to the §0d pilot-exit table. A scope's
+            own overrides are applied when ``scope`` is given and ``floors`` is not.
+        scope: what the run covered (``common.scopes``). Decides which metrics are
+            NOT APPLICABLE — a policy-only run has no Loss Run to reconcile — and
+            supplies per-scope floors. Omitted, the gate behaves exactly as it did
+            before scopes existed.
         fixes_defect: satisfies the improvement requirement when a release exists
             to fix something rather than to score higher.
         override: a named, written waiver. Validated — an override that cannot be
@@ -365,8 +429,10 @@ def promotion_gate(
     """
     result = GateResult(passed=True, is_first_version=current_metrics is None)
     baseline = current_metrics or {}
-    floor_table = PILOT_FLOORS if floors is None else floors
+    floor_table = floors_for(scope) if floors is None else floors
+    not_applicable = not_applicable_for(scope)
     samples = per_document or {}
+    result.scope = getattr(scope, "name", None)
 
     if override is not None:
         override.validate()
@@ -380,6 +446,7 @@ def promotion_gate(
             current=baseline.get(name),
             floor=floor_table.get(name),
             delta=NON_INFERIORITY_DELTA.get(name, DEFAULT_DELTA),
+            applicable=name not in not_applicable,
         )
         if name in samples and verdict.current is not None:
             current_scores, candidate_scores = samples[name]
@@ -393,14 +460,14 @@ def promotion_gate(
         result.verdicts.append(verdict)
 
         if verdict.unmeasured:
-            if require_all_measured and name not in CONDITIONAL_METRICS:
+            if require_all_measured and verdict.applicable:
                 _block(result, name,
                        f"{name} was not measured. A metric that was not measured has not "
                        "passed — treating its absence as success is how a regression ships.")
-            elif name in CONDITIONAL_METRICS:
+            else:
                 log.info(
-                    "%s is not applicable to this eval set — no document produced it. That is "
-                    "not a pass, it is a statement about which documents were scored.", name,
+                    "%s is not applicable to this run — nothing it covers produces it. That is "
+                    "not a pass, it is a statement about what was scored.", name,
                 )
             continue
         if not verdict.meets_floor:

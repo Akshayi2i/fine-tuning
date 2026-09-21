@@ -1307,3 +1307,117 @@ def test_the_modality_metrics_are_not_conditional():
 
     for metric in ("image_only_accuracy", "scanned_accuracy", "ocr_arbitration_accuracy"):
         assert metric not in CONDITIONAL_METRICS
+
+
+# --------------------------------------------------------------------------
+# Scope-aware gating (arch v2.1 §4.1, §15.2)
+# --------------------------------------------------------------------------
+
+
+def _without(metrics: dict, *names: str) -> dict:
+    return {k: v for k, v in metrics.items() if k not in names}
+
+
+def test_a_policy_only_run_is_not_blocked_on_loss_run_reconciliation():
+    """THE test for this phase. Nothing a policy scope covers prints Loss Run
+    totals, so blocking on their absence would make the gate a statement about
+    corpus composition — and no policy release could ever pass."""
+    from common.scopes import get_scope
+
+    metrics = _without(_passing(), "lossrun_totals_reconciliation_rate")
+    result = promotion_gate(metrics, None, scope=get_scope("policy"))
+
+    assert result.passed, result.report()
+    verdict = next(v for v in result.verdicts if v.name == "lossrun_totals_reconciliation_rate")
+    assert not verdict.applicable
+    assert "NOT APPLICABLE" in verdict.describe()
+
+
+def test_not_applicable_is_reported_apart_from_unmeasured():
+    """They are different statements: one is about coverage, the other is a
+    missing result. Collapsing them hides which metrics a release actually
+    failed to produce."""
+    from common.scopes import get_scope
+
+    metrics = _without(_passing(), "lossrun_totals_reconciliation_rate", "lob_detection_accuracy")
+    result = promotion_gate(metrics, None, scope=get_scope("policy"))
+
+    assert not result.passed, "a metric the scope CAN produce and did not must block"
+    assert "lob_detection_accuracy" in result.failed_gates
+    assert "lossrun_totals_reconciliation_rate" not in result.failed_gates
+
+    report = result.report()
+    assert "UNMEASURED: lob_detection_accuracy" in report
+    assert "not applicable: lossrun_totals_reconciliation_rate" in report
+    assert result.as_dict()["not_applicable"] == ["lossrun_totals_reconciliation_rate"]
+
+
+def test_a_unified_run_still_blocks_on_the_same_missing_metric():
+    """The scope is what changes the verdict, not the metric. A unified run
+    covers Loss Runs, so their reconciliation is a result it owes."""
+    metrics = _without(_passing(), "lossrun_totals_reconciliation_rate")
+    unscoped = promotion_gate(metrics, None)
+
+    # Still exempt as a CONDITIONAL metric (a statement about the eval set), but
+    # a metric outside that set is not.
+    assert unscoped.passed
+    assert not promotion_gate(_without(_passing(), "field_exact_match"), None).passed
+
+
+def test_a_scope_cannot_waive_a_metric_it_can_produce():
+    """not_applicable_for intersects what the scope DECLARES with what its shape
+    implies, so a declaration alone never excuses a gate."""
+    from dataclasses import replace
+
+    from common.scopes import get_scope
+    from evaluation.gating import not_applicable_for
+
+    lying = replace(
+        get_scope("unified"),
+        not_applicable_metrics=frozenset({"field_exact_match", "lossrun_totals_reconciliation_rate"}),
+    )
+    assert "field_exact_match" not in not_applicable_for(lying)
+    assert not promotion_gate(_without(_passing(), "field_exact_match"), None, scope=lying).passed
+
+
+def test_a_scope_can_raise_its_own_floors():
+    """Floors are per scope because the same number means different things to
+    different coverage."""
+    from dataclasses import replace
+
+    from common.scopes import get_scope
+    from evaluation.gating import floors_for
+
+    strict = replace(get_scope("policy"), floors={"field_exact_match": 0.99})
+
+    assert floors_for(strict)["field_exact_match"] == 0.99
+    assert floors_for(get_scope("policy"))["field_exact_match"] == 0.85
+
+    metrics = _without(_passing(field_exact_match=0.97), "lossrun_totals_reconciliation_rate")
+    assert promotion_gate(metrics, None, scope=get_scope("policy")).passed
+    assert not promotion_gate(metrics, None, scope=strict).passed
+
+
+def test_the_gate_decision_says_which_scope_it_judged():
+    """"v2 passed" means nothing when two scopes share a version."""
+    from common.scopes import get_scope
+
+    metrics = _without(_passing(), "lossrun_totals_reconciliation_rate")
+    result = promotion_gate(metrics, None, scope=get_scope("policy"))
+
+    assert result.scope == "policy"
+    assert result.as_dict()["scope"] == "policy"
+
+
+def test_an_eval_set_warns_only_about_subsets_its_scope_could_contain():
+    """A Loss Run scope has no policies, so `long_policy` is a gap that cannot be
+    filled — warning about it teaches everyone to ignore the warning."""
+    from common.scopes import get_scope
+    from evaluation.run_eval import expected_subsets
+
+    assert "long_policy" in expected_subsets(get_scope("unified"))
+    assert "long_policy" in expected_subsets(get_scope("policy"))
+    assert "long_policy" not in expected_subsets(get_scope("lossrun"))
+    # The modality subsets are required of every corpus (§6), whatever it covers.
+    for scope_name in ("unified", "policy", "lossrun"):
+        assert {"image_only", "scanned", "noisy_ocr"} <= expected_subsets(get_scope(scope_name))

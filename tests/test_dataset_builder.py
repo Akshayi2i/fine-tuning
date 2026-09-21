@@ -891,3 +891,16 @@ def test_train_documents_get_one_row_per_epoch_not_one_per_regime():
     for row in built.rows_by_split["train"]:
         per_doc[row["source_id"]] = per_doc.get(row["source_id"], 0) + 1
     assert per_doc and set(per_doc.values()) == {4}
+
+
+def test_every_acord_form_in_the_corpus_is_pinned_not_just_form_25():
+    """The pin is what forces a rebuild when a schema changes. Recording only
+    ACORD 25 meant a corpus holding 125s and 140s pinned no version for them, so
+    those schemas could change underneath a corpus claiming reproducibility."""
+    from data_pipeline.corpus_manifest import _schema_pins
+
+    pins = _schema_pins(["acord", "policy"])
+
+    assert {"acord:25", "acord:125", "acord:140", "policy"} <= set(pins)
+    assert all(version for version in pins.values())
+    assert "lossrun" not in pins, "a type the corpus does not hold is not pinned"
