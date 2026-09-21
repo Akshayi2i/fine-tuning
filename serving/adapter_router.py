@@ -76,7 +76,7 @@ def route(
     *,
     confidence_threshold: float = 0.70,
     adapter_map: dict[str, str | None] | None = None,
-    fallback_doc_type: str = "policy",
+    fallback_doc_type: str | None = None,
 ) -> Route:
     """Select adapter, prompt, and schema from a classification.
 
@@ -86,13 +86,29 @@ def route(
             routes Foundation-only, which is correct during the pilot when no
             per-type adapter has been trained yet.
         fallback_doc_type: schema used when the type could not be determined.
-            Something has to be validated against; the flag records that it was
-            a fallback rather than a decision.
+            **None by default.** It was ``"policy"``, so an unclassifiable
+            document was extracted against the policy schema whatever the
+            deployment served — a confident policy-shaped answer for a document
+            nobody identified, and in a deployment with no policy release, from a
+            model that never saw one. A fallback is now an explicit choice, and
+            `serving.pipeline` refuses the document when there is none.
     """
     adapter_map = adapter_map or {}
 
+    def _refuse(reason: str) -> RoutingError:
+        return RoutingError(
+            f"{reason} and routing.fallback_doc_type is not set, so there is no schema to "
+            "extract against. Returning a guess would run the model against a schema nobody "
+            "chose and produce an answer indistinguishable from a real one."
+        )
+
     # Unusable classification — no type at all.
     if not classification.is_usable:
+        if fallback_doc_type is None:
+            raise _refuse(
+                f"the document could not be classified ({classification.doc_type!r}, "
+                f"confidence {classification.confidence:.2f})"
+            )
         log.warning(
             "document could not be classified (%r, confidence %.2f) — Foundation-only "
             "extraction and human routing review",
@@ -111,7 +127,9 @@ def route(
 
     # `is_usable` guarantees a doc_type; binding it once here is what lets the
     # rest of the function rely on that instead of re-asserting it three times.
-    doc_type: str = classification.doc_type or fallback_doc_type
+    # The `or` is unreachable after that guarantee and exists only so the type is
+    # str rather than str | None.
+    doc_type: str = classification.doc_type or str(fallback_doc_type)
 
     # ACORD is two-level: the form selects the schema, and `schema_key` refuses
     # the pair (acord, None). Routing it anyway meant render_system_prompt raised
@@ -119,6 +137,8 @@ def route(
     # schema can be selected") zeroed the confidence but left the doc_type in
     # place, so both branches below still produced the refused pair.
     if doc_type == "acord" and not classification.acord_form:
+        if fallback_doc_type is None:
+            raise _refuse("the ACORD form number is missing, so no schema can be selected")
         log.warning(
             "ACORD form number missing, so no schema can be selected — falling back to the %r "
             "schema with Foundation-only extraction and a routing review flag rather than "
@@ -205,9 +225,11 @@ def route(
 
 
 def adapter_map_from_config(serving_config: dict[str, Any]) -> dict[str, str | None]:
-    """Read the adapter map from serving config.
+    """Read any adapter map pinned in serving config.
 
-    Paths resolve through the registry rather than being hardcoded, so a promoted
-    version change does not require a config edit.
+    Normally empty: adapters resolve through the registry and the release index,
+    so a promoted version change needs no config edit. The three hardcoded keys
+    this used to read were a second, silent source of truth about which document
+    types exist.
     """
     return dict(serving_config.get("routing", {}).get("adapter_map", {}) or {})

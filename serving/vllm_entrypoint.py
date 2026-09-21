@@ -39,6 +39,7 @@ from artifact_registry.blob_client import BlobClient
 from common.config import serving_config
 from common.constants import ACTIVE_DOC_TYPES
 from serving.pipeline import ExtractionRequest, ExtractionResult, extract
+from serving.release_router import build_serving_plan
 
 log = logging.getLogger(__name__)
 
@@ -95,7 +96,19 @@ class EndpointState:
     calibration: Any = None
     adapter_map: dict[str, Any] = field(default_factory=dict)
     corpus_manifest: dict[str, Any] = field(default_factory=dict)
+
+    #: Which promoted release answers for each document type (arch v2.1 §12.3).
+    #: More than one can be promoted at a time — a policy release alongside an
+    #: older unified one — so this is what decides, and what refuses a type
+    #: nothing covers.
+    plan: Any = None
     ready: bool = False
+
+    def release_for(self, doc_type: str) -> Any:
+        """The release serving this type. Raises ``UnservedDocType``."""
+        if self.plan is None:
+            return None
+        return self.plan.release_for(doc_type)
 
 
 def assert_ocr_pin(corpus_manifest: dict[str, Any]) -> None:
@@ -164,6 +177,14 @@ def _adapter_exists(adapter_path: str, client: BlobClient) -> bool:
     except Exception:  # noqa: BLE001 - an unreachable store is not a present adapter
         log.warning("could not confirm %s exists; treating it as absent", adapter_path)
         return False
+
+
+def release_pins() -> dict[str, str]:
+    """``{doc_type: release_id}`` overrides from the serving config."""
+    from common.config import serving_config
+
+    routing = serving_config().get("routing") or {}
+    return {str(k): str(v) for k, v in (routing.get("release_pins") or {}).items() if v}
 
 
 def build_adapter_map(model_version: str, client: BlobClient) -> dict[str, str]:
@@ -270,6 +291,9 @@ def cold_start(
         classifier=classifier,
         adapter_map=build_adapter_map(model_version, client),
         calibration=load_calibrations(model_version, client),
+        plan=build_serving_plan(
+            client, tenant_id=tenant_id, pins=release_pins(),
+        ),
         corpus_manifest=manifest,
         ready=True,
     )

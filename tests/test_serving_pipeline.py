@@ -129,6 +129,7 @@ def test_an_acord_candidate_without_a_form_is_not_offered():
     result = route(
         Classification("acord", None, 0.40, candidates=[("acord", 0.40), ("policy", 0.38)]),
         confidence_threshold=0.70,
+        fallback_doc_type="policy",
     )
     assert "acord" not in [r.doc_type for r in result.candidate_routes]
 
@@ -160,9 +161,25 @@ def test_low_confidence_still_keeps_the_best_guess_schema():
     assert result.schema_doc_type == "lossrun"
 
 
-def test_unclassifiable_document_gets_a_fallback_and_a_flag():
-    result = route(Classification(None, None, 0.0))
+def test_an_unclassifiable_document_is_refused_when_no_fallback_is_configured():
+    """The fallback used to be "policy" by default, so an unidentifiable document
+    was extracted against the policy schema whatever the deployment served — and
+    in a deployment with no policy release, by a model that never saw one."""
+    from serving.adapter_router import RoutingError
+
+    with pytest.raises(RoutingError, match="could not be classified"):
+        route(Classification(None, None, 0.0))
+
+    with pytest.raises(RoutingError, match="ACORD form number is missing"):
+        route(Classification("acord", None, 0.99))
+
+
+def test_a_configured_fallback_still_gets_a_flag_rather_than_a_refusal():
+    """An operator may still choose a fallback schema. Choosing it is the point:
+    the flag then records that it was a fallback rather than a decision."""
+    result = route(Classification(None, None, 0.0), fallback_doc_type="policy")
     assert result.foundation_only
+    assert result.schema_doc_type == "policy"
     assert "routing:unclassified" in result.review_flags
 
 

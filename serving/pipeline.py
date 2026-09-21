@@ -37,7 +37,7 @@ from common.schemas import is_valid, iter_validation_errors, resolved_schema
 from inference_core.input_builder import build_messages
 from inference_core.model_runner import LoadedModel, generate
 from inference_core.span_map import SpanMapError, map_field_spans
-from serving.adapter_router import Route, route
+from serving.adapter_router import Route, RoutingError, route
 from serving.doc_type_classifier import Classifier
 from serving.page_router import plan_pages
 
@@ -105,17 +105,24 @@ class ExtractionResult:
 
 
 def _resolve_route(request: ExtractionRequest, classifier: Classifier, *,
-                   confidence_threshold: float, adapter_map: dict[str, Any]) -> Route:
+                   confidence_threshold: float, adapter_map: dict[str, Any],
+                   fallback_doc_type: str | None = None) -> Route:
     if request.known_doc_type:
         from serving.doc_type_classifier import StaticClassifier
 
         classifier = StaticClassifier(request.known_doc_type, request.known_acord_form)
     classification = classifier.classify(request.image_paths, request.ocr_text)
-    return route(
-        classification,
-        confidence_threshold=confidence_threshold,
-        adapter_map=adapter_map,
-    )
+    try:
+        return route(
+            classification,
+            confidence_threshold=confidence_threshold,
+            adapter_map=adapter_map,
+            fallback_doc_type=fallback_doc_type,
+        )
+    except RoutingError as exc:
+        # Before generation, deliberately: a document nobody could route costs
+        # nothing to refuse and a full extraction to answer wrongly.
+        raise PipelineError(str(exc)) from exc
 
 
 def _image_for(request: ExtractionRequest, page: int) -> str:
@@ -360,6 +367,9 @@ def extract(
     review_threshold: float = DEFAULT_REVIEW_CONFIDENCE_THRESHOLD,
     page_threshold: int = DEFAULT_LONG_DOC_PAGE_THRESHOLD,
     strict_schema: bool = True,
+    plan: Any = None,
+    fallback_doc_type: str | None = None,
+    long_doc_types: tuple[str, ...] = ("policy",),
 ) -> ExtractionResult:
     """Run one document through the full pipeline.
 
@@ -367,12 +377,28 @@ def extract(
         strict_schema: raise on a schema-invalid response rather than returning
             it. Mirrors the audit gate — a response that fails validation is an
             error, not a result.
+        plan: the endpoint's :class:`~serving.release_router.ServingPlan`. Given
+            one, a document type no promoted release covers is refused HERE,
+            before any generation — extracting it would run a model that never
+            trained on the type against a schema it has never seen.
+        long_doc_types: which types get page routing. The page signals are policy
+            vocabulary (declarations, schedule, endorsement), so routing a Loss
+            Run through them spends a pass to select every page anyway.
     """
     route_ = _resolve_route(
         request, classifier,
         confidence_threshold=classifier_threshold,
         adapter_map=adapter_map or {},
+        fallback_doc_type=fallback_doc_type,
     )
+
+    if plan is not None:
+        from serving.release_router import UnservedDocType
+
+        try:
+            plan.release_for(route_.doc_type)
+        except UnservedDocType as exc:
+            raise PipelineError(str(exc)) from exc
 
     # Calibration is per document type, and which type this is only becomes
     # known once the classifier has run — so it is selected here, not by the
@@ -383,17 +409,21 @@ def extract(
     calibration = _calibration_for(calibration, route_.doc_type)
 
     # --- page routing, for long documents only -----------------------------
-    plan = plan_pages(request.page_texts, page_threshold=page_threshold) if request.page_texts else None
+    routes_pages = route_.doc_type in long_doc_types
+    page_plan = (
+        plan_pages(request.page_texts, page_threshold=page_threshold)
+        if request.page_texts and routes_pages else None
+    )
     latency: float | None = None
 
-    if plan and plan.routed:
+    if page_plan and page_plan.routed:
         # The selected pages go in **one** call, not one call per page. Sending
         # them separately asked the model to produce a whole-document JSON from a
         # single page — a shape it never trained on — and stopped it from seeing
         # that a table on page 9 continues on page 14. Interleaving makes a
         # routed request a subsequence of the full document rather than a
         # different structure.
-        pages_used = plan.pages
+        pages_used = page_plan.pages
         page_images = [_image_for(request, page) for page in pages_used]
         page_ocr = (
             None if request.modality_mode == "image_only"

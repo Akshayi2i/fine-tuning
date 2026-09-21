@@ -66,11 +66,23 @@ routing:
   classifier_confidence_threshold: 0.70
   fallback: "foundation_only"
 
-  # Adapter paths are resolved through the registry, never hardcoded here.
-  adapter_map:
-    acord: null
-    policy: null
-    lossrun: null
+  # Adapter paths are resolved through the registry, never hardcoded here. The
+  # three keys that used to sit here were a second, silent source of truth about
+  # which document types exist - a type added anywhere else was simply absent
+  # from serving, with no error.
+
+  # Which promoted release answers for a document type. Normally empty: the
+  # default rule is NARROWEST COVERAGE WINS, so a policy release takes policies
+  # while an older unified release keeps ACORDs and Loss Runs.
+  #
+  # A pin overrides that - for a rollback, or to hold one type on an older
+  # release while a new one is watched. A pin naming a release that does not
+  # cover its type is an ERROR, never silently ignored: a pin is an explicit
+  # instruction about where a document goes.
+  #
+  #   release_pins:
+  #     policy: release-2026.10.2
+  release_pins: {}
 
 confidence:
   # Fields below this calibrated confidence route to human review (arch 5).
