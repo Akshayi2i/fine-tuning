@@ -58,3 +58,20 @@ tasks:
     max_pixels: 2483712
     min_pixels: 200704
     note: "printed totals on the last pages"
+
+  # Policy decomposition (arch v2.1 7b). Same full resolution as extraction:
+  # these read the same pages, just fewer of them per call.
+  policy_declarations:
+    max_pixels: 2483712
+    min_pixels: 200704
+    note: "the dense declarations block - small print, printed limits and premium"
+
+  policy_schedule:
+    max_pixels: 2483712
+    min_pixels: 200704
+    note: "vehicle / location / coverage schedules; dense tabular rows"
+
+  policy_endorsements:
+    max_pixels: 2483712
+    min_pixels: 200704
+    note: "endorsement forms, often scanned inserts at a lower source quality"

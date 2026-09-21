@@ -52,17 +52,41 @@ class Task(StrEnum):
     #: the first pages where v2.0 looked for them (v2.1 correction).
     LOSSRUN_TOTALS = "lossrun_totals"
 
+    #: The declarations pages -> the policy-level fields: named insured, policy
+    #: number, period, carrier, producer, limits, premium. One dense block that
+    #: usually carries every policy-level value at once, which is why it is worth
+    #: its own pass rather than being read out of a 60-page whole.
+    POLICY_DECLARATIONS = "policy_declarations"
+
+    #: A window of schedule pages -> the rows on them: vehicles, locations,
+    #: coverages. Output-bound like LOSSRUN_ROWS: a 20-page vehicle schedule
+    #: cannot be returned in one call, and a routed 6-page read would silently
+    #: drop fourteen pages of it.
+    POLICY_SCHEDULE = "policy_schedule"
+
+    #: The endorsement pages -> what each endorsement changed, its number and its
+    #: effective date. Endorsements are scattered through a policy rather than
+    #: gathered, so they are found by page tagging rather than by position.
+    POLICY_ENDORSEMENTS = "policy_endorsements"
+
 
 #: Tasks that read page images at full extraction resolution. The two thumbnail
 #: tasks are excluded: they recognise layout, and paying extraction resolution
 #: for that is the single most wasteful thing this pipeline could do.
 FULL_RESOLUTION_TASKS: frozenset[Task] = frozenset({
     Task.EXTRACT, Task.LOSSRUN_HEADER, Task.LOSSRUN_ROWS, Task.LOSSRUN_TOTALS,
+    Task.POLICY_DECLARATIONS, Task.POLICY_SCHEDULE, Task.POLICY_ENDORSEMENTS,
 })
 
 #: The Loss Run decomposition, in the order the serving flow runs it.
 LOSSRUN_TASKS: tuple[Task, ...] = (
     Task.LOSSRUN_HEADER, Task.LOSSRUN_ROWS, Task.LOSSRUN_TOTALS,
+)
+
+#: The Policy decomposition, in the order the serving flow runs it. Declarations
+#: first because everything else is attributed to the policy it identifies.
+POLICY_TASKS: tuple[Task, ...] = (
+    Task.POLICY_DECLARATIONS, Task.POLICY_SCHEDULE, Task.POLICY_ENDORSEMENTS,
 )
 
 

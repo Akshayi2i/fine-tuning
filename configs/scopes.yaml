@@ -46,7 +46,9 @@ scopes:
   unified:
     lineage: extractor
     doc_types: [acord, policy, lossrun]
-    tasks: [classify, page_select, extract, lossrun_header, lossrun_rows, lossrun_totals]
+    tasks: [classify, page_select, extract,
+            lossrun_header, lossrun_rows, lossrun_totals,
+            policy_declarations, policy_schedule, policy_endorsements]
     training_config: unified
     long_doc_types: [policy]
 
@@ -59,7 +61,11 @@ scopes:
   policy:
     lineage: policy
     doc_types: [policy]
-    tasks: [classify, page_select, extract]
+    # The policy decomposition (7b): a 60-page policy is read as declarations,
+    # schedule windows and endorsement passes. The one-call `extract` stays for
+    # short policies.
+    tasks: [classify, page_select, extract,
+            policy_declarations, policy_schedule, policy_endorsements]
     training_config: unified
     long_doc_types: [policy]
     not_applicable_metrics: [lossrun_totals_reconciliation_rate]

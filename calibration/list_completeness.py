@@ -183,9 +183,20 @@ def check_completeness(
     return signal
 
 
+#: Where a document type states, in its own words, how many rows it holds — and
+#: which field those rows live in. Only Loss Runs print a claim count today.
+#: A type absent from this table has no self-reported count to cross-check
+#: against, which is a real difference between document types rather than a gap:
+#: a policy prints no "total coverages" line.
+STATED_COUNTS: dict[str, tuple[str, str]] = {
+    "lossrun": ("total_claims_reported", "claims"),
+}
+
+
 def stated_count_field(doc_type: str) -> str | None:
     """The field carrying the document's own row count, if the schema has one."""
-    return {"lossrun": "total_claims_reported"}.get(doc_type)
+    entry = STATED_COUNTS.get(doc_type)
+    return entry[0] if entry else None
 
 
 def stated_list_field(doc_type: str) -> str | None:
@@ -194,7 +205,8 @@ def stated_list_field(doc_type: str) -> str | None:
     A stated count names one list. Comparing it against every list field flagged
     the others for disagreeing with a number that was never about them.
     """
-    return {"lossrun": "claims"}.get(doc_type)
+    entry = STATED_COUNTS.get(doc_type)
+    return entry[1] if entry else None
 
 
 def check_document(

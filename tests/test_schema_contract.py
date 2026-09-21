@@ -419,3 +419,60 @@ def test_the_output_shape_is_an_outline_not_a_second_schema(doc_type, acord_form
     assert '"' not in shape, "the shape is a bare key outline, not JSON"
     assert ":" not in shape.replace(": [", ""), "only array keys carry a colon"
     assert len(shape) < len(schema) / 3, "the outline has grown into a second schema"
+
+
+# --------------------------------------------------------------------------
+# Schema selection by line of business (arch v2.1 §0b)
+# --------------------------------------------------------------------------
+
+
+def test_a_policy_falls_back_to_the_generic_schema_until_an_lob_file_exists():
+    """Adding a per-LOB schema later is a single _SCHEMA_FILES entry and no
+    call-site change — which is the whole point of resolving the fallback here
+    rather than at each caller."""
+    from common.schemas import schema_key
+
+    assert schema_key("policy") == "policy"
+    assert schema_key("policy", None, "workers_comp") == "policy"
+    assert schema_key("policy", None, ["workers_comp"]) == "policy"
+
+
+def test_an_lob_selects_a_schema_only_when_one_is_registered():
+    """Simulates the state after per-LOB schemas land, without shipping one."""
+    from common import schemas
+
+    registered = dict(schemas._SCHEMA_FILES)
+    registered["policy:workers_comp"] = "policy_doc.schema.json"
+    original, schemas._SCHEMA_FILES = schemas._SCHEMA_FILES, registered
+    try:
+        assert schemas.schema_key("policy", None, "workers_comp") == "policy:workers_comp"
+        assert schemas.schema_key("policy", None, "commercial_auto") == "policy"
+    finally:
+        schemas._SCHEMA_FILES = original
+
+
+def test_a_package_policy_uses_the_generic_schema_rather_than_one_of_its_lines():
+    """A policy covering GL, Property and Auto is one document with a section per
+    line. Picking one line's schema would validate the whole document against a
+    third of itself."""
+    from common import schemas
+
+    registered = dict(schemas._SCHEMA_FILES)
+    registered["policy:workers_comp"] = "policy_doc.schema.json"
+    original, schemas._SCHEMA_FILES = schemas._SCHEMA_FILES, registered
+    try:
+        assert schemas.schema_key(
+            "policy", None, ["workers_comp", "general_liability"]
+        ) == "policy"
+    finally:
+        schemas._SCHEMA_FILES = original
+
+
+def test_a_list_valued_lob_does_not_break_the_schema_cache():
+    """line_of_business is a list, and the loaders are cached — caching on the
+    arguments would raise 'unhashable type: list' on every multi-LOB call."""
+    from common.schemas import load_schema, resolved_schema, validator_for
+
+    assert load_schema("policy", None, ["workers_comp", "property"])["type"] == "object"
+    assert validator_for("policy", None, ["workers_comp"]) is validator_for("policy")
+    assert resolved_schema("policy", None, ["workers_comp"])["properties"]

@@ -282,3 +282,96 @@ def page_select_chunks(total_pages: int, chunk: int = PAGE_SELECT_CHUNK) -> list
         list(range(start + 1, min(start + chunk, total_pages) + 1))
         for start in range(0, max(total_pages, 0), chunk)
     ]
+
+
+#: Schema fields that are tables of rows rather than policy-level values. Each
+#: becomes `policy_schedule` windows; everything else belongs to declarations.
+POLICY_SCHEDULE_FIELDS: tuple[str, ...] = ("coverage_schedule", "vehicles", "locations")
+
+#: Where endorsements are recorded on a policy's golden label.
+POLICY_ENDORSEMENT_FIELD = "endorsements"
+
+
+def expand_policy(
+    *,
+    source_id: str,
+    golden_label: dict[str, Any],
+    page_markdown: list[str],
+    output_budget: int,
+    provenance_pages: list[int] | None = None,
+    endorsement_pages: list[int] | None = None,
+) -> list[TaskExample]:
+    """Declarations, schedule windows and endorsements for one policy (§7b).
+
+    The one-call ``extract`` path stays for short policies. This is what a long
+    one is read with, because the routed read caps at six pages: a 60-page policy
+    extracted that way silently drops everything past the sixth, and a missing
+    field looks exactly like a field the document does not have.
+
+    Schedules are windowed for the same reason Loss Run rows are — the binding
+    constraint is the OUTPUT budget, not the input. Endorsements are found by
+    page tagging rather than by position: they are scattered through a policy
+    rather than gathered at one end.
+    """
+    if not page_markdown:
+        raise ExpansionError(f"{source_id}: a policy needs at least one page")
+
+    total_pages = len(page_markdown)
+    examples: list[TaskExample] = []
+
+    schedules = {
+        name: list(golden_label.get(name) or [])
+        for name in POLICY_SCHEDULE_FIELDS
+        if golden_label.get(name)
+    }
+    endorsements = list(golden_label.get(POLICY_ENDORSEMENT_FIELD) or [])
+
+    declared = {
+        k: v for k, v in golden_label.items()
+        if k not in schedules and k != POLICY_ENDORSEMENT_FIELD
+    }
+    examples.append(TaskExample(
+        task=Task.POLICY_DECLARATIONS,
+        source_id=source_id,
+        doc_type="policy",
+        pages=select_policy_pages(
+            provenance_pages=provenance_pages or [], total_pages=total_pages
+        ),
+        target=declared,
+    ))
+
+    # One window sequence per schedule, because a vehicle schedule and a location
+    # schedule are different tables on different pages: merging them would ask
+    # one call to return two shapes.
+    for name, rows in sorted(schedules.items()):
+        densities = [detect_row_density(page) for page in page_markdown]
+        windows = plan_windows(densities, output_budget=output_budget)
+        for index, window in enumerate(windows):
+            in_window = _apportion(rows, windows, index)
+            if not in_window:
+                continue
+            examples.append(TaskExample(
+                task=Task.POLICY_SCHEDULE,
+                source_id=source_id,
+                doc_type="policy",
+                pages=window,
+                target={name: in_window},
+                window_index=index,
+                metadata={"schedule": name, "window_pages": len(window),
+                          "carries_table_header": True},
+            ))
+
+    if endorsements:
+        pages = [p for p in (endorsement_pages or []) if 1 <= p <= total_pages]
+        examples.append(TaskExample(
+            task=Task.POLICY_ENDORSEMENTS,
+            source_id=source_id,
+            doc_type="policy",
+            # No tagged pages means the whole document is the search space. That
+            # is expensive and honest; guessing a range would drop the
+            # endorsements that sit outside it, silently.
+            pages=pages or list(range(1, total_pages + 1)),
+            target={POLICY_ENDORSEMENT_FIELD: endorsements},
+            metadata={"tagged_pages": bool(pages)},
+        ))
+    return examples

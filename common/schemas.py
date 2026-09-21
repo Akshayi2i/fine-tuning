@@ -75,11 +75,27 @@ def _registry() -> Registry:
     return registry
 
 
-def schema_key(doc_type: str, acord_form: str | None = None) -> str:
-    """Build the registry key for a document type, including the ACORD form.
+def schema_key(
+    doc_type: str, acord_form: str | None = None, lob: str | list[str] | None = None
+) -> str:
+    """Build the registry key for a document type, form and line of business.
 
     ACORD is two-level (arch §4b): one shared adapter, but a distinct schema per
     form, because field sets genuinely differ between 25, 125 and 140.
+
+    **Policies are two-level too, by line of business.** A Workers' Comp policy
+    and a Commercial Auto policy share a header and almost nothing else, so each
+    LOB may register its own canonical schema (``policy:workers_comp``).
+
+    Two rules, both here rather than at the call sites that would otherwise each
+    decide for themselves:
+
+    * **Fall back when no per-LOB schema is registered.** Adding one later is a
+      single ``_SCHEMA_FILES`` entry and no call-site change.
+    * **An LOB selects a schema only when exactly one is named.** A package
+      policy covering GL, Property and Auto is one document with a section per
+      line, so it uses the generic policy schema — picking one of its lines would
+      validate the whole document against a third of itself.
     """
     doc_type = doc_type.lower()
     if doc_type == "acord":
@@ -94,62 +110,99 @@ def schema_key(doc_type: str, acord_form: str | None = None) -> str:
         return f"acord:{form}"
     if doc_type not in ACTIVE_DOC_TYPES:
         raise SchemaError(f"unknown doc_type {doc_type!r}; active types: {ACTIVE_DOC_TYPES}")
+
+    lines = [lob] if isinstance(lob, str) else list(lob or [])
+    if len(lines) == 1:
+        scoped = f"{doc_type}:{str(lines[0]).strip().lower()}"
+        if scoped in _SCHEMA_FILES:
+            return scoped
     return doc_type
 
 
-@cache
-def load_schema(doc_type: str, acord_form: str | None = None) -> dict[str, Any]:
+def load_schema(
+    doc_type: str, acord_form: str | None = None, lob: str | list[str] | None = None
+) -> dict[str, Any]:
     """Return the raw (unresolved) schema for a document type."""
-    key = schema_key(doc_type, acord_form)
+    return _schema_for_key(schema_key(doc_type, acord_form, lob))
+
+
+def validator_for(
+    doc_type: str, acord_form: str | None = None, lob: str | list[str] | None = None
+) -> Draft202012Validator:
+    """A ref-resolving validator for this document type."""
+    return _validator_for_key(schema_key(doc_type, acord_form, lob))
+
+
+# Cached on the resolved KEY rather than on the arguments: `lob` arrives as a
+# list (line_of_business is a list under §0b) and a list is unhashable, so
+# caching the public signature would raise on every multi-LOB call. The key is
+# also the right cache granularity — two argument sets that resolve to one schema
+# should share one parsed copy.
+@cache
+def _schema_for_key(key: str) -> dict[str, Any]:
     return _load_json(SCHEMA_DIR / _SCHEMA_FILES[key])
 
 
 @cache
-def validator_for(doc_type: str, acord_form: str | None = None) -> Draft202012Validator:
-    """A ref-resolving validator for this document type."""
-    return Draft202012Validator(load_schema(doc_type, acord_form), registry=_registry())
+def _validator_for_key(key: str) -> Draft202012Validator:
+    return Draft202012Validator(_schema_for_key(key), registry=_registry())
 
 
-def validate(instance: Any, doc_type: str, acord_form: str | None = None) -> None:
+def validate(
+    instance: Any, doc_type: str, acord_form: str | None = None,
+    lob: str | list[str] | None = None,
+) -> None:
     """Validate an extraction or golden label. Raises ``ValidationError``.
 
     Used by SPEC_04 before a golden label is admitted to the corpus, and by
     SPEC_11 before an inference response is returned — mirroring the Fideon
     SPEC_07 Stage 3 audit gate (arch §0a).
     """
-    validator_for(doc_type, acord_form).validate(instance)
+    validator_for(doc_type, acord_form, lob).validate(instance)
 
 
-def is_valid(instance: Any, doc_type: str, acord_form: str | None = None) -> bool:
+def is_valid(
+    instance: Any, doc_type: str, acord_form: str | None = None,
+    lob: str | list[str] | None = None,
+) -> bool:
     """Non-raising form of :func:`validate`."""
-    return validator_for(doc_type, acord_form).is_valid(instance)
+    return validator_for(doc_type, acord_form, lob).is_valid(instance)
 
 
-def iter_validation_errors(instance: Any, doc_type: str, acord_form: str | None = None) -> Iterator[str]:
+def iter_validation_errors(
+    instance: Any, doc_type: str, acord_form: str | None = None,
+    lob: str | list[str] | None = None,
+) -> Iterator[str]:
     """Human-readable validation errors, best-match first."""
-    for err in sorted(validator_for(doc_type, acord_form).iter_errors(instance), key=str):
+    for err in sorted(validator_for(doc_type, acord_form, lob).iter_errors(instance), key=str):
         where = "/".join(str(p) for p in err.absolute_path) or "<root>"
         yield f"{where}: {err.message}"
 
 
-def required_fields(doc_type: str, acord_form: str | None = None) -> list[str]:
+def required_fields(
+    doc_type: str, acord_form: str | None = None, lob: str | list[str] | None = None
+) -> list[str]:
     """Top-level required field names for this document type."""
-    return list(load_schema(doc_type, acord_form).get("required", []))
+    return list(load_schema(doc_type, acord_form, lob).get("required", []))
 
 
-def schema_version(doc_type: str, acord_form: str | None = None) -> str:
+def schema_version(
+    doc_type: str, acord_form: str | None = None, lob: str | list[str] | None = None
+) -> str:
     """The schema's declared version, recorded in the corpus manifest (arch §7).
 
     A change here forces a corpus rebuild and a new training cycle.
     """
-    schema = load_schema(doc_type, acord_form)
+    schema = load_schema(doc_type, acord_form, lob)
     version = schema.get("version")
     if not version:
         raise SchemaError(f"schema for {doc_type}/{acord_form} declares no version")
     return str(version)
 
 
-def resolved_schema(doc_type: str, acord_form: str | None = None) -> dict[str, Any]:
+def resolved_schema(
+    doc_type: str, acord_form: str | None = None, lob: str | list[str] | None = None
+) -> dict[str, Any]:
     """The schema with every ``$ref`` inlined.
 
     This is what gets injected into the system prompt — the model must see the
@@ -174,7 +227,7 @@ def resolved_schema(doc_type: str, acord_form: str | None = None) -> dict[str, A
             return {**merged, **extra} if extra else merged
         return {k: _resolve(v, depth + 1) for k, v in node.items()}
 
-    return _resolve(load_schema(doc_type, acord_form))
+    return _resolve(load_schema(doc_type, acord_form, lob))
 
 
 def iter_described_fields(schema: dict[str, Any], prefix: str = "") -> Iterator[tuple[str, str | None]]:

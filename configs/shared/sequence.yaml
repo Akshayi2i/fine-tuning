@@ -75,3 +75,26 @@ tasks:
     max_seq_len: 12288
     max_output_tokens: 1024
     composition: "totals schema ~0.5k + last 2 pages + output"
+
+  # Policy decomposition (arch v2.1 7b). The one-call `extract` path stays for
+  # short policies; these are what a 60-page policy is read with, because a
+  # 6-page routed read of one silently drops everything past the sixth page.
+  policy_declarations:
+    max_seq_len: 24576
+    max_output_tokens: 2048
+    composition: "policy schema 3-6k + <=3 declarations pages x ~2.4k + OCR + output"
+
+  policy_schedule:
+    max_seq_len: 24576
+    max_output_tokens: 4096
+    composition: "row schema ~1k + window pages + rows output"
+    note: >
+      OUTPUT-bound, like lossrun_rows: the window is sized so the estimated rows
+      fit max_output_tokens. A vehicle schedule runs to hundreds of rows, and a
+      clipped assistant span is an unparseable target in training and a silently
+      short extraction in serving.
+
+  policy_endorsements:
+    max_seq_len: 20480
+    max_output_tokens: 3072
+    composition: "endorsement schema ~1k + tagged endorsement pages + output"
