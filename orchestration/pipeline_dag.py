@@ -32,8 +32,11 @@ from typing import Any, Literal
 from artifact_registry import paths
 from artifact_registry.blob_client import BlobClient
 from common.constants import ACTIVE_DOC_TYPES, DAY_ZERO_MIN_LABELS_PER_TYPE
-from common.run_ids import UNIFIED_LINEAGE, build_run_id, is_valid_run_id, version_of
+from common.run_ids import is_valid_run_id, version_of
+from common.scopes import Scope, default_scope
 from orchestration.runpod_controller import RunPodController, StagingVolume
+from orchestration.settings import gpu_class_for
+from registry_utils.models import RunType
 
 log = logging.getLogger(__name__)
 
@@ -77,7 +80,14 @@ class StageContext:
     raw_client: BlobClient | None = None
     corpus_version: str = ""
     input_dir: Path | None = None
+    #: The types the CORPUS is built over (stages 1-4). What a training run
+    #: covers is `scope`, which may be narrower — the corpus is built once and
+    #: filtered per scope (`training.corpus_view`).
     doc_types: list[str] = field(default_factory=lambda: list(ACTIVE_DOC_TYPES))
+
+    #: What stages 5-11 train, merge, quantize, gate and publish. Defaults to the
+    #: unified scope, whose run ids and artifact paths are unchanged.
+    scope: Scope = field(default_factory=default_scope)
     tenant_id: str | None = None
     #: Serving formats, vLLM-native (arch v2.1 §13a). bf16 alone until Phase 0
     #: spike item 9 verifies FP8; the v1 default produced GGUF files the serving
@@ -91,7 +101,6 @@ class StageContext:
     # -- flags -------------------------------------------------------------
     dry_run: bool = True
     skip_ingest: bool = False
-    foundation_only: bool = False
     train_vit: bool = False
     min_labels_per_type: int = DAY_ZERO_MIN_LABELS_PER_TYPE
     push_adapters: bool = False
@@ -630,7 +639,7 @@ def _is_trained(ctx: StageContext) -> bool:
     v1 also required one staged adapter per document type, because a run was not
     finished until the whole fan-out was. There is no fan-out now.
     """
-    return ctx.volume.exists(paths.staging_adapter_dir("foundation", ctx.out_version))
+    return ctx.volume.exists(paths.scoped_staging_adapter_dir(ctx.scope.name, ctx.out_version))
 
 
 def stage_training(ctx: StageContext) -> StageResult:
@@ -659,7 +668,8 @@ def stage_training(ctx: StageContext) -> StageResult:
         tenant_ids=[paths._tenant(ctx.tenant_id)],
     )
 
-    with ctx.controller.session_pod("training", gpu_class=ctx.gpu_class):
+    gpu_class = ctx.gpu_class or gpu_class_for("training", scope=ctx.scope.name)
+    with ctx.controller.session_pod("training", gpu_class=gpu_class):
         _swift, manifest = train(
             corpus_version=ctx.corpus,
             out_version=ctx.out_version,
@@ -669,34 +679,34 @@ def stage_training(ctx: StageContext) -> StageResult:
             train_vit=ctx.train_vit,
             dry_run=ctx.dry_run,
             tenant_id=ctx.tenant_id,
+            scope=ctx.scope,
         )
-        # Keyed "foundation" so the gate, the cascade query and the ViT gate keep
-        # reading one well-known key. The run_type on the manifest says what it
-        # actually is; this is the slot, not the claim.
-        ctx.manifests["foundation"] = manifest
+        # Keyed by scope, because two scoped runs can be in flight at one
+        # version and a single well-known key would hand the gate whichever ran
+        # last. `manifest_of` reads it, falling back to the old "foundation" key
+        # so a resume against a context built by the previous version still works.
+        ctx.manifests[ctx.scope.name] = manifest
         if not ctx.dry_run and not ctx.checkpoints:
             # Nothing else fills these in, so checkpoint selection skipped on
             # every real run and merge took whatever load_best_model_at_end left.
             from evaluation.checkpoint_eval import discover_checkpoints
 
-            ctx.checkpoints, ctx.best_loss_checkpoint = discover_checkpoints(
-                paths.staging_adapter_dir("foundation", ctx.out_version)
-            )
+            staged = paths.scoped_staging_adapter_dir(ctx.scope.name, ctx.out_version)
+            ctx.checkpoints, ctx.best_loss_checkpoint = discover_checkpoints(staged)
             if not ctx.checkpoints:
                 log.warning(
                     "training finished but no checkpoint-* directory was found under %s, so "
-                    "checkpoint selection will be skipped. Check save_steps.",
-                    paths.staging_adapter_dir("foundation", ctx.out_version),
+                    "checkpoint selection will be skipped. Check save_steps.", staged,
                 )
         # The staging volume is where merge, quantize and push look for the
         # weights. Without this mark the artifacts exist and the pipeline cannot
         # find them.
-        ctx.volume.mark(paths.staging_adapter_dir("foundation", ctx.out_version))
+        ctx.volume.mark(paths.scoped_staging_adapter_dir(ctx.scope.name, ctx.out_version))
 
     if ctx.push_adapters:
         # Belt and braces: the adapter is tens of MB, so pushing it now costs
         # little and means a reclaimed volume loses only the merged model.
-        blob_dir = paths.adapter_dir("foundation", ctx.out_version)
+        blob_dir = paths.scoped_adapter_dir(ctx.scope.name, ctx.out_version)
         ctx.client.write_json(
             f"{blob_dir}/adapter_placeholder.json", {"staged_copy_of": manifest.run_id}
         )
@@ -748,7 +758,11 @@ def stage_checkpoint_eval(ctx: StageContext) -> StageResult:
 
         scorer = vllm_scorer(
             client=ctx.client,
-            val_path=paths.corpus_eval_split(ctx.corpus, "val", ctx.tenant_id),
+            # The scope's own validation view: scoring a policy checkpoint on
+            # Loss Runs it never trained on measures the base model.
+            val_path=paths.corpus_scope_eval_split(
+                ctx.corpus, "val", ctx.scope.name, ctx.tenant_id
+            ),
         )
 
     try:
@@ -759,7 +773,9 @@ def stage_checkpoint_eval(ctx: StageContext) -> StageResult:
             "arbitrary one would ship a model nobody measured."
         ) from exc
 
-    ctx.client.write_json(paths.checkpoint_selection(ctx.out_version), report.as_dict())
+    ctx.client.write_json(
+        paths.checkpoint_selection(ctx.out_version, scope=ctx.scope.name), report.as_dict()
+    )
     detail = f"selected {report.selected} (margin {report.margin:+.4f} field F1)"
     if report.loss_and_f1_disagreed:
         detail += f"; validation loss would have shipped {report.best_loss_checkpoint}"
@@ -824,7 +840,9 @@ def foundation_upgrade_work_list(ctx: StageContext) -> CascadeWorkList:
     # "unified" under arch v2.1 §4.1. A graduated per-type adapter (§4.2) still
     # records the unified run it was trained on as its foundation_version, so the
     # dependency-upgrade rule is unchanged — only the run_type it looks for moved.
-    previous = latest_promoted(ctx.client, "unified")
+    previous = latest_promoted(
+        ctx.client, _promoted_lineage(ctx.scope), scope=ctx.scope.name
+    )
     work = CascadeWorkList(previous_foundation=previous)
     if not is_major_bump(previous, ctx.out_version):
         return work
@@ -876,7 +894,9 @@ def default_baseline_metrics(ctx: StageContext) -> dict[str, Any] | None:
     """
     from registry_utils.query_registry import latest_promoted
 
-    promoted = latest_promoted(ctx.client, "unified")
+    promoted = latest_promoted(
+        ctx.client, _promoted_lineage(ctx.scope), scope=ctx.scope.name
+    )
     if not promoted:
         return None
     # Strip whichever lineage prefix the run id carries. A run id is
@@ -918,15 +938,15 @@ def stage_evaluation_gate(ctx: StageContext) -> StageResult:
     # the gate then saw continued_from=None and silently dropped the cross-type
     # requirement a continued Foundation is supposed to face. It also skipped
     # recording the decision, while stage_push published the run regardless.
-    foundation = ctx.manifests.get("foundation")
+    foundation = manifest_of(ctx)
     if foundation is None:
         from registry_utils.query_registry import RegistryQueryError
         from registry_utils.query_registry import get as get_manifest
 
         try:
-            run_id = build_run_id(UNIFIED_LINEAGE, ctx.out_version)
+            run_id = ctx.scope.run_id(ctx.out_version)
             foundation = get_manifest(run_id, ctx.client)
-            ctx.manifests["foundation"] = foundation
+            ctx.manifests[ctx.scope.name] = foundation
         except (RegistryQueryError, KeyError, FileNotFoundError) as exc:
             raise PipelineError(
                 f"no run manifest for {run_id}, so the gate cannot tell "
@@ -948,7 +968,7 @@ def stage_evaluation_gate(ctx: StageContext) -> StageResult:
     # scored EvalReport at the same key, taking `by_doc_type` and every error
     # record with it — which is what `vit_gate` reads to decide whether the
     # vision encoder is the bottleneck.
-    report_key = paths.gate_decision(ctx.out_version)
+    report_key = paths.gate_decision(ctx.out_version, scope=ctx.scope.name)
     decision = {
         "version": ctx.out_version,
         "candidate_metrics": candidate,
@@ -970,7 +990,9 @@ def stage_evaluation_gate(ctx: StageContext) -> StageResult:
     ctx.client.write_json(
         paths.release_gate_decision(ctx.release_id, "bf16", ctx.tenant_id), decision
     )
-    ctx.volume.write(paths.staging_eval_report(ctx.out_version), json.dumps(candidate))
+    ctx.volume.write(
+        paths.staging_eval_report(ctx.out_version, scope=ctx.scope.name), json.dumps(candidate)
+    )
 
     apply_to_manifest(result, foundation)
     from registry_utils.write_run_manifest import write_manifest
@@ -1008,7 +1030,7 @@ def stage_evaluation_gate(ctx: StageContext) -> StageResult:
 
 def _is_merged(ctx: StageContext) -> bool:
     """One merged model is a complete merge stage (arch v2.1 §4.1)."""
-    return ctx.volume.exists(paths.staging_merged_model_dir(ctx.out_version, None))
+    return ctx.volume.exists(paths.staging_merged_model_dir(ctx.out_version, scope=ctx.scope.name))
 
 
 def stage_merge(ctx: StageContext) -> StageResult:
@@ -1034,13 +1056,14 @@ def stage_merge(ctx: StageContext) -> StageResult:
         version=ctx.out_version,
         dtype=ctx.dtype,  # type: ignore[arg-type]
         selected_checkpoint=selected,
+        scope=ctx.scope.name,
     )
     output = merge(plan, dry_run=ctx.dry_run)
     ctx.volume.mark(output)
 
     return StageResult(
         "merge", "completed", plan.describe(),
-        {"merged": ["unified"], "selected_checkpoint": selected},
+        {"merged": [ctx.scope.name], "selected_checkpoint": selected},
     )
 
 
@@ -1059,7 +1082,9 @@ def _is_quantized(ctx: StageContext) -> bool:
     if not quantized:
         return True
     return all(
-        ctx.volume.exists(paths.staging_quantized_model_dir(ctx.out_version, fmt))
+        ctx.volume.exists(
+            paths.staging_quantized_model_dir(ctx.out_version, fmt, scope=ctx.scope.name)
+        )
         for fmt in quantized
     )
 
@@ -1091,7 +1116,7 @@ def stage_quantize(ctx: StageContext) -> StageResult:
     for fmt, directory in outputs.items():
         if fmt != "bf16":   # bf16 IS the merged model; already marked by merge
             ctx.volume.mark(directory)
-    produced: dict[str, list[str]] = {"unified": sorted(outputs)}
+    produced: dict[str, list[str]] = {ctx.scope.name: sorted(outputs)}
 
     # The threshold gate, between quantize and push (SPEC_13 §4). It runs only
     # when the caller supplied per-format metrics: scoring each GGUF needs the
@@ -1129,8 +1154,8 @@ def _staged_serving_model(ctx: StageContext, fmt: str) -> Any:  # pragma: no cov
     from registry_utils.query_registry import ResolvedModel
 
     weights = (
-        paths.staging_merged_model_dir(ctx.out_version) if fmt == "bf16"
-        else paths.staging_quantized_model_dir(ctx.out_version, fmt)
+        paths.staging_merged_model_dir(ctx.out_version, scope=ctx.scope.name) if fmt == "bf16"
+        else paths.staging_quantized_model_dir(ctx.out_version, fmt, scope=ctx.scope.name)
     )
     config = load_runner_config("vllm")
     resolved = ResolvedModel(
@@ -1154,7 +1179,7 @@ def collect_calibration_samples(ctx: StageContext) -> dict[str, Any]:
         read_rows,
     )
 
-    val_key = paths.corpus_eval_split(ctx.corpus, "val", ctx.tenant_id)
+    val_key = paths.corpus_scope_eval_split(ctx.corpus, "val", ctx.scope.name, ctx.tenant_id)
     if not ctx.client.exists(val_key):
         log.warning("no validation split at %s; nothing to calibrate on", val_key)
         return {}
@@ -1265,6 +1290,26 @@ def stage_calibrate(ctx: StageContext) -> StageResult:
 # --------------------------------------------------------------------------
 
 
+def manifest_of(ctx: StageContext) -> Any:
+    """This scope's run manifest, or ``None``.
+
+    Falls back to the v2.1 ``"foundation"`` key so a `--from-stage` resume
+    against a context built before scopes existed still finds it.
+    """
+    return ctx.manifests.get(ctx.scope.name) or (
+        ctx.manifests.get("foundation") if ctx.scope.is_unified else None
+    )
+
+
+def _promoted_lineage(scope: Scope) -> RunType:
+    """Which run type counts as "the previous release" for this scope.
+
+    The baseline a policy run is gated against is the previous POLICY run, not
+    whichever run happens to be newest.
+    """
+    return "unified" if scope.is_unified else "scoped"
+
+
 def assert_release_id(ctx: StageContext) -> None:
     """Refuse to package without a valid, operator-named release id.
 
@@ -1295,7 +1340,7 @@ def assert_staged(ctx: StageContext) -> None:
     """Fail loudly, with remediation, when the version is not on the volume."""
     if ctx.from_blob:
         return
-    expected = paths.staging_adapter_dir("foundation", ctx.out_version)
+    expected = paths.scoped_staging_adapter_dir(ctx.scope.name, ctx.out_version)
     if ctx.volume.exists(expected):
         return
     raise PipelineError(
@@ -1337,8 +1382,8 @@ def build_release_bundle(ctx: StageContext) -> tuple[Any, list[str]]:
     formats = ["bf16"] if ctx.skip_quantize else list(ctx.formats)
     serving_formats = {
         # bf16 is the merged model itself; it is never re-exported.
-        fmt: paths.merged_model_dir(ctx.out_version) if fmt == "bf16"
-        else paths.quantized_model_dir(ctx.out_version, fmt)
+        fmt: paths.merged_model_dir(ctx.out_version, scope=ctx.scope.name) if fmt == "bf16"
+        else paths.quantized_model_dir(ctx.out_version, fmt, scope=ctx.scope.name)
         for fmt in formats
     }
     calibrators = {
@@ -1379,9 +1424,15 @@ def build_release_bundle(ctx: StageContext) -> tuple[Any, list[str]]:
             release_id=ctx.release_id,
             status="gated" if reasons else "promoted",
             tenant_scope=paths._tenant(ctx.tenant_id),
+            scope=ctx.scope.name,
+            # What this release may SERVE. Serving routes each document type to
+            # the narrowest promoted release covering it, so an empty list —
+            # which is what every release written before scopes existed carries —
+            # reads as "every active type".
+            doc_types=[] if ctx.scope.is_unified else list(ctx.scope.serves),
             base_model=f"{base['model_id']}@{base['revision']}",
-            adapter=build_run_id(UNIFIED_LINEAGE, ctx.out_version),
-            merged_model=paths.merged_model_dir(ctx.out_version),
+            adapter=ctx.scope.run_id(ctx.out_version),
+            merged_model=paths.merged_model_dir(ctx.out_version, scope=ctx.scope.name),
             serving_formats=serving_formats,
             calibrators=calibrators,
             gate_reports=gate_reports,
@@ -1415,6 +1466,21 @@ def write_release_bundle(ctx: StageContext, bundle: Any) -> None:
     ctx.client.write_json(index_key, sorted(rows, key=lambda r: r["release_id"]))
 
 
+def _clear_staged_scope(ctx: StageContext) -> int:
+    """Drop the staged artifacts this scope owns, and nothing else."""
+    owned = [
+        paths.scoped_staging_adapter_dir(ctx.scope.name, ctx.out_version),
+        paths.staging_merged_model_dir(ctx.out_version, scope=ctx.scope.name),
+        paths.staging_eval_report(ctx.out_version, scope=ctx.scope.name),
+    ]
+    if not ctx.skip_quantize:
+        owned += [
+            paths.staging_quantized_model_dir(ctx.out_version, fmt, scope=ctx.scope.name)
+            for fmt in ctx.formats
+        ]
+    return sum(ctx.volume.clear(path) for path in owned)
+
+
 def stage_push(ctx: StageContext) -> StageResult:
     """Copy adapters, merged model and quantized models into Blob, then flip the
     manifest from ``staged`` to ``published``.
@@ -1439,26 +1505,35 @@ def stage_push(ctx: StageContext) -> StageResult:
     # Through the SPEC_02 §3 helper's path, never assembled here. The only place
     # that built these inline is the place that published a Foundation against
     # paths that were never produced.
-    blob_dir = paths.adapter_dir("foundation", ctx.out_version)
+    scope = ctx.scope
+    blob_dir = paths.scoped_adapter_dir(scope.name, ctx.out_version)
     ctx.client.write_json(f"{blob_dir}/adapter_config.json", {
-        "version": ctx.out_version, "kind": "foundation", "doc_type": None,
+        "version": ctx.out_version,
+        "kind": "foundation" if scope.is_unified else "scoped",
+        "scope": scope.name,
+        "doc_types": list(scope.doc_types),
+        "doc_type": None,
     })
-    pushed["adapter:unified"] = blob_dir
+    pushed[f"adapter:{scope.name}"] = blob_dir
 
-    merged_dir = paths.merged_model_dir(ctx.out_version)
+    merged_dir = paths.merged_model_dir(ctx.out_version, scope=scope.name)
     ctx.client.write_json(f"{merged_dir}/config.json", {"dtype": ctx.dtype})
-    pushed["merged:unified"] = merged_dir
+    pushed[f"merged:{scope.name}"] = merged_dir
 
     if not ctx.skip_quantize:
         for fmt in ctx.formats:
-            quant_dir = paths.quantized_model_dir(ctx.out_version, fmt)
+            quant_dir = paths.quantized_model_dir(ctx.out_version, fmt, scope=scope.name)
             ctx.client.write_json(f"{quant_dir}/config.json", {"format": fmt})
-            pushed[f"quantized:unified:{fmt}"] = quant_dir
+            pushed[f"quantized:{scope.name}:{fmt}"] = quant_dir
 
     published: list[str] = []
-    for row in list_runs(ctx.client):
-        run_id = row.get("run_id", "")
-        if not run_id.endswith(ctx.out_version):
+    for row in list_runs(ctx.client, scope=scope.name):
+        run_id = str(row.get("run_id", ""))
+        # Parsed, not suffix-matched. `endswith(version)` matched every scope's
+        # run at that tag, so packaging one scope published all of them — each
+        # against THIS scope's paths, advertising Blob prefixes that hold another
+        # scope's weights or nothing at all.
+        if not is_valid_run_id(run_id) or version_of(run_id) != ctx.out_version:
             continue
         # A run that crashed or never finished has no weights to publish.
         # `launch_and_record` sets "failed" precisely so the registry never
@@ -1474,25 +1549,30 @@ def stage_push(ctx: StageContext) -> StageResult:
             )
             continue
         doc_type = row.get("doc_type")
-        run_kind: paths.AdapterKind = (
-            "doc_type" if row.get("run_type") == "per_type_adapter" else "foundation"
-        )
+        is_graduated = row.get("run_type") == "per_type_adapter"
+        run_kind: paths.AdapterKind = "doc_type" if is_graduated else "foundation"
         manifest = get_manifest(run_id, ctx.client)
-        manifest.artifacts.eval_report = paths.eval_report(ctx.out_version)
+        manifest.artifacts.eval_report = paths.eval_report(ctx.out_version, scope=scope.name)
         # The unified run owns the adapter AND the merged and quantized models —
         # there is one of each under arch v2.1 §4.1. A graduated per-type adapter
         # (§4.2) owns only its own weights; it is merged into nothing, because it
         # is applied at serving time on top of the merged foundation.
-        owns_a_model = run_kind == "foundation"
+        # A scoped run owns its OWN merged and quantized models, under its own
+        # paths. Only a §4.2 graduated adapter owns none: it is applied on top of
+        # a merged model rather than being one.
+        owns_a_model = not is_graduated
         mark_published(
             manifest,
             ctx.client,
-            adapter_weights=paths.adapter_dir(run_kind, ctx.out_version, doc_type),
+            adapter_weights=(
+                paths.adapter_dir(run_kind, ctx.out_version, doc_type) if is_graduated
+                else paths.scoped_adapter_dir(scope.name, ctx.out_version)
+            ),
             merged_model=(
-                paths.merged_model_dir(ctx.out_version) if owns_a_model else None
+                paths.merged_model_dir(ctx.out_version, scope=scope.name) if owns_a_model else None
             ),
             quantized_model=(
-                paths.quantized_model_dir(ctx.out_version, ctx.formats[0])
+                paths.quantized_model_dir(ctx.out_version, ctx.formats[0], scope=scope.name)
                 if owns_a_model and not ctx.skip_quantize else None
             ),
             quantized_formats=(
@@ -1514,7 +1594,11 @@ def stage_push(ctx: StageContext) -> StageResult:
         # the manifest flip verified the push, but nothing checked that any flip
         # happened — so a run where no manifest matched the version deleted every
         # staged adapter, merged model and GGUF and reported success.
-        cleared = ctx.volume.clear(paths.staging_root())
+        #
+        # And only THIS scope's paths: clearing the whole staging root while
+        # packaging `policy` would delete `unified`'s staged merged model, which
+        # is the only copy until its own package run publishes it.
+        cleared = _clear_staged_scope(ctx)
     elif not ctx.keep_staging:
         log.warning(
             "no run manifest matched version %s, so nothing was published and the staging volume "
@@ -1609,6 +1693,19 @@ STAGE_BY_NAME: dict[str, Stage] = {s.name: s for s in STAGES}
 FINETUNE_STAGES = tuple(s for s in STAGES if s.command == "finetune")
 PACKAGE_STAGES = tuple(s for s in STAGES if s.command == "package")
 
+#: Stages 1-4 build the corpus, which every scope shares. Running them per scope
+#: would re-ingest, re-OCR and re-split the same documents — and a second split
+#: draw is the leakage `corpus_view` exists to avoid.
+SHARED_STAGES = tuple(s for s in STAGES if s.name in
+                      ("ingestion", "preprocessing", "labeling", "dataset_build"))
+
+#: Stages 5-11 produce one scope's adapter, model, calibrators and release. They
+#: run once per scope, each against its own StageContext.
+PER_SCOPE_STAGES = tuple(
+    s for s in STAGES
+    if s.command in ("finetune", "package") and s not in SHARED_STAGES
+)
+
 
 def stages_for(command: str) -> tuple[Stage, ...]:
     """The stages a command runs. ``all`` is ``finetune`` + ``package``, and
@@ -1623,6 +1720,93 @@ def stages_for(command: str) -> tuple[Stage, ...]:
         f"{command!r} does not map to pipeline stages. `extract` runs the §17 extraction routine "
         "through serving/pipeline.py, not the build DAG."
     )
+
+
+@dataclass
+class MultiScopeReport:
+    """One shared corpus build, then one report per scope.
+
+    Kept as its own type rather than a merged RunReport: each scope produces an
+    independent adapter, gate verdict and release, and flattening them would make
+    "did it pass" unanswerable for any one of them.
+    """
+
+    command: str
+    version: str
+    shared: RunReport | None = None
+    by_scope: dict[str, RunReport] = field(default_factory=dict)
+
+    @property
+    def ok(self) -> bool:
+        reports = ([self.shared] if self.shared else []) + list(self.by_scope.values())
+        return all(r.ok for r in reports)
+
+    @property
+    def exit_code(self) -> int:
+        return 0 if self.ok else 1
+
+    def render(self) -> str:
+        lines = [f"{self.command} {self.version}: {'OK' if self.ok else 'FAILED'}"]
+        if self.shared:
+            lines.append(self.shared.render())
+        for name, report in self.by_scope.items():
+            lines.append(f"-- scope {name} --")
+            lines.append(report.render())
+        return "\n".join(lines)
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "command": self.command,
+            "version": self.version,
+            "ok": self.ok,
+            "shared": self.shared.as_dict() if self.shared else None,
+            "by_scope": {name: r.as_dict() for name, r in self.by_scope.items()},
+        }
+
+
+def run_multi_scope(
+    build_context: Callable[[Scope], StageContext],
+    scopes: Sequence[Scope],
+    *,
+    command: str = "all",
+    from_stage: str | None = None,
+) -> MultiScopeReport:
+    """Build the corpus once, then run stages 5-11 once per scope.
+
+    Each scope gets its own ``StageContext`` — its own release id, checkpoints,
+    calibrators and manifests — because they are independent runs that happen to
+    share a corpus.
+
+    **A block in one scope does not stop the others.** They are separate
+    adapters: a policy regression says nothing about the lossrun model, and
+    stopping the second run would only mean re-running the first. The aggregate
+    exit code is still non-zero, so a pipeline never mistakes "one passed" for
+    "all passed".
+    """
+    if not scopes:
+        raise PipelineError("no scope to run; name at least one with --scope")
+
+    first = build_context(scopes[0])
+    report = MultiScopeReport(command=command, version=first.out_version)
+
+    shared = [s for s in _selected(command, from_stage) if s in SHARED_STAGES]
+    if shared:
+        # Over the union of every scope's types, so one build serves them all.
+        first.doc_types = sorted({dt for scope in scopes for dt in scope.doc_types})
+        report.shared = run_stages(first, tuple(shared), command=command)
+        if not report.shared.ok:
+            return report
+
+    per_scope = [s for s in _selected(command, from_stage) if s in PER_SCOPE_STAGES]
+    for scope in scopes:
+        ctx = first if scope is scopes[0] else build_context(scope)
+        ctx.scope = scope
+        report.by_scope[scope.name] = run_stages(ctx, tuple(per_scope), command=command)
+    return report
+
+
+def _selected(command: str, from_stage: str | None) -> tuple[Stage, ...]:
+    return stages_from(from_stage, command) if from_stage else stages_for(command)
 
 
 def stages_from(stage_name: str, command: str = "finetune") -> tuple[Stage, ...]:

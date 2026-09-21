@@ -876,11 +876,11 @@ def test_the_cli_holds_no_stage_logic():
 def test_build_context_carries_the_flags_through(client, controller):
     args = cli.build_parser().parse_args([
         "finetune", "--input", "./intake", "--out-version", "v3",
-        "--foundation-only", "--push-adapters", "--dry-run", "--min-labels-per-type", "5",
+        "--scope", "policy", "--push-adapters", "--dry-run", "--min-labels-per-type", "5",
     ])
     ctx = cli.build_context(args, client=client, controller=controller,
                             raw_client=ingestion_client(client))
-    assert ctx.out_version == "v3" and ctx.foundation_only and ctx.push_adapters
+    assert ctx.out_version == "v3" and ctx.scope.name == "policy" and ctx.push_adapters
     assert ctx.dry_run and ctx.min_labels_per_type == 5
     assert ctx.corpus == "v3"  # corpus defaults to the output version
 
@@ -1419,3 +1419,155 @@ def test_a_quantized_format_is_not_promoted_on_the_bf16_gate_run(client, control
     bundle = client.read_json(paths.release_bundle("release-2026.11.1"))
     assert bundle["status"] == "gated"
     assert set(bundle["gate_reports"]) == {"bf16"}
+
+
+# --------------------------------------------------------------------------
+# Scopes: independent runs sharing one corpus (arch v2.1 §4.1)
+# --------------------------------------------------------------------------
+
+
+def _scoped_ctx(client, controller, scope_name: str, **over):
+    from common.scopes import get_scope
+
+    return make_context(
+        client, controller,
+        scope=get_scope(scope_name),
+        release_id=f"release-2026.9.{1 if scope_name == 'unified' else 2}",
+        **over,
+    )
+
+
+def test_the_shared_stages_run_once_and_the_rest_run_per_scope(client, controller):
+    """Stages 1-4 build the corpus every scope reads. Running them per scope would
+    re-ingest and re-split the same documents, and a second split draw is the
+    leakage the corpus view exists to avoid."""
+    from common.scopes import get_scope
+    from orchestration.pipeline_dag import PER_SCOPE_STAGES, SHARED_STAGES, run_multi_scope
+
+    seed_corpus(client)
+    contexts = {}
+
+    def build(scope):
+        ctx = _scoped_ctx(client, controller, scope.name)
+        contexts[scope.name] = ctx
+        return ctx
+
+    report = run_multi_scope(
+        build, [get_scope("unified"), get_scope("policy")], command="all",
+    )
+
+    assert report.ok, report.render()
+    assert [r.name for r in report.shared.results] == [s.name for s in SHARED_STAGES]
+    for name in ("unified", "policy"):
+        assert [r.name for r in report.by_scope[name].results] == [
+            s.name for s in PER_SCOPE_STAGES
+        ], name
+
+
+def test_two_scopes_at_one_version_publish_only_their_own_artifacts(client, controller):
+    """stage_push matched runs with run_id.endswith(version), so packaging one
+    scope published every scope's run at that tag — each against THIS scope's
+    paths, advertising prefixes holding another scope's weights or nothing."""
+    seed_corpus(client)
+
+    unified = _scoped_ctx(client, controller, "unified")
+    run_stages(unified, stages_for("all"), command="all")
+    policy = _scoped_ctx(client, controller, "policy")
+    run_stages(policy, stages_for("all"), command="all")
+
+    assert unified.results["package"].data["published"] == ["extractor-v1"]
+    assert policy.results["package"].data["published"] == ["policy-v1"]
+
+    pushed = policy.results["package"].data["pushed"]
+    assert "adapter:policy" in pushed and "adapter:unified" not in pushed
+    assert "/scope/policy/" in pushed["merged:policy"]
+
+
+def test_packaging_one_scope_leaves_another_scopes_staged_model_alone(client, controller):
+    """The clear wiped the whole staging root, so packaging `policy` deleted
+    `unified`'s staged merged model — the only copy until its own package run."""
+    seed_corpus(client)
+
+    unified = _scoped_ctx(client, controller, "unified")
+    run_stages(unified, stages_for("finetune"), command="finetune")
+    staged_unified = paths.staging_merged_model_dir("v1", scope="unified")
+    assert unified.volume.exists(staged_unified)
+
+    # The same controller, so the same staging volume — which is exactly the
+    # situation the old blanket clear destroyed.
+    policy = _scoped_ctx(client, controller, "policy")
+    report = run_stages(policy, stages_for("all"), command="all")
+
+    assert report.ok, report.render()
+    assert unified.volume.exists(staged_unified), "packaging policy cleared unified's merge"
+    assert not unified.volume.exists(paths.staging_merged_model_dir("v1", scope="policy"))
+
+
+def test_each_scope_writes_its_own_release_bundle(client, controller):
+    seed_corpus(client)
+    for name in ("unified", "policy"):
+        ctx = _scoped_ctx(client, controller, name)
+        assert run_stages(ctx, stages_for("all"), command="all").ok
+
+    unified = client.read_json(paths.release_bundle("release-2026.9.1"))
+    policy = client.read_json(paths.release_bundle("release-2026.9.2"))
+
+    assert unified["adapter"] == "extractor-v1" and unified["scope"] == "unified"
+    assert unified["doc_types"] == [], "empty means every active type"
+    assert policy["adapter"] == "policy-v1" and policy["scope"] == "policy"
+    assert policy["doc_types"] == ["policy"], "what this release may serve"
+
+
+def test_a_gate_block_in_one_scope_does_not_stop_another(client, controller):
+    """They are separate adapters: a policy regression says nothing about the
+    lossrun model, and stopping the second run would only mean re-running it."""
+    from common.scopes import get_scope
+    from orchestration.pipeline_dag import run_multi_scope
+
+    seed_corpus(client)
+    regressed = {**PASSING_METRICS, "field_exact_match": 0.10}
+
+    def build(scope):
+        return _scoped_ctx(
+            client, controller, scope.name,
+            metrics_provider=(
+                (lambda _c: dict(regressed)) if scope.name == "policy"
+                else (lambda _c: dict(PASSING_METRICS))
+            ),
+        )
+
+    report = run_multi_scope(
+        build, [get_scope("policy"), get_scope("unified")], command="all",
+    )
+
+    assert not report.by_scope["policy"].ok
+    assert report.by_scope["unified"].ok, "one scope's block stopped another"
+    assert not report.ok, "the aggregate must still fail"
+    assert report.exit_code == 1
+
+
+def test_the_release_id_is_resolved_per_scope():
+    """Each scope produces its own release, so sharing one id would write every
+    scope's calibrators and gate decision to one prefix."""
+    from common.scopes import get_scope
+
+    policy, unified = get_scope("policy"), get_scope("unified")
+
+    assert cli.release_id_for("release-2026.9.1", policy) == "release-2026.9.1"
+    pairs = ["unified=release-2026.9.1", "policy=release-2026.9.2"]
+    assert cli.release_id_for(pairs, unified) == "release-2026.9.1"
+    assert cli.release_id_for(pairs, policy) == "release-2026.9.2"
+    # Named for other scopes only: refused later by assert_release_id, rather
+    # than silently taking an id meant for a different release.
+    assert cli.release_id_for(["unified=release-2026.9.1"], policy) == ""
+
+
+def test_scope_choices_come_from_the_config_file():
+    """A new scope is a YAML entry, never a code change — including at the CLI."""
+    from common.scopes import load_scopes
+
+    args = cli.build_parser().parse_args(
+        ["all", "--out-version", "v2", "--scope", "policy", "--scope", "unified"]
+    )
+    assert args.scopes == ["policy", "unified"]
+    assert set(load_scopes()) >= {"unified", "policy", "lossrun"}

@@ -28,8 +28,17 @@ from pathlib import Path
 
 from artifact_registry.blob_client import BlobClient, for_ingestion
 from common.constants import ACTIVE_DOC_TYPES, DAY_ZERO_MIN_LABELS_PER_TYPE
+from common.scopes import Scope, load_scopes, parse_scopes
 from orchestration import pipeline_dag
-from orchestration.pipeline_dag import RunReport, StageContext, run_stages, stages_for, stages_from
+from orchestration.pipeline_dag import (
+    MultiScopeReport,
+    RunReport,
+    StageContext,
+    run_multi_scope,
+    run_stages,
+    stages_for,
+    stages_from,
+)
 from orchestration.runpod_controller import RunPodController
 from orchestration.settings import backoff_seconds, defaults, retry_policy
 
@@ -37,11 +46,13 @@ log = logging.getLogger(__name__)
 
 
 def build_context(args: argparse.Namespace, *, client: BlobClient | None = None,
-                  controller: RunPodController | None = None, **over: object) -> StageContext:
+                  controller: RunPodController | None = None,
+                  scope: Scope | None = None, **over: object) -> StageContext:
     """Turn parsed arguments into the one object the stages share."""
     from registry_utils.write_run_manifest import capture_git_commit
 
     commit = getattr(args, "commit", None) or capture_git_commit()
+    scope = scope or parse_scopes(getattr(args, "scopes", None))[0]
     controller = controller or RunPodController(git_commit=commit)
 
     kwargs: dict[str, object] = {
@@ -56,12 +67,12 @@ def build_context(args: argparse.Namespace, *, client: BlobClient | None = None,
         "doc_types": list(getattr(args, "doc_types", None) or ACTIVE_DOC_TYPES),
         "tenant_id": getattr(args, "tenant", None),
         "formats": list(getattr(args, "formats", None) or ["bf16"]),
-        "release_id": getattr(args, "release_id", "") or "",
+        "release_id": release_id_for(getattr(args, "release_id", None), scope),
+        "scope": scope,
         "dtype": getattr(args, "dtype", "bf16"),
         "gpu_class": getattr(args, "gpu", None),
         "dry_run": getattr(args, "dry_run", False),
         "skip_ingest": getattr(args, "skip_ingest", False),
-        "foundation_only": getattr(args, "foundation_only", False),
         "train_vit": getattr(args, "train_vit", False),
         "min_labels_per_type": getattr(args, "min_labels_per_type", DAY_ZERO_MIN_LABELS_PER_TYPE),
         "push_adapters": getattr(args, "push_adapters", False),
@@ -76,6 +87,27 @@ def build_context(args: argparse.Namespace, *, client: BlobClient | None = None,
     return StageContext(**kwargs)  # type: ignore[arg-type]
 
 
+def release_id_for(given: list[str] | str | None, scope: Scope) -> str:
+    """This scope's release id, from ``--release-id``.
+
+    Accepts one bare id when a single scope is named, and ``scope=id`` pairs when
+    several are. Each scope produces its own release — its own calibrators, gate
+    decision and bundle — so sharing one id across scopes would write them all to
+    one prefix and leave the last one standing.
+    """
+    values = [given] if isinstance(given, str) else list(given or [])
+    bare = [v for v in values if "=" not in v]
+    pairs = dict(v.split("=", 1) for v in values if "=" in v)
+
+    if scope.name in pairs:
+        return pairs[scope.name].strip()
+    if pairs and not bare:
+        # Pairs were given and this scope is not among them: say so rather than
+        # falling back to a bare id that was never offered.
+        return ""
+    return bare[0].strip() if len(bare) == 1 else ""
+
+
 def _selected_stages(command: str, from_stage: str | None) -> Sequence[pipeline_dag.Stage]:
     if not from_stage:
         return stages_for(command)
@@ -85,8 +117,32 @@ def _selected_stages(command: str, from_stage: str | None) -> Sequence[pipeline_
 
 
 def run_command(command: str, ctx: StageContext, *, from_stage: str | None = None) -> RunReport:
-    """Run one build command. ``all`` is the two build commands back to back."""
+    """Run one build command for ONE scope. ``all`` is the two commands back to back."""
     return run_stages(ctx, _selected_stages(command, from_stage), command=command)
+
+
+def run_scopes(
+    args: argparse.Namespace,
+    command: str,
+    *,
+    client: BlobClient | None = None,
+    controller: RunPodController | None = None,
+    **over: object,
+) -> MultiScopeReport:
+    """Run a command across every scope named on the command line.
+
+    Stages 1-4 build the corpus once over the union of the scopes' document
+    types; stages 5-11 then run once per scope, each with its own context.
+    """
+    scopes = parse_scopes(getattr(args, "scopes", None))
+    return run_multi_scope(
+        lambda scope: build_context(
+            args, client=client, controller=controller, scope=scope, **over
+        ),
+        scopes,
+        command=command,
+        from_stage=getattr(args, "from_stage", None),
+    )
 
 
 # --------------------------------------------------------------------------
@@ -130,8 +186,10 @@ def _add_finetune_flags(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--from-stage", dest="from_stage", default=None,
                         help="resume at this stage; earlier stages are not re-run")
     parser.add_argument("--skip-ingest", dest="skip_ingest", action="store_true")
-    parser.add_argument("--foundation-only", dest="foundation_only", action="store_true",
-                        help="train the Foundation and skip per-type adapters")
+    parser.add_argument("--scope", dest="scopes", action="append", default=[],
+                        choices=sorted(load_scopes()),
+                        help="what to train (configs/scopes.yaml). Repeatable: each scope is an "
+                             "independent adapter. Defaults to the unified scope.")
     parser.add_argument("--train-vit", dest="train_vit", action="store_true",
                         help="LoRA on the vision encoder; never a full fine-tune (arch §3)")
     parser.add_argument("--min-labels-per-type", dest="min_labels_per_type", type=int,
@@ -147,8 +205,9 @@ def _add_package_flags(parser: argparse.ArgumentParser, *, version_required: boo
     if version_required:
         parser.add_argument("--version", required=True)
     parser.add_argument("--formats", nargs="+", default=list(defaults().get("formats", ["bf16"])))
-    parser.add_argument("--release-id", dest="release_id", default="",
-                        help="release-YYYY.M.N; required, and the same on a --from-stage resume")
+    parser.add_argument("--release-id", dest="release_id", action="append", default=[],
+                        help="release-YYYY.M.N, or scope=release-YYYY.M.N when several scopes "
+                             "are named. Required, and the same on a --from-stage resume")
     parser.add_argument("--skip-quantize", dest="skip_quantize", action="store_true")
     parser.add_argument("--keep-staging", dest="keep_staging", action="store_true")
     parser.add_argument("--from-blob", dest="from_blob", action="store_true",
@@ -161,11 +220,14 @@ def _add_package_flags(parser: argparse.ArgumentParser, *, version_required: boo
         # flags and adding them twice is an argparse conflict.
         #
         # `finetune` decides which models get built; `package` publishes their
-        # locations. Without these, a standalone `package` fell back to
-        # foundation_only=False and all three doc types however finetune had
-        # run, writing Blob prefixes for adapters and merged models that were
-        # never built — an empty prefix that later reads as a published model.
-        parser.add_argument("--foundation-only", dest="foundation_only", action="store_true",
+        # locations. Without these, a standalone `package` published whatever the
+        # defaults said rather than what finetune actually produced, writing Blob
+        # prefixes for adapters and merged models that were never built — an
+        # empty prefix that later reads as a published model. `--scope` is the
+        # sharpest case: packaging the wrong scope publishes another scope's
+        # paths under this one's release.
+        parser.add_argument("--scope", dest="scopes", action="append", default=[],
+                            choices=sorted(load_scopes()),
                             help="must match the finetune run that produced this version")
         parser.add_argument("--doc-types", dest="doc_types", nargs="+",
                             default=list(ACTIVE_DOC_TYPES),
@@ -230,8 +292,7 @@ def main(argv: Iterable[str] | None = None) -> int:
     if args.command == "all" and not getattr(args, "version", None):
         args.version = args.out_version
 
-    ctx = build_context(args)
-    report = run_command(args.command, ctx, from_stage=getattr(args, "from_stage", None))
+    report = run_scopes(args, args.command)
 
     print(report.render())
     print(json.dumps(report.as_dict(), indent=2, ensure_ascii=False))
