@@ -289,32 +289,18 @@ def schema_selectors() -> list[tuple[str, str | None, str | None]]:
     return out
 
 
-def enum_vocabulary(
+def schema_text(
     doc_type: str, acord_form: str | None = None, lob: str | list[str] | None = None
-) -> set[str]:
-    """Display forms of every enum value in a schema — ``{"general liability", ...}``.
+) -> str:
+    """The schema as the prompt embeds it — titles, descriptions, enum values.
 
-    An enum value reaches the prompt by construction: the model is shown the
-    values it must choose between. So a phrase that is also an alias cannot have
-    been "leaked" there by a field description — it was always going to be
-    present. Used by the no-alias-leak guards to tell domain vocabulary apart
-    from a label table, which is the thing those guards exist to keep out.
+    Anything here reaches the model by construction: the prompt shows it the
+    schema it must fill. So a phrase the schema itself uses cannot have been
+    "leaked" by the alias registry, which is what the no-alias-leak guards exist
+    to catch. A phrase in neither ("Pol. No.", "Underwritten By") appearing in a
+    prompt means someone pasted the registry in.
     """
-    found: set[str] = set()
-
-    def walk(node: Any) -> None:
-        if isinstance(node, dict):
-            for value in node.get("enum") or []:
-                if isinstance(value, str):
-                    found.add(value.replace("_", " ").casefold())
-            for value in node.values():
-                walk(value)
-        elif isinstance(node, list):
-            for value in node:
-                walk(value)
-
-    walk(resolved_schema(doc_type, acord_form, lob))
-    return found
+    return json.dumps(resolved_schema(doc_type, acord_form, lob), ensure_ascii=False)
 
 
 def all_schema_keys() -> list[tuple[str, str | None]]:

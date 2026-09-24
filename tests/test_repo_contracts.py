@@ -607,11 +607,11 @@ def test_the_prompt_files_carry_no_alias_strings():
     from common import aliases, schemas
     from testing.render_prompts import PROMPTS_DIR
 
-    # Enum values reach the prompt by construction; same rule as
-    # tests/test_schema_contract.py.
-    vocabulary: set[str] = set()
-    for dt, form in schemas.all_schema_keys():
-        vocabulary |= schemas.enum_vocabulary(dt, form)
+    # Whatever the schemas themselves say reaches the prompts by construction;
+    # same rule as tests/test_schema_contract.py.
+    embedded = "".join(
+        schemas.schema_text(dt, form) for dt, form in schemas.all_schema_keys()
+    )
 
     for path in sorted(PROMPTS_DIR.glob("*.prompt.txt")):
         text = path.read_text(encoding="utf-8")
@@ -621,7 +621,7 @@ def test_the_prompt_files_carry_no_alias_strings():
                     # A one-word alias collides with ordinary prose ("Date",
                     # "Insured"); multi-word aliases are unambiguous. Same rule
                     # as test_prompt_carries_descriptions_but_no_alias_strings.
-                    if " " not in alias or alias.casefold() in vocabulary:
+                    if " " not in alias or alias in embedded:
                         continue
                     assert alias not in text, (
                         f"{path.name} contains the alias {alias!r} for {field_path}"

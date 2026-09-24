@@ -1,6 +1,15 @@
 """Build ``schemas/aliases/policy.aliases.json`` from the canonical schemas and
 the original documents.
 
+**One entry per canonical field.** The schemas mention the same field in many
+places — ``effective_date`` sits under the policy, under each coverage part,
+under every scheduled underlying policy — and a registry keyed by location
+repeats the field once per place. Those copies then disagree: the entry under
+the policy knew ten labels for an effective date while the one under a coverage
+part knew two, so the same printed label counted as an alias in one place and
+not in another. Keyed by the field itself, there is one list and it cannot
+disagree with itself. ``occurs_at`` records where the field is used.
+
 Two sources, doing different jobs:
 
 * **The canonical schemas** (``configs/canonical schema/policy_check/``) carry
@@ -9,16 +18,16 @@ Two sources, doing different jobs:
 * **The original documents** (``training data/original data/``) say which of
   those labels real pages actually print, and how often. An alias with no
   document evidence is either a phrasing this book of business does not use, or
-  a mistake in the schema; either way a reader should be able to tell it apart
-  from one seen on sixty pages.
+  a mistake in the schema; a reader should be able to tell it apart from one
+  seen on four hundred pages.
 
-**Aliases are UNIFIED across lines of business.** The canonical schemas nest
-line-specific fields under a per-LOB block (``homeowners.dwelling``,
-``auto.vehicles``), which would split one field into thirty-four. The block
-prefix is stripped, so ``discounts[].discount_name`` is one entry carrying every
-phrasing any line prints for it. A label means the same thing whichever policy
-prints it, and splitting them would mean the same discount name had to be
-learned once per line.
+**A field's own name counts as a candidate label, but only when a document
+prints it.** ``expiration_date`` is printed as "Expiration Date" on 325 of these
+documents, so that is a fact rather than a guess — while a field simply called
+``name`` or ``date`` is skipped, because the word appears on every page and says
+nothing about which field it labels. Attaching "Name" to the twenty fields
+called ``name`` would destroy the one thing this file is for: telling fields
+apart.
 
 **What this registry is, and is not.** It records which printed phrasings map to
 which canonical field, so corpus coverage can be measured and evaluation can
@@ -26,11 +35,6 @@ report per alias. It is **never rendered into a prompt and never consulted at
 inference** (master §1.4, enforced by ``tests/test_no_runtime_aliases.py``): an
 alias table at inference is a lookup pretending to be comprehension, and it fails
 silently on the first phrasing nobody listed.
-
-**It never invents an alias.** Every string here appears in a canonical schema or
-in the hand-written seed below. Document mining only counts what is already
-listed — adding a discovered string automatically would be the registry learning
-from a guess.
 
 Run after a schema change, or when documents are added::
 
@@ -60,30 +64,30 @@ MIN_EVIDENCE_LENGTH = 4
 
 #: Hand-written aliases, kept because the canonical schemas carry aliases for the
 #: SPECIFIC fields (prior_policy_number, certificate_number) and none at all for
-#: the obvious ones — policy_number, carrier.company_name and
-#: producer.agency_name have no ``fideon:aliases`` in any schema. Dropping these
-#: would leave the fields every document prints with no phrasings recorded.
+#: the obvious ones — policy_number, company_name and agency_name have no
+#: ``fideon:aliases`` in any schema. Dropping these would leave the fields every
+#: document prints with no phrasings recorded.
 SEED_ALIASES: dict[str, list[str]] = {
-    "named_insured.primary_name": [
+    "primary_name": [
         "Insured Name", "Named Insured", "Insured", "Applicant",
         "Name of Applicant", "Applicant Name", "Name of Insured", "Name Insured",
     ],
-    "policy.policy_number": [
+    "policy_number": [
         "Policy Number", "Policy No.", "Policy #", "Policy No", "Pol. No.",
     ],
-    "carrier.company_name": [
+    "company_name": [
         "Carrier", "Insurer", "Insurance Company", "Underwritten By", "Company",
     ],
-    "producer.agency_name": [
+    "agency_name": [
         "Producer", "Agency", "Broker", "Agent", "Producer Name",
     ],
-    "policy.effective_date": [
+    "effective_date": [
         "Effective Date", "Effective", "Policy Effective Date", "Inception Date", "From",
     ],
-    "policy.expiration_date": [
+    "expiration_date": [
         "Expiration Date", "Expiration", "Policy Expiration Date", "Expiry Date", "To",
     ],
-    "premium.total_policy_premium": [
+    "total_policy_premium": [
         "Total Premium", "Policy Premium", "Total Policy Premium", "Premium",
     ],
 }
@@ -91,47 +95,44 @@ SEED_ALIASES: dict[str, list[str]] = {
 #: Hand-written, because a schema cannot state that two labels look alike and
 #: mean different things — the distinction the misattribution metric scores.
 CONFUSABLES: dict[str, list[str]] = {
-    "named_insured.primary_name": [
+    "primary_name": [
         "Certificate Holder", "Producer", "Agency", "Additional Insured",
         "Loss Payee", "Mortgagee", "Carrier", "Insurer",
     ],
-    "policy.policy_number": [
+    "policy_number": [
         "Quote Number", "Binder Number", "Claim Number", "Submission Number",
         "Certificate Number",
     ],
-    "carrier.company_name": [
+    "company_name": [
         "Producer", "Agency", "Broker", "Named Insured", "Administrator",
     ],
-    "producer.agency_name": [
+    "agency_name": [
         "Carrier", "Insurer", "Named Insured", "Underwriter",
     ],
-    "policy.effective_date": [
+    "effective_date": [
         "Issue Date", "Date Printed", "Expiration Date", "Bind Date",
     ],
-    "policy.expiration_date": [
+    "expiration_date": [
         "Effective Date", "Cancellation Date", "Renewal Date",
     ],
-    "premium.total_policy_premium": [
+    "total_policy_premium": [
         "Deposit Premium", "Minimum Premium", "Estimated Premium",
         "Premium by Coverage", "Taxes and Fees",
     ],
 }
 
-#: The repo's own policy schema still names these fields flatly, and three
+#: The repo's own policy schema names these fields differently, and three
 #: consumers look them up that way: the confusable co-occurrence count
 #: (corpus_manifest), the provenance check that refuses a label naming a
 #: confusable (export_golden_labels), and the review tool's "NEVER take from"
-#: instruction. Until the canonical schemas ARE the repo's schemas, both keyings
-#: must be present — a registry serving only the future one silently empties all
-#: three, which the test suite catches.
+#: instruction. Until the canonical schemas ARE the repo's schemas, both namings
+#: must be present — a registry serving only the canonical one silently empties
+#: all three, which the test suite catches.
 LEGACY_KEYS: dict[str, str] = {
-    "insured_name": "named_insured.primary_name",
-    "policy_number": "policy.policy_number",
-    "carrier": "carrier.company_name",
-    "producer": "producer.agency_name",
-    "effective_date": "policy.effective_date",
-    "expiration_date": "policy.expiration_date",
-    "total_premium": "premium.total_policy_premium",
+    "insured_name": "primary_name",
+    "carrier": "company_name",
+    "producer": "agency_name",
+    "total_premium": "total_policy_premium",
 }
 
 _WS = re.compile(r"\s+")
@@ -142,29 +143,56 @@ def normalise(text: str) -> str:
     return _WS.sub(" ", text.replace(" ", " ")).strip().casefold()
 
 
-def walk(node: Any, path: str = "") -> Iterator[tuple[str, list[str]]]:
-    """Yield ``(field_path, aliases)`` for every node carrying ``fideon:aliases``."""
+def field_name(field_path: str) -> str:
+    """The field itself, without where it sits: ``policy.effective_date`` -> ``effective_date``."""
+    return field_path.split(".")[-1].replace("[]", "")
+
+
+def own_label(name: str) -> str | None:
+    """The printed label a field's own name suggests, or ``None``.
+
+    Multi-word names only. A field called ``name`` or ``date`` shares its word
+    with every page in the corpus, so matching it says nothing about which field
+    a page labels — and adding it would attach one string to twenty fields.
+    """
+    words = [w for w in name.split("_") if w]
+    if len(words) < 2:
+        return None
+    return " ".join(w.capitalize() for w in words)
+
+
+def walk(node: Any, path: str = "") -> Iterator[tuple[str, str, list[str]]]:
+    """Yield ``(field_path, kind, aliases)`` for every field in a schema."""
     if not isinstance(node, dict):
         return
-    aliases = node.get("fideon:aliases")
-    if aliases:
-        yield path, list(aliases)
-    for key, value in (node.get("properties") or {}).items():
+    aliases = list(node.get("fideon:aliases") or [])
+
+    if node.get("$ref", "").endswith("FieldValue"):
+        yield path, "leaf", aliases
+        return
+    if node.get("type") == "array":
+        items = node.get("items")
+        if isinstance(items, dict):
+            yield path, "table", aliases
+            yield from walk(items, f"{path}[]")
+        return
+
+    properties = node.get("properties") or {}
+    if path:
+        yield path, "section" if properties else "leaf", aliases
+    for key, value in properties.items():
         yield from walk(value, f"{path}.{key}" if path else key)
-    items = node.get("items")
-    if isinstance(items, dict):
-        yield from walk(items, f"{path}[]")
 
 
 def unify(field_path: str, line_block: str | None) -> str:
-    """Strip the per-LOB block, so one field is one entry across every line."""
+    """Strip the per-LOB block, so one path is one path across every line."""
     if line_block and field_path.startswith(f"{line_block}."):
         return field_path[len(line_block) + 1:]
     return field_path
 
 
 def collect_schemas() -> tuple[dict[str, dict[str, Any]], dict[str, str]]:
-    """Every aliased field across every canonical schema, unified by field path."""
+    """Every canonical field, keyed by the field itself rather than by location."""
     fields: dict[str, dict[str, Any]] = {}
     versions: dict[str, str] = {}
 
@@ -174,16 +202,27 @@ def collect_schemas() -> tuple[dict[str, dict[str, Any]], dict[str, str]]:
         versions[path.stem] = str(source.get("version", "unknown"))
         line_block = source.get("line_specific_block")
 
-        for field_path, aliases in walk(schema):
+        for field_path, kind, aliases in walk(schema):
             unified = unify(field_path, line_block)
+            name = field_name(unified)
+            if not name:
+                continue
             entry = fields.setdefault(
-                unified, {"aliases": set(), "schemas": set(), "seeded": False}
+                name,
+                {"aliases": set(), "paths": set(), "kinds": set(), "schemas": set(),
+                 "seeded": False},
             )
             entry["aliases"].update(a.strip() for a in aliases if a and a.strip())
+            entry["paths"].add(unified)
+            entry["kinds"].add(kind)
             entry["schemas"].add(path.stem)
 
-    for field_path, aliases in SEED_ALIASES.items():
-        entry = fields.setdefault(field_path, {"aliases": set(), "schemas": set(), "seeded": False})
+    for name, aliases in SEED_ALIASES.items():
+        entry = fields.setdefault(
+            name,
+            {"aliases": set(), "paths": set(), "kinds": {"leaf"}, "schemas": set(),
+             "seeded": False},
+        )
         entry["aliases"].update(aliases)
         entry["seeded"] = True
     return fields, versions
@@ -219,24 +258,35 @@ def read_documents() -> list[str]:
     return documents
 
 
-def mine(fields: dict[str, dict[str, Any]], documents: list[str]) -> dict[str, int]:
-    """How many original documents print each alias."""
-    evidence: dict[str, int] = {}
-    wanted = sorted({a for entry in fields.values() for a in entry["aliases"]})
-
-    for alias in wanted:
-        if len(alias) < MIN_EVIDENCE_LENGTH:
+def count_in(documents: list[str], phrases: set[str]) -> dict[str, int]:
+    """How many documents print each phrase."""
+    counts: dict[str, int] = {}
+    for phrase in sorted(phrases):
+        if len(phrase) < MIN_EVIDENCE_LENGTH:
             continue
-        needle = normalise(alias)
+        needle = normalise(phrase)
         seen = sum(1 for text in documents if needle in text)
         if seen:
-            evidence[alias] = seen
-    return evidence
+            counts[phrase] = seen
+    return counts
 
 
 def render(documents: list[str] | None) -> dict[str, Any]:
     fields, versions = collect_schemas()
-    evidence = mine(fields, documents) if documents else {}
+
+    # A field's own name is a candidate label; the documents decide. Added before
+    # evidence is attached, so a kept candidate carries its count like any other.
+    candidates = {
+        name: label for name in fields if (label := own_label(name))
+        and normalise(label) not in {normalise(a) for a in fields[name]["aliases"]}
+    }
+    evidence: dict[str, int] = {}
+    if documents:
+        wanted = {a for entry in fields.values() for a in entry["aliases"]}
+        evidence = count_in(documents, wanted | set(candidates.values()))
+        for name, label in candidates.items():
+            if label in evidence:
+                fields[name]["aliases"].add(label)
 
     for legacy, canonical in LEGACY_KEYS.items():
         if canonical in fields:
@@ -246,38 +296,43 @@ def render(documents: list[str] | None) -> dict[str, Any]:
         "$comment": (
             "DERIVED by scripts/derive_aliases_from_canonical.py from the canonical schemas "
             "and the original documents - do not hand-edit; fix the source and regenerate. "
-            "Aliases are UNIFIED across lines of business: the per-LOB block is stripped, so a "
-            "field is one entry carrying every phrasing any line prints for it. "
-            "`documents_per_alias` is HOW MANY original documents print that alias - not which, "
-            "since that would put client document paths in the repo. An alias with none is a "
-            "phrasing this book does not use, or a mistake in the schema. Confusables are hand-written, because "
-            "a schema cannot state that two labels look alike and mean different things. "
-            "NEVER rendered into a prompt and NEVER consulted at inference (master 1.4)."
+            "ONE ENTRY PER CANONICAL FIELD, not per location: the schemas mention "
+            "effective_date in ten places, and ten copies of one field disagreed about which "
+            "labels were its own. `occurs_at` says where the field is used. Aliases are unified "
+            "across lines of business. `documents_per_alias` is HOW MANY original documents "
+            "print that alias - not which, since that would put client document paths in the "
+            "repo. An alias with none is a phrasing this book does not use, or a mistake in the "
+            "schema. Confusables are hand-written, because a schema cannot state that two labels "
+            "look alike and mean different things. NEVER rendered into a prompt and NEVER "
+            "consulted at inference (master 1.4)."
         ),
         "$doc_type": "policy",
         "$source": {
             "kind": "canonical_schema+documents",
+            "keyed_by": "canonical field name",
             "schema_versions": versions,
             "documents_scanned": len(documents or []),
             "field_count": len(fields),
         },
     }
 
-    for field_path in sorted(fields):
-        entry = fields[field_path]
+    for name in sorted(fields):
+        entry = fields[name]
         aliases = sorted(entry["aliases"])
         attested = {a: evidence[a] for a in aliases if a in evidence}
+        paths = sorted(entry["paths"])
 
         rendered: dict[str, Any] = {
             "aliases": aliases,
             "confusables": (
-                CONFUSABLES.get(field_path)
+                CONFUSABLES.get(name)
                 or CONFUSABLES.get(str(entry.get("alias_of") or ""), [])
             ),
             "hand_seeded": bool(entry.get("seeded")),
-            # Which canonical schemas declare this field. One schema means a
-            # line-specific value; thirty means a header field, and the
-            # difference matters when reading a coverage report.
+            "kinds": sorted(entry["kinds"]),
+            # Where this field is used. `premium` sits in seventy-four places;
+            # one entry with the list is the point of keying by field.
+            "occurs_at": paths,
             "schemas": sorted(entry["schemas"]),
         }
         if documents:
@@ -287,15 +342,13 @@ def render(documents: list[str] | None) -> dict[str, Any]:
                     a for a in aliases
                     if a not in attested and len(a) >= MIN_EVIDENCE_LENGTH
                 ],
-                # Counts only: how many documents print this label. Which ones is
-                # not recorded — it would put client document paths in the repo.
                 "documents_per_alias": {
                     a: attested[a] for a in sorted(attested, key=lambda x: -attested[x])
                 },
             }
         if entry.get("alias_of"):
-            rendered["canonical_path"] = entry["alias_of"]
-        registry[field_path] = rendered
+            rendered["canonical_field"] = entry["alias_of"]
+        registry[name] = rendered
     return registry
 
 
@@ -303,25 +356,24 @@ def report(registry: dict[str, Any]) -> None:
     """What a reader should know before trusting this file."""
     fields = {k: v for k, v in registry.items() if not k.startswith("$")}
     aliases = {a for v in fields.values() for a in v["aliases"]}
-    attested = {
-        a for v in fields.values()
-        for a in (v.get("evidence", {}).get("documents_per_alias") or {})
-    }
+    with_aliases = sum(1 for v in fields.values() if v["aliases"])
+    attested = {a for v in fields.values() for a in (v.get("evidence", {}).get("documents_per_alias") or {})}
     scanned = registry["$source"]["documents_scanned"]
 
+    print(
+        f"{len(fields)} field(s), {with_aliases} with at least one alias, "
+        f"{len(aliases)} distinct alias(es)"
+    )
     if not scanned:
-        print(f"{len(fields)} field(s), {len(aliases)} alias(es); documents not mined")
+        print("documents not mined; aliases carry no evidence")
         return
 
     unattested = sorted(a for a in aliases - attested if len(a) >= MIN_EVIDENCE_LENGTH)
-    print(
-        f"{len(fields)} field(s), {len(aliases)} alias(es); "
-        f"{len(attested)} attested in {scanned} document(s), {len(unattested)} unattested"
-    )
+    print(f"{len(attested)} attested in {scanned} document(s), {len(unattested)} unattested")
     if unattested:
         print("\nUnattested - no original document prints these. Either this book does not use")
-        print("the phrasing, or the schema is wrong. First 25:")
-        for alias in unattested[:25]:
+        print("the phrasing, or the schema is wrong. First 20:")
+        for alias in unattested[:20]:
             print(f"  {alias!r}")
 
 
