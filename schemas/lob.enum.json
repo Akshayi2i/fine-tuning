@@ -11,9 +11,17 @@
         "general_liability",
         "commercial_auto",
         "property",
-        "umbrella"
+        "umbrella",
+        "homeowners",
+        "personal_auto",
+        "dwelling_fire",
+        "ocean_marine",
+        "classic_auto",
+        "motorcycle",
+        "recreational_vehicle",
+        "personal_umbrella"
       ],
-      "description": "One coverage line. Infer it from the coverage described, the policy number prefix, or the form used - never from the carrier or the insured's industry."
+      "description": "One coverage line. Infer it from the coverage described, the policy number prefix, or the form used - never from the carrier or the insured's industry. The first five are commercial lines; the rest are personal lines."
     },
     "line_of_business": {
       "type": "array",
@@ -24,7 +32,15 @@
           "general_liability",
           "commercial_auto",
           "property",
-          "umbrella"
+          "umbrella",
+          "homeowners",
+          "personal_auto",
+          "dwelling_fire",
+          "ocean_marine",
+          "classic_auto",
+          "motorcycle",
+          "recreational_vehicle",
+          "personal_umbrella"
         ],
         "description": "One supported coverage line."
       },

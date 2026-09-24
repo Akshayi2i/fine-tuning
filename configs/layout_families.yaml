@@ -1,0 +1,54 @@
+# Layout families - which LOBs share a visual grammar (SPEC_09 2.1).
+#
+# WHY THIS EXISTS. A Workers' Comp declarations page is tabular (class codes,
+# state schedules, rate tables). A D&O policy is dense prose (manuscript wording,
+# claims-made triggers). A homeowners declarations page is a property schedule
+# with a coverage A/B/C/D table. One adapter across all of them produces a
+# mediocre average, or forgets the minority layouts outright.
+#
+# The grouping is by HOW THE PAGE LOOKS, not by insurance taxonomy: Commercial
+# Auto sits with Workers' Comp because both are tabular schedules, not because
+# they are related products.
+#
+# ONE TABLE, TWO READERS. Training uses it to decide which documents a family's
+# adapter trains on; serving uses it to decide which adapter a document reaches.
+# Two copies of this mapping would eventually disagree, and the symptom would be
+# a document extracted by an adapter that never saw its layout - which reads as a
+# bad extraction and nothing else.
+#
+# A LOB in no family cannot reach a family adapter. That is deliberate: it is
+# served by the generalist `policy` adapter, which trained on everything.
+
+families:
+
+  # The first family being trained. Consumer declarations pages: coverage
+  # A/B/C/D tables, vehicle and driver schedules, ACORD 80/84/90.
+  personal_lines:
+    title: Personal Lines
+    lobs:
+      - homeowners
+      - personal_auto
+      - dwelling_fire
+      - ocean_marine           # watercraft / boat
+      - classic_auto
+      - motorcycle
+      - recreational_vehicle
+      - personal_umbrella
+
+  # Declared now so the shape is settled before the data arrives. Nothing trains
+  # them until a scope names them.
+  casualty_fleet:
+    title: Casualty and Fleet
+    lobs: [general_liability, commercial_auto, workers_comp, umbrella]
+
+  property_pkg:
+    title: Property and Package
+    lobs: [property]
+
+  exec_specialty:
+    title: Executive and Specialty
+    lobs: []                   # do, eo, cyber, epli, crime, bonds - not yet in the LOB enum
+
+  benefits_misc:
+    title: Benefits and Miscellaneous
+    lobs: []                   # life, group medical/accident - not yet in the LOB enum
