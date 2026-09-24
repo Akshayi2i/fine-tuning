@@ -1,32 +1,3336 @@
 {
-  "$comment": "SEED registry - hand-written starting point, to be REPLACED by data_pipeline/labeling/derive_aliases.py once labeled documents exist (SPEC_04 section 3). Derived entries carry evidence (document counts, matched layout pattern, example source_ids); these seeds carry none. NEVER rendered into a prompt and NEVER consulted at inference (master 1.4).",
+  "$comment": "DERIVED from the canonical LOB schemas by scripts/derive_aliases_from_canonical.py — do not hand-edit; fix the schema and regenerate. Aliases are the labels real forms print for a field. Confusables are hand-written, because a schema cannot state that two labels look alike and mean different things. NO document evidence: these say a form prints this somewhere, not that N documents in this corpus do — that comes from data_pipeline/labeling/derive_aliases.py once labeled documents exist (SPEC_04 §3). NEVER rendered into a prompt and NEVER consulted at inference (master §1.4).",
   "$doc_type": "policy",
-  "insured_name": {
-    "aliases": ["Insured Name", "Named Insured", "Insured", "Applicant", "Name of Applicant", "Applicant Name", "Name of Insured", "Name Insured"],
-    "confusables": ["Certificate Holder", "Producer", "Agency", "Additional Insured", "Loss Payee", "Mortgagee", "Carrier", "Insurer"]
+  "$source": {
+    "kind": "canonical_schema",
+    "lobs": {
+      "homeowners": "1.4.0",
+      "personal_auto": "1.4.0",
+      "dwelling_fire": "1.4.0",
+      "ocean_marine": "3.0.0",
+      "classic_auto": "3.0.0",
+      "motorcycle": "1.4.0",
+      "recreational_vehicle": "1.4.0",
+      "personal_umbrella": "3.0.0"
+    },
+    "field_count": 216
   },
-  "policy_number": {
-    "aliases": ["Policy Number", "Policy No.", "Policy #", "Policy No", "Pol. No."],
-    "confusables": ["Quote Number", "Binder Number", "Claim Number", "Submission Number", "Certificate Number"]
+  "auto.additional_coverages[].deductible_amount": {
+    "aliases": [
+      "ITEM IV. DEDUCTIBLE"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "personal_auto"
+    ]
+  },
+  "auto.additional_coverages[].valuation_basis": {
+    "aliases": [
+      "Business Personal Property - Replacement Cost"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "personal_auto"
+    ]
+  },
+  "auto.attached_trailer_or_coupler.coupler_combination_indicator": {
+    "aliases": [
+      "COUPLER (COMBO)"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "personal_auto"
+    ]
+  },
+  "auto.discounts[].discount_name": {
+    "aliases": [
+      "ABS Discount",
+      "ANTI-LOCK BRAKES",
+      "ANTI-THEFT DEVICE",
+      "Accident Prevention Course Discount",
+      "Anti-Lock Braking System (ABS) Discount",
+      "CUSTOMIZING",
+      "DAYTIME RUNNING LAMPS",
+      "HOME OWNERSHIP",
+      "Multi-Car Discount",
+      "Multi-Vehicle Discount",
+      "NEW CAR DISCOUNT",
+      "PASSIVE RESTRAINT"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "personal_auto"
+    ]
+  },
+  "auto.liability_coverages.bodily_injury_split_limits": {
+    "aliases": [
+      "BODILY INJURY SPLIT LIMITS"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "personal_auto"
+    ]
+  },
+  "auto.liability_coverages.medical_payments_limit": {
+    "aliases": [
+      "Medical Payments",
+      "Medical Payments Limit",
+      "Medical Payments Limit (any one person)"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "personal_auto"
+    ]
+  },
+  "auto.no_fault_benefits.additional_pip_limit": {
+    "aliases": [
+      "Additional PIP",
+      "Increased PIP"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "personal_auto"
+    ]
+  },
+  "auto.no_fault_benefits.mandatory_pedestrian_pip_limit": {
+    "aliases": [
+      "Mandatory Pedestrian Personal Injury Protection"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "personal_auto"
+    ]
+  },
+  "auto.physical_damage_coverages.comprehensive_deductible": {
+    "aliases": [
+      "OTHER THAN COLL",
+      "Other Than Collision",
+      "Other Than Collision Loss"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "personal_auto"
+    ]
+  },
+  "auto.physical_damage_coverages.guaranteed_value_indicator": {
+    "aliases": [
+      "Guaranteed Value"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "personal_auto"
+    ]
+  },
+  "auto.physical_damage_coverages.transportation_expenses_limit": {
+    "aliases": [
+      "TRANSPORTATION EXP",
+      "TRAVEL - TRANSPORTATION EXPENSES (FAMILY PLUS)"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "personal_auto"
+    ]
+  },
+  "auto.physical_damage_coverages.trip_interruption_limit": {
+    "aliases": [
+      "TRAVEL - TRIP INTERRUPTION (FAMILY PLUS)",
+      "TRIP INTERRUPTION"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "personal_auto"
+    ]
+  },
+  "auto.travel_package.transportation_expenses_limit": {
+    "aliases": [
+      "TRANSPORTATION EXP",
+      "TRAVEL - TRANSPORTATION EXPENSES (FAMILY PLUS)"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "personal_auto"
+    ]
+  },
+  "auto.travel_package.trip_interruption_limit": {
+    "aliases": [
+      "TRAVEL - TRIP INTERRUPTION (FAMILY PLUS)",
+      "TRIP INTERRUPTION"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "personal_auto"
+    ]
+  },
+  "auto.vehicles[].coverages[].deductible_amount": {
+    "aliases": [
+      "ITEM IV. DEDUCTIBLE"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "personal_auto"
+    ]
+  },
+  "auto.vehicles[].coverages[].valuation_basis": {
+    "aliases": [
+      "Business Personal Property - Replacement Cost"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "personal_auto"
+    ]
+  },
+  "auto.vehicles[].garaging_address": {
+    "aliases": [
+      "Garaging Zip Code"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "personal_auto"
+    ]
+  },
+  "auto.vehicles[].vin": {
+    "aliases": [
+      "Identification Number",
+      "VEHICLENUMBER",
+      "Vehicle ID Number"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "personal_auto"
+    ]
+  },
+  "billing.installments": {
+    "aliases": [
+      "Pay initial installment"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "classic_auto",
+      "dwelling_fire",
+      "homeowners",
+      "motorcycle",
+      "ocean_marine",
+      "personal_auto",
+      "personal_umbrella",
+      "recreational_vehicle"
+    ]
+  },
+  "billing.payment_frequency": {
+    "aliases": [
+      "Monthly (Pre-authorized checking)",
+      "Quarterly",
+      "Semi-annual"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "classic_auto",
+      "dwelling_fire",
+      "homeowners",
+      "motorcycle",
+      "ocean_marine",
+      "personal_auto",
+      "personal_umbrella",
+      "recreational_vehicle"
+    ]
+  },
+  "billing.payment_method": {
+    "aliases": [
+      "ELECTRONIC FUND",
+      "Electronic Fund Transfer",
+      "Pay by Check",
+      "Repetitive EFT"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "classic_auto",
+      "dwelling_fire",
+      "homeowners",
+      "motorcycle",
+      "ocean_marine",
+      "personal_auto",
+      "personal_umbrella",
+      "recreational_vehicle"
+    ]
+  },
+  "billing.payment_plan": {
+    "aliases": [
+      "Pay Plan",
+      "Your Policy Pay Plan is"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "classic_auto",
+      "dwelling_fire",
+      "homeowners",
+      "motorcycle",
+      "ocean_marine",
+      "personal_auto",
+      "personal_umbrella",
+      "recreational_vehicle"
+    ]
   },
   "carrier": {
-    "aliases": ["Carrier", "Insurer", "Insurance Company", "Underwritten By", "Company"],
-    "confusables": ["Producer", "Agency", "Broker", "Named Insured"]
+    "aliases": [
+      "Carrier",
+      "Company",
+      "Insurance Company",
+      "Insurer",
+      "Underwritten By"
+    ],
+    "confusables": [
+      "Producer",
+      "Agency",
+      "Broker",
+      "Named Insured",
+      "Administrator"
+    ],
+    "hand_seeded": true,
+    "lobs": [
+      "classic_auto",
+      "dwelling_fire",
+      "homeowners",
+      "motorcycle",
+      "ocean_marine",
+      "personal_auto",
+      "personal_umbrella",
+      "recreational_vehicle"
+    ],
+    "canonical_path": "carrier.company_name"
   },
-  "producer": {
-    "aliases": ["Producer", "Agency", "Broker", "Agent", "Producer Name"],
-    "confusables": ["Carrier", "Insurer", "Named Insured", "Certificate Holder"]
+  "carrier.company_name": {
+    "aliases": [
+      "Carrier",
+      "Company",
+      "Insurance Company",
+      "Insurer",
+      "Underwritten By"
+    ],
+    "confusables": [
+      "Producer",
+      "Agency",
+      "Broker",
+      "Named Insured",
+      "Administrator"
+    ],
+    "hand_seeded": true,
+    "lobs": [
+      "classic_auto",
+      "dwelling_fire",
+      "homeowners",
+      "motorcycle",
+      "ocean_marine",
+      "personal_auto",
+      "personal_umbrella",
+      "recreational_vehicle"
+    ]
+  },
+  "carrier.company_structure": {
+    "aliases": [
+      "A Mutual Company",
+      "A Reciprocal",
+      "A Stock Corporation",
+      "Mutual Company",
+      "Stock Company"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "classic_auto",
+      "dwelling_fire",
+      "homeowners",
+      "motorcycle",
+      "ocean_marine",
+      "personal_auto",
+      "personal_umbrella",
+      "recreational_vehicle"
+    ]
+  },
+  "carrier.contact.phone": {
+    "aliases": [
+      "Home",
+      "Mobile",
+      "Work"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "classic_auto",
+      "dwelling_fire",
+      "homeowners",
+      "motorcycle",
+      "ocean_marine",
+      "personal_auto",
+      "personal_umbrella",
+      "recreational_vehicle"
+    ]
+  },
+  "claim_reporting.claim_reporting_instructions": {
+    "aliases": [
+      "Call (First Notice of Loss)",
+      "Report a Claim",
+      "Send Claims related notices to"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "classic_auto",
+      "dwelling_fire",
+      "homeowners",
+      "motorcycle",
+      "ocean_marine",
+      "personal_auto",
+      "personal_umbrella",
+      "recreational_vehicle"
+    ]
+  },
+  "claim_reporting.claims_phone": {
+    "aliases": [
+      "CUSTOMER CARE",
+      "Customer Service",
+      "Report a Claim",
+      "To Report a Claim"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "classic_auto",
+      "dwelling_fire",
+      "homeowners",
+      "motorcycle",
+      "ocean_marine",
+      "personal_auto",
+      "personal_umbrella",
+      "recreational_vehicle"
+    ]
+  },
+  "classic_auto.liability_coverages.medical_payments_limit": {
+    "aliases": [
+      "Medical Payments",
+      "Medical Payments Limit",
+      "Medical Payments Limit (any one person)"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "classic_auto"
+    ]
+  },
+  "classic_auto.physical_damage_coverages.comprehensive_deductible": {
+    "aliases": [
+      "OTHER THAN COLL",
+      "Other Than Collision",
+      "Other Than Collision Loss"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "classic_auto"
+    ]
+  },
+  "classic_auto.physical_damage_coverages.trip_interruption_limit": {
+    "aliases": [
+      "TRAVEL - TRIP INTERRUPTION (FAMILY PLUS)",
+      "TRIP INTERRUPTION"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "classic_auto"
+    ]
+  },
+  "classic_auto.vehicles[].coverages[].deductible_amount": {
+    "aliases": [
+      "ITEM IV. DEDUCTIBLE"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "classic_auto"
+    ]
+  },
+  "classic_auto.vehicles[].coverages[].premium": {
+    "aliases": [
+      "Policy Premium",
+      "Premium Summary",
+      "Total Premium"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "classic_auto"
+    ]
+  },
+  "classic_auto.vehicles[].coverages[].valuation_basis": {
+    "aliases": [
+      "Business Personal Property - Replacement Cost"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "classic_auto"
+    ]
+  },
+  "classic_auto.vehicles[].guaranteed_value_indicator": {
+    "aliases": [
+      "Guaranteed Value"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "classic_auto"
+    ]
+  },
+  "classic_auto.vehicles[].premium": {
+    "aliases": [
+      "Policy Premium",
+      "Premium Summary",
+      "Total Premium"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "classic_auto"
+    ]
+  },
+  "classic_auto.vehicles[].valuation_basis": {
+    "aliases": [
+      "Business Personal Property - Replacement Cost"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "classic_auto"
+    ]
+  },
+  "classic_auto.vehicles[].vin": {
+    "aliases": [
+      "Identification Number",
+      "VEHICLENUMBER",
+      "Vehicle ID Number"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "classic_auto"
+    ]
+  },
+  "document.applicable_coverages": {
+    "aliases": [
+      "Applicable Coverage(s)",
+      "Other Coverage(s) As Specified"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "classic_auto",
+      "dwelling_fire",
+      "homeowners",
+      "motorcycle",
+      "ocean_marine",
+      "personal_auto",
+      "personal_umbrella",
+      "recreational_vehicle"
+    ]
+  },
+  "document.batch_number": {
+    "aliases": [
+      "Batch",
+      "Batch Number",
+      "Control Number"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "classic_auto",
+      "dwelling_fire",
+      "homeowners",
+      "motorcycle",
+      "ocean_marine",
+      "personal_auto",
+      "personal_umbrella",
+      "recreational_vehicle"
+    ]
+  },
+  "document.copy_type": {
+    "aliases": [
+      "Agent Copy",
+      "Company Copy",
+      "File Copy",
+      "Insured Copy",
+      "Office Copy"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "classic_auto",
+      "dwelling_fire",
+      "homeowners",
+      "motorcycle",
+      "ocean_marine",
+      "personal_auto",
+      "personal_umbrella",
+      "recreational_vehicle"
+    ]
+  },
+  "document.print_date": {
+    "aliases": [
+      "Date Printed",
+      "Date Summary Printed",
+      "Last Updated",
+      "PROCESSING DATE",
+      "Print Date",
+      "Printed On",
+      "Process Date"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "classic_auto",
+      "dwelling_fire",
+      "homeowners",
+      "motorcycle",
+      "ocean_marine",
+      "personal_auto",
+      "personal_umbrella",
+      "recreational_vehicle"
+    ]
+  },
+  "document.summary_of_changes": {
+    "aliases": [
+      "Changes",
+      "Summary of Changes",
+      "Summary of Your Changes"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "classic_auto",
+      "dwelling_fire",
+      "homeowners",
+      "motorcycle",
+      "ocean_marine",
+      "personal_auto",
+      "personal_umbrella",
+      "recreational_vehicle"
+    ]
+  },
+  "document.transaction_reason": {
+    "aliases": [
+      "Amended Date",
+      "Modifies Coverage(s) at Renewal",
+      "Reason(s) for Modification"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "classic_auto",
+      "dwelling_fire",
+      "homeowners",
+      "motorcycle",
+      "ocean_marine",
+      "personal_auto",
+      "personal_umbrella",
+      "recreational_vehicle"
+    ]
+  },
+  "document.transaction_type": {
+    "aliases": [
+      "Renewal Of",
+      "TRANS TYPE",
+      "Transaction Type"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "classic_auto",
+      "dwelling_fire",
+      "homeowners",
+      "motorcycle",
+      "ocean_marine",
+      "personal_auto",
+      "personal_umbrella",
+      "recreational_vehicle"
+    ]
+  },
+  "document_type_detail.acord_application.applicant.mailing_address": {
+    "aliases": [
+      "ATTN",
+      "Attn",
+      "Mail To"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "classic_auto",
+      "ocean_marine",
+      "personal_umbrella"
+    ]
+  },
+  "document_type_detail.acord_application.carrier": {
+    "aliases": [
+      "Carrier",
+      "Insurance Company",
+      "Insurer",
+      "Underwriting Company"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "classic_auto",
+      "ocean_marine",
+      "personal_umbrella"
+    ]
+  },
+  "document_type_detail.acord_application.locations": {
+    "aliases": [
+      "Insured Property Location",
+      "Location of Business",
+      "Locationof Business"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "classic_auto",
+      "ocean_marine",
+      "personal_umbrella"
+    ]
+  },
+  "document_type_detail.acord_application.prior_losses[].carrier": {
+    "aliases": [
+      "Carrier",
+      "Insurance Company",
+      "Insurer",
+      "Underwriting Company"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "classic_auto",
+      "ocean_marine",
+      "personal_umbrella"
+    ]
+  },
+  "document_type_detail.acord_application.proposed_policy.audit_frequency": {
+    "aliases": [
+      "SUBJECT TO AUDIT",
+      "Subject to Audit"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "classic_auto",
+      "ocean_marine",
+      "personal_umbrella"
+    ]
+  },
+  "document_type_detail.acord_application.rating_information[].classification_description": {
+    "aliases": [
+      "Craft12 - Basic Coverage",
+      "Electrician",
+      "Mobile Home Parks Rentals Less",
+      "Service NOC"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "classic_auto",
+      "ocean_marine",
+      "personal_umbrella"
+    ]
+  },
+  "document_type_detail.application.prior_insurance[].carrier": {
+    "aliases": [
+      "Carrier",
+      "Insurance Company",
+      "Insurer",
+      "Underwriting Company"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "classic_auto",
+      "ocean_marine",
+      "personal_umbrella"
+    ]
+  },
+  "document_type_detail.application.prior_insurance[].premium": {
+    "aliases": [
+      "Policy Premium",
+      "Premium Summary",
+      "Total Premium"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "classic_auto",
+      "ocean_marine",
+      "personal_umbrella"
+    ]
+  },
+  "document_type_detail.application.requested_limits[].deductible_amount": {
+    "aliases": [
+      "ITEM IV. DEDUCTIBLE"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "classic_auto",
+      "ocean_marine",
+      "personal_umbrella"
+    ]
+  },
+  "document_type_detail.application.requested_limits[].premium": {
+    "aliases": [
+      "Policy Premium",
+      "Premium Summary",
+      "Total Premium"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "classic_auto",
+      "ocean_marine",
+      "personal_umbrella"
+    ]
+  },
+  "document_type_detail.application.requested_limits[].valuation_basis": {
+    "aliases": [
+      "Business Personal Property - Replacement Cost"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "classic_auto",
+      "ocean_marine",
+      "personal_umbrella"
+    ]
+  },
+  "document_type_detail.policy_change.changes[].effective_date": {
+    "aliases": [
+      "Both dates",
+      "Start Date"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "classic_auto",
+      "ocean_marine",
+      "personal_umbrella"
+    ]
+  },
+  "document_type_detail.policy_change.endorsements_added[].deductible_amount": {
+    "aliases": [
+      "ITEM IV. DEDUCTIBLE"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "classic_auto",
+      "ocean_marine",
+      "personal_umbrella"
+    ]
+  },
+  "document_type_detail.policy_change.endorsements_added[].premium": {
+    "aliases": [
+      "Policy Premium",
+      "Premium Summary",
+      "Total Premium"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "classic_auto",
+      "ocean_marine",
+      "personal_umbrella"
+    ]
+  },
+  "document_type_detail.policy_change.endorsements_removed[].deductible_amount": {
+    "aliases": [
+      "ITEM IV. DEDUCTIBLE"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "classic_auto",
+      "ocean_marine",
+      "personal_umbrella"
+    ]
+  },
+  "document_type_detail.policy_change.endorsements_removed[].premium": {
+    "aliases": [
+      "Policy Premium",
+      "Premium Summary",
+      "Total Premium"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "classic_auto",
+      "ocean_marine",
+      "personal_umbrella"
+    ]
+  },
+  "document_type_detail.policy_change.transaction_type": {
+    "aliases": [
+      "TRANS TYPE",
+      "Transaction Type"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "classic_auto",
+      "ocean_marine",
+      "personal_umbrella"
+    ]
+  },
+  "document_type_detail.policy_form.attached_forms[].deductible_amount": {
+    "aliases": [
+      "ITEM IV. DEDUCTIBLE"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "classic_auto",
+      "ocean_marine",
+      "personal_umbrella"
+    ]
+  },
+  "document_type_detail.policy_form.attached_forms[].premium": {
+    "aliases": [
+      "Policy Premium",
+      "Premium Summary",
+      "Total Premium"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "classic_auto",
+      "ocean_marine",
+      "personal_umbrella"
+    ]
+  },
+  "document_type_detail.policy_form.exclusions[].exclusion_name": {
+    "aliases": [
+      "Infrastructure Exclusion",
+      "Insolvency Fund Exclusion",
+      "Pollution Exclusion",
+      "War Exclusion"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "classic_auto",
+      "ocean_marine",
+      "personal_umbrella"
+    ]
+  },
+  "document_type_detail.policy_history.coverage_premium_rows[].premium": {
+    "aliases": [
+      "Policy Premium",
+      "Premium Summary",
+      "Total Premium"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "classic_auto",
+      "ocean_marine",
+      "personal_umbrella"
+    ]
+  },
+  "document_type_detail.policy_history.transactions[].effective_date": {
+    "aliases": [
+      "Both dates",
+      "Start Date"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "classic_auto",
+      "ocean_marine",
+      "personal_umbrella"
+    ]
+  },
+  "document_type_detail.policy_history.transactions[].transaction_reason": {
+    "aliases": [
+      "Amended Date",
+      "Modifies Coverage(s) at Renewal",
+      "Reason(s) for Modification"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "classic_auto",
+      "ocean_marine",
+      "personal_umbrella"
+    ]
+  },
+  "document_type_detail.policy_history.transactions[].transaction_type": {
+    "aliases": [
+      "TRANS TYPE",
+      "Transaction Type"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "classic_auto",
+      "ocean_marine",
+      "personal_umbrella"
+    ]
+  },
+  "document_type_detail.quote_proposal.quoted_coverages[].deductible_amount": {
+    "aliases": [
+      "ITEM IV. DEDUCTIBLE"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "classic_auto",
+      "ocean_marine",
+      "personal_umbrella"
+    ]
+  },
+  "document_type_detail.quote_proposal.quoted_coverages[].premium": {
+    "aliases": [
+      "Policy Premium",
+      "Premium Summary",
+      "Total Premium"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "classic_auto",
+      "ocean_marine",
+      "personal_umbrella"
+    ]
+  },
+  "dwelling_fire.dwelling.solid_fuel_burning_device_present": {
+    "aliases": [
+      "Solid Fuel Burning Device(s)"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "dwelling_fire"
+    ]
+  },
+  "dwelling_fire.dwelling.territory_code": {
+    "aliases": [
+      "GL Territory",
+      "Rating Territory",
+      "Territory"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "dwelling_fire"
+    ]
+  },
+  "dwelling_fire.liability_coverages.coverage_l_premises_liability_limit": {
+    "aliases": [
+      "Coverage L - Premises Liability",
+      "Coverage L - Premises Liability Coverage"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "dwelling_fire"
+    ]
+  },
+  "dwelling_fire.liability_coverages.coverage_m_medical_payments_per_person_limit": {
+    "aliases": [
+      "Coverage F-Medical Payments Coverage",
+      "Coverage M - Medical Payments",
+      "Coverage M - Premises Med"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "dwelling_fire"
+    ]
+  },
+  "dwelling_fire.liability_coverages.medical_payments_limit": {
+    "aliases": [
+      "Medical Payments",
+      "Medical Payments Limit",
+      "Medical Payments Limit (any one person)"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "dwelling_fire"
+    ]
+  },
+  "dwelling_fire.optional_endorsement_coverages[].deductible_amount": {
+    "aliases": [
+      "ITEM IV. DEDUCTIBLE"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "dwelling_fire"
+    ]
+  },
+  "dwelling_fire.optional_endorsement_coverages[].valuation_basis": {
+    "aliases": [
+      "Business Personal Property - Replacement Cost"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "dwelling_fire"
+    ]
+  },
+  "dwelling_fire.property_coverages.coverage_a_dwelling_limit": {
+    "aliases": [
+      "Coverage A - Residence",
+      "Coverage A -- Residence"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "dwelling_fire"
+    ]
+  },
+  "dwelling_fire.property_coverages.coverage_b_other_structures_limit": {
+    "aliases": [
+      "Coverage B - Related Private Structures",
+      "Coverage B -- Related Private Structures"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "dwelling_fire"
+    ]
+  },
+  "dwelling_fire.property_coverages.coverage_e_additional_living_expense_limit": {
+    "aliases": [
+      "Coverage D - Additional Living Expense / Loss of Rent"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "dwelling_fire"
+    ]
+  },
+  "dwelling_fire.property_coverages.covered_causes_of_loss": {
+    "aliases": [
+      "Cause of Loss",
+      "Causes of Loss",
+      "Peril Cause of Loss"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "dwelling_fire"
+    ]
   },
   "effective_date": {
-    "aliases": ["Effective Date", "Effective", "Policy Effective Date", "Inception Date", "From"],
-    "confusables": ["Expiration Date", "Issue Date", "Date Printed", "Valuation Date"]
+    "aliases": [
+      "Both dates",
+      "Effective",
+      "Effective Date",
+      "Effective Date Of Policy",
+      "From",
+      "Inception Date",
+      "Policy Effective Date",
+      "Policy Period From",
+      "Policy Term Effective Date",
+      "Start Date"
+    ],
+    "confusables": [
+      "Issue Date",
+      "Date Printed",
+      "Expiration Date",
+      "Bind Date"
+    ],
+    "hand_seeded": true,
+    "lobs": [
+      "classic_auto",
+      "dwelling_fire",
+      "homeowners",
+      "motorcycle",
+      "ocean_marine",
+      "personal_auto",
+      "personal_umbrella",
+      "recreational_vehicle"
+    ],
+    "canonical_path": "policy.effective_date"
   },
   "expiration_date": {
-    "aliases": ["Expiration Date", "Expiration", "Policy Expiration Date", "Expiry Date", "To"],
-    "confusables": ["Effective Date", "Cancellation Date", "Renewal Date"]
+    "aliases": [
+      "Expiration",
+      "Expiration Date",
+      "Expiry Date",
+      "Policy Expiration Date",
+      "Policy Period To",
+      "Policy Term Expiration Date",
+      "To"
+    ],
+    "confusables": [
+      "Effective Date",
+      "Cancellation Date",
+      "Renewal Date"
+    ],
+    "hand_seeded": true,
+    "lobs": [
+      "classic_auto",
+      "dwelling_fire",
+      "homeowners",
+      "motorcycle",
+      "ocean_marine",
+      "personal_auto",
+      "personal_umbrella",
+      "recreational_vehicle"
+    ],
+    "canonical_path": "policy.expiration_date"
+  },
+  "forms_and_endorsements": {
+    "aliases": [
+      "Privacy Disclosure Notice",
+      "SCHEDULE OF ADDITIONAL ENDORSEMENTS",
+      "Service of Suit Endorsement",
+      "Vehicle Under Construction Endorsement",
+      "attached at time of issue"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "classic_auto",
+      "dwelling_fire",
+      "homeowners",
+      "motorcycle",
+      "ocean_marine",
+      "personal_auto",
+      "personal_umbrella",
+      "recreational_vehicle"
+    ]
+  },
+  "forms_and_endorsements[].deductible_amount": {
+    "aliases": [
+      "ITEM IV. DEDUCTIBLE"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "classic_auto",
+      "dwelling_fire",
+      "homeowners",
+      "motorcycle",
+      "ocean_marine",
+      "personal_auto",
+      "personal_umbrella",
+      "recreational_vehicle"
+    ]
+  },
+  "forms_and_endorsements[].form_group": {
+    "aliases": [
+      "Applicable Forms",
+      "Basic Forms",
+      "Forms & Endorsements",
+      "Mandatory Forms",
+      "Optional Forms"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "classic_auto",
+      "dwelling_fire",
+      "homeowners",
+      "motorcycle",
+      "ocean_marine",
+      "personal_auto",
+      "personal_umbrella",
+      "recreational_vehicle"
+    ]
+  },
+  "forms_and_endorsements[].premium": {
+    "aliases": [
+      "Policy Premium",
+      "Premium Summary",
+      "Total Premium"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "classic_auto",
+      "ocean_marine",
+      "personal_umbrella"
+    ]
+  },
+  "homeowners.discounts[].discount_name": {
+    "aliases": [
+      "ABS Discount",
+      "ANTI-LOCK BRAKES",
+      "ANTI-THEFT DEVICE",
+      "Accident Prevention Course Discount",
+      "Anti-Lock Braking System (ABS) Discount",
+      "CUSTOMIZING",
+      "DAYTIME RUNNING LAMPS",
+      "HOME OWNERSHIP",
+      "Multi-Car Discount",
+      "Multi-Vehicle Discount",
+      "NEW CAR DISCOUNT",
+      "PASSIVE RESTRAINT"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "homeowners"
+    ]
+  },
+  "homeowners.discounts[].discount_type": {
+    "aliases": [
+      "Credit",
+      "Discount",
+      "Discounts and Surcharges",
+      "Surcharge"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "homeowners"
+    ]
+  },
+  "homeowners.discounts[].is_applied": {
+    "aliases": [
+      "Applied"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "homeowners"
+    ]
+  },
+  "homeowners.dwelling.construction_type": {
+    "aliases": [
+      "Construction"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "homeowners"
+    ]
+  },
+  "homeowners.dwelling.dwelling_type": {
+    "aliases": [
+      "Type of Home"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "homeowners"
+    ]
+  },
+  "homeowners.dwelling.number_of_families": {
+    "aliases": [
+      "# of Families",
+      "Families",
+      "No Fam",
+      "No. of Families",
+      "Number of Families",
+      "NumberofFamilies"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "homeowners"
+    ]
+  },
+  "homeowners.dwelling.occupancy_type": {
+    "aliases": [
+      "Occupancy"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "homeowners"
+    ]
+  },
+  "homeowners.dwelling.protection_class": {
+    "aliases": [
+      "Protection",
+      "Protection Class",
+      "Semi Protected",
+      "Unprotected"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "homeowners"
+    ]
+  },
+  "homeowners.dwelling.protective_devices[].device_type": {
+    "aliases": [
+      "Burglar Alarm",
+      "Central Station Alarm",
+      "Deadbolt",
+      "Fire Alarm",
+      "Local Alarm",
+      "Protective Devices",
+      "Smoke Detector",
+      "Sprinklers",
+      "Water Shutoff Device"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "homeowners"
+    ]
+  },
+  "homeowners.dwelling.solid_fuel_burning_device_present": {
+    "aliases": [
+      "Solid Fuel Burning Device(s)"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "homeowners"
+    ]
+  },
+  "homeowners.dwelling.territory_code": {
+    "aliases": [
+      "GL Territory",
+      "Rating Territory",
+      "Territory"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "homeowners"
+    ]
+  },
+  "homeowners.dwelling.usage_type": {
+    "aliases": [
+      "Owner Occupied",
+      "Primary Residence",
+      "Seasonal",
+      "Seasonal/Secondary",
+      "Secondary",
+      "Usage"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "homeowners"
+    ]
+  },
+  "homeowners.dwelling.year_built": {
+    "aliases": [
+      "Year Built"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "homeowners"
+    ]
+  },
+  "homeowners.optional_endorsement_coverages[].deductible_amount": {
+    "aliases": [
+      "ITEM IV. DEDUCTIBLE"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "homeowners"
+    ]
+  },
+  "homeowners.optional_endorsement_coverages[].valuation_basis": {
+    "aliases": [
+      "Business Personal Property - Replacement Cost"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "homeowners"
+    ]
+  },
+  "homeowners.rating_characteristics.classification_description": {
+    "aliases": [
+      "Craft12 - Basic Coverage",
+      "Electrician",
+      "Mobile Home Parks Rentals Less",
+      "Service NOC"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "homeowners"
+    ]
+  },
+  "homeowners.rating_characteristics.distance_to_fire_station": {
+    "aliases": [
+      "Distance to Fire Department",
+      "Miles to Fire Station",
+      "mi to FD"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "homeowners"
+    ]
+  },
+  "homeowners.rating_characteristics.feet_from_hydrant": {
+    "aliases": [
+      "Distance to Fire Hydrant",
+      "Distance to Hydrant",
+      "Feet From Hydrant",
+      "Feet to Hydrant",
+      "ft to hydrant"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "homeowners"
+    ]
+  },
+  "homeowners.rating_characteristics.fire_district": {
+    "aliases": [
+      "Fire District"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "homeowners"
+    ]
+  },
+  "homeowners.rating_characteristics.required_rating_information": {
+    "aliases": [
+      "Rating Information",
+      "Required Rating Information"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "homeowners"
+    ]
+  },
+  "homeowners.rating_characteristics.risk_occupancy": {
+    "aliases": [
+      "Risk Occupancy"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "homeowners"
+    ]
+  },
+  "homeowners.rating_characteristics.risk_type": {
+    "aliases": [
+      "Risk Type"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "homeowners"
+    ]
+  },
+  "homeowners.rating_characteristics.seasonal_variation_percentage": {
+    "aliases": [
+      "Seasonal Variation",
+      "Seasonal increase"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "homeowners"
+    ]
+  },
+  "homeowners.rating_characteristics.territorial_subzone": {
+    "aliases": [
+      "Sub Zone",
+      "Sub-Zone",
+      "SubZone"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "homeowners"
+    ]
+  },
+  "homeowners.rating_characteristics.territorial_zone": {
+    "aliases": [
+      "Territorial Zone",
+      "Territory",
+      "Zone"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "homeowners"
+    ]
+  },
+  "homeowners.scheduled_locations[].description": {
+    "aliases": [
+      "Described Location",
+      "For Location",
+      "Supplemental Declarations",
+      "Supplemental Schedule"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "homeowners"
+    ]
+  },
+  "homeowners.scheduled_other_structures[].limit_amount": {
+    "aliases": [
+      "Amount of Insurance"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "homeowners"
+    ]
+  },
+  "homeowners.scheduled_other_structures[].structure_description": {
+    "aliases": [
+      "Description of Structure",
+      "Garage",
+      "Identification of Structure",
+      "Structure"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "homeowners"
+    ]
+  },
+  "homeowners.section_i_property_coverages.additional_coverages[].coverage_name": {
+    "aliases": [
+      "E. Farm Pers. Property",
+      "F. Farm Barns",
+      "Farm Barns, Bldgs, & Structures",
+      "Farm Pers. Property - Scheduled"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "homeowners"
+    ]
+  },
+  "homeowners.section_i_property_coverages.coverage_a_dwelling_limit": {
+    "aliases": [
+      "A. Residence",
+      "Cov A",
+      "Cov A - Dwelling",
+      "Coverage A - Dwelling",
+      "Coverage A - Residence",
+      "Coverage A -- Residence",
+      "Coverage A Dwelling",
+      "Residence"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "homeowners"
+    ]
+  },
+  "homeowners.section_i_property_coverages.coverage_b_other_structures_limit": {
+    "aliases": [
+      "Appurtenant Structures",
+      "B. Related Private Structures",
+      "Cov B",
+      "Cov B - Other Structures",
+      "Coverage B - Other Structures",
+      "Coverage B - Related Private Structures",
+      "Coverage B -- Related Private Structures",
+      "Related Private Structures"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "homeowners"
+    ]
+  },
+  "homeowners.section_i_property_coverages.coverage_c_personal_property_limit": {
+    "aliases": [
+      "C. Personal Property",
+      "Cov C",
+      "Cov C - Personal Property",
+      "Coverage C - Personal Property",
+      "Unscheduled Personal Property"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "homeowners"
+    ]
+  },
+  "homeowners.section_i_property_coverages.coverage_d_loss_of_use_limit": {
+    "aliases": [
+      "Add'l Living Exp. & Loss of Rent",
+      "Additional Living Expense",
+      "Cov D",
+      "Cov D - Addl Living Exp/Loss of Rents",
+      "Coverage D - Additional Living Costs And Loss Of Rent",
+      "Coverage D - Additional Living Expense or Loss of Rent",
+      "Coverage D - Loss of Use",
+      "D. Living Exp. & Loss of Rent",
+      "Loss of Rents"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "homeowners"
+    ]
+  },
+  "homeowners.section_i_property_coverages.loss_settlement_basis": {
+    "aliases": [
+      "Actual Cash Value Provision",
+      "Loss Settlement",
+      "Settlement"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "homeowners"
+    ]
+  },
+  "homeowners.section_ii_liability_coverages.coverage_e_personal_liability_limit": {
+    "aliases": [
+      "Cov L",
+      "Cov L - Personal Liability",
+      "Coverage E - Personal Liability",
+      "Coverage L",
+      "Coverage L - Premises Liability",
+      "Coverage L -- Personal Liability",
+      "L. Personal Liability",
+      "Personal Liability Coverages",
+      "Personal Liability Occurence",
+      "Personal Liability per Occurrence",
+      "Section II - Liability"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "homeowners"
+    ]
+  },
+  "homeowners.section_ii_liability_coverages.coverage_f_medical_payments_limit": {
+    "aliases": [
+      "Cov M",
+      "Cov M - Medical Payments",
+      "Coverage F - Medical Payments",
+      "Coverage M",
+      "Coverage M-Medical Payments to Others",
+      "M. Medical Payments",
+      "Medical Payments to Others"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "homeowners"
+    ]
+  },
+  "homeowners.section_ii_liability_coverages.coverage_f_medical_payments_per_occurrence_limit": {
+    "aliases": [
+      "Coverage M - Medical Payments - Per Occurrence",
+      "Medical Payments per Occurrence",
+      "Per Acc",
+      "Per Accident",
+      "Per Occurrence"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "homeowners"
+    ]
+  },
+  "homeowners.section_ii_liability_coverages.coverage_f_medical_payments_per_person_limit": {
+    "aliases": [
+      "Coverage M - Medical Payments - Per Person",
+      "Coverage M - Premises Medical Payments (Each Person)",
+      "Coverage M -- Medical Payments To Others",
+      "M. Medical Payments per Person",
+      "Medical Payments Per Person",
+      "Per Person"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "homeowners"
+    ]
+  },
+  "homeowners.section_ii_liability_coverages.damage_to_property_of_others_limit": {
+    "aliases": [
+      "Damage To Property Of Others"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "homeowners"
+    ]
+  },
+  "homeowners.special_limits_of_liability[].base_limit": {
+    "aliases": [
+      "Base Insurance",
+      "Base Limit"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "homeowners"
+    ]
+  },
+  "homeowners.special_limits_of_liability[].class_description": {
+    "aliases": [
+      "Appliances",
+      "Away from Premises",
+      "Business Property",
+      "Camper Bodies",
+      "Electronic",
+      "Grave Markers",
+      "Guns",
+      "Jewelry",
+      "Money",
+      "Motorized Vehicles",
+      "Securities",
+      "Silverware",
+      "Special Limits of Liability",
+      "Trailer",
+      "Watercraft"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "homeowners"
+    ]
+  },
+  "homeowners.special_limits_of_liability[].increased_limit": {
+    "aliases": [
+      "Additional Insurance",
+      "Increased Insurance",
+      "Increased Limit"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "homeowners"
+    ]
+  },
+  "homeowners.special_limits_of_liability[].total_limit": {
+    "aliases": [
+      "Total Insurance",
+      "Total Limit"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "homeowners"
+    ]
+  },
+  "insured_name": {
+    "aliases": [
+      "Applicant",
+      "Applicant Name",
+      "Insured",
+      "Insured Name",
+      "Name Insured",
+      "Name of Applicant",
+      "Name of Insured",
+      "Named Insured"
+    ],
+    "confusables": [
+      "Certificate Holder",
+      "Producer",
+      "Agency",
+      "Additional Insured",
+      "Loss Payee",
+      "Mortgagee",
+      "Carrier",
+      "Insurer"
+    ],
+    "hand_seeded": true,
+    "lobs": [
+      "classic_auto",
+      "dwelling_fire",
+      "homeowners",
+      "motorcycle",
+      "ocean_marine",
+      "personal_auto",
+      "personal_umbrella",
+      "recreational_vehicle"
+    ],
+    "canonical_path": "named_insured.primary_name"
+  },
+  "interested_parties[].applies_to": {
+    "aliases": [
+      "Assigned To"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "classic_auto",
+      "dwelling_fire",
+      "homeowners",
+      "motorcycle",
+      "ocean_marine",
+      "personal_auto",
+      "personal_umbrella",
+      "recreational_vehicle"
+    ]
+  },
+  "interested_parties[].is_payor": {
+    "aliases": [
+      "Bill To",
+      "Payer",
+      "Payor"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "classic_auto",
+      "dwelling_fire",
+      "homeowners",
+      "motorcycle",
+      "ocean_marine",
+      "personal_auto",
+      "personal_umbrella",
+      "recreational_vehicle"
+    ]
+  },
+  "interested_parties[].loan_number": {
+    "aliases": [
+      "Loan #"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "classic_auto",
+      "dwelling_fire",
+      "homeowners",
+      "motorcycle",
+      "ocean_marine",
+      "personal_auto",
+      "personal_umbrella",
+      "recreational_vehicle"
+    ]
+  },
+  "interested_parties[].party_type": {
+    "aliases": [
+      "Interest Type",
+      "Mortgagee or Secured Party"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "classic_auto",
+      "dwelling_fire",
+      "homeowners",
+      "motorcycle",
+      "ocean_marine",
+      "personal_auto",
+      "personal_umbrella",
+      "recreational_vehicle"
+    ]
+  },
+  "interested_parties[].rank": {
+    "aliases": [
+      "Rank"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "classic_auto",
+      "dwelling_fire",
+      "homeowners",
+      "motorcycle",
+      "ocean_marine",
+      "personal_auto",
+      "personal_umbrella",
+      "recreational_vehicle"
+    ]
+  },
+  "locations": {
+    "aliases": [
+      "Insured Property Location",
+      "Location of Business",
+      "Locationof Business"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "classic_auto",
+      "dwelling_fire",
+      "homeowners",
+      "motorcycle",
+      "ocean_marine",
+      "personal_auto",
+      "personal_umbrella",
+      "recreational_vehicle"
+    ]
+  },
+  "locations[].address.county_code": {
+    "aliases": [
+      "County Code"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "classic_auto",
+      "dwelling_fire",
+      "homeowners",
+      "motorcycle",
+      "ocean_marine",
+      "personal_auto",
+      "personal_umbrella",
+      "recreational_vehicle"
+    ]
+  },
+  "locations[].building_description": {
+    "aliases": [
+      "Building Description",
+      "Description",
+      "Structure Description"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "classic_auto",
+      "dwelling_fire",
+      "homeowners",
+      "motorcycle",
+      "ocean_marine",
+      "personal_auto",
+      "personal_umbrella",
+      "recreational_vehicle"
+    ]
+  },
+  "locations[].business_description": {
+    "aliases": [
+      "Description of Operations",
+      "Nature of Business",
+      "Type of Business"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "classic_auto",
+      "dwelling_fire",
+      "homeowners",
+      "motorcycle",
+      "ocean_marine",
+      "personal_auto",
+      "personal_umbrella",
+      "recreational_vehicle"
+    ]
+  },
+  "locations[].coverages[].deductible_amount": {
+    "aliases": [
+      "ITEM IV. DEDUCTIBLE"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "classic_auto",
+      "dwelling_fire",
+      "homeowners",
+      "motorcycle",
+      "ocean_marine",
+      "personal_auto",
+      "personal_umbrella",
+      "recreational_vehicle"
+    ]
+  },
+  "locations[].coverages[].premium": {
+    "aliases": [
+      "Policy Premium",
+      "Premium Summary",
+      "Total Premium"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "classic_auto",
+      "ocean_marine",
+      "personal_umbrella"
+    ]
+  },
+  "locations[].coverages[].valuation_basis": {
+    "aliases": [
+      "Business Personal Property - Replacement Cost"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "classic_auto",
+      "dwelling_fire",
+      "homeowners",
+      "motorcycle",
+      "ocean_marine",
+      "personal_auto",
+      "personal_umbrella",
+      "recreational_vehicle"
+    ]
+  },
+  "locations[].territory_code": {
+    "aliases": [
+      "GL Territory",
+      "Rating Territory",
+      "Territory"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "classic_auto",
+      "dwelling_fire",
+      "homeowners",
+      "motorcycle",
+      "ocean_marine",
+      "personal_auto",
+      "personal_umbrella",
+      "recreational_vehicle"
+    ]
+  },
+  "motorcycle.additional_coverages[].deductible_amount": {
+    "aliases": [
+      "ITEM IV. DEDUCTIBLE"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "motorcycle"
+    ]
+  },
+  "motorcycle.additional_coverages[].valuation_basis": {
+    "aliases": [
+      "Business Personal Property - Replacement Cost"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "motorcycle"
+    ]
+  },
+  "motorcycle.liability_coverages.medical_payments_limit": {
+    "aliases": [
+      "Medical Payments",
+      "Medical Payments Limit",
+      "Medical Payments Limit (any one person)"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "motorcycle"
+    ]
+  },
+  "motorcycle.no_fault_benefits.additional_pip_limit": {
+    "aliases": [
+      "Additional PIP",
+      "Increased PIP"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "motorcycle"
+    ]
+  },
+  "motorcycle.no_fault_benefits.mandatory_pedestrian_pip_limit": {
+    "aliases": [
+      "Mandatory Pedestrian Personal Injury Protection"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "motorcycle"
+    ]
+  },
+  "motorcycle.physical_damage_coverages.comprehensive_deductible": {
+    "aliases": [
+      "OTHER THAN COLL",
+      "Other Than Collision",
+      "Other Than Collision Loss"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "motorcycle"
+    ]
+  },
+  "motorcycle.physical_damage_coverages.trip_interruption_limit": {
+    "aliases": [
+      "TRAVEL - TRIP INTERRUPTION (FAMILY PLUS)",
+      "TRIP INTERRUPTION"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "motorcycle"
+    ]
+  },
+  "motorcycle.units[].coverages[].deductible_amount": {
+    "aliases": [
+      "ITEM IV. DEDUCTIBLE"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "motorcycle"
+    ]
+  },
+  "motorcycle.units[].coverages[].valuation_basis": {
+    "aliases": [
+      "Business Personal Property - Replacement Cost"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "motorcycle"
+    ]
+  },
+  "motorcycle.units[].garaging_address": {
+    "aliases": [
+      "Garaging Zip Code"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "motorcycle"
+    ]
+  },
+  "motorcycle.units[].vin": {
+    "aliases": [
+      "Identification Number",
+      "VEHICLENUMBER",
+      "Vehicle ID Number"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "motorcycle"
+    ]
+  },
+  "named_insured": {
+    "aliases": [
+      "Applicant Name",
+      "Insured",
+      "Named Insured",
+      "Policyholder"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "classic_auto",
+      "dwelling_fire",
+      "homeowners",
+      "motorcycle",
+      "ocean_marine",
+      "personal_auto",
+      "personal_umbrella",
+      "recreational_vehicle"
+    ]
+  },
+  "named_insured.additional_named_insureds[].effective_date": {
+    "aliases": [
+      "Both dates",
+      "Start Date"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "classic_auto",
+      "dwelling_fire",
+      "homeowners",
+      "motorcycle",
+      "ocean_marine",
+      "personal_auto",
+      "personal_umbrella",
+      "recreational_vehicle"
+    ]
+  },
+  "named_insured.business_description": {
+    "aliases": [
+      "Description of Operations",
+      "Nature of Business",
+      "Type of Business"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "classic_auto",
+      "dwelling_fire",
+      "homeowners",
+      "motorcycle",
+      "ocean_marine",
+      "personal_auto",
+      "personal_umbrella",
+      "recreational_vehicle"
+    ]
+  },
+  "named_insured.contact.phone": {
+    "aliases": [
+      "Home",
+      "Mobile",
+      "Work"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "classic_auto",
+      "dwelling_fire",
+      "homeowners",
+      "motorcycle",
+      "ocean_marine",
+      "personal_auto",
+      "personal_umbrella",
+      "recreational_vehicle"
+    ]
+  },
+  "named_insured.mailing_address": {
+    "aliases": [
+      "ATTN",
+      "Attn",
+      "Mail To"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "classic_auto",
+      "dwelling_fire",
+      "homeowners",
+      "motorcycle",
+      "ocean_marine",
+      "personal_auto",
+      "personal_umbrella",
+      "recreational_vehicle"
+    ]
+  },
+  "named_insured.primary_name": {
+    "aliases": [
+      "Applicant",
+      "Applicant Name",
+      "Insured",
+      "Insured Name",
+      "Name Insured",
+      "Name of Applicant",
+      "Name of Insured",
+      "Named Insured"
+    ],
+    "confusables": [
+      "Certificate Holder",
+      "Producer",
+      "Agency",
+      "Additional Insured",
+      "Loss Payee",
+      "Mortgagee",
+      "Carrier",
+      "Insurer"
+    ],
+    "hand_seeded": true,
+    "lobs": [
+      "classic_auto",
+      "dwelling_fire",
+      "homeowners",
+      "motorcycle",
+      "ocean_marine",
+      "personal_auto",
+      "personal_umbrella",
+      "recreational_vehicle"
+    ]
+  },
+  "personal_umbrella.exclusions[].exclusion_name": {
+    "aliases": [
+      "Infrastructure Exclusion",
+      "Insolvency Fund Exclusion",
+      "Pollution Exclusion",
+      "War Exclusion"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "personal_umbrella"
+    ]
+  },
+  "personal_umbrella.exclusions[].premium": {
+    "aliases": [
+      "Policy Premium",
+      "Premium Summary",
+      "Total Premium"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "personal_umbrella"
+    ]
+  },
+  "personal_umbrella.rated_exposures[].premium": {
+    "aliases": [
+      "Policy Premium",
+      "Premium Summary",
+      "Total Premium"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "personal_umbrella"
+    ]
+  },
+  "personal_umbrella.residences[].premium": {
+    "aliases": [
+      "Policy Premium",
+      "Premium Summary",
+      "Total Premium"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "personal_umbrella"
+    ]
+  },
+  "personal_umbrella.schedule_of_underlying_insurance": {
+    "aliases": [
+      "Excess Liability",
+      "Personal Excess Liability",
+      "Personal or Premises Liability"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "personal_umbrella"
+    ]
+  },
+  "personal_umbrella.schedule_of_underlying_insurance[].effective_date": {
+    "aliases": [
+      "Both dates",
+      "Start Date"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "personal_umbrella"
+    ]
+  },
+  "policy.account_id": {
+    "aliases": [
+      "Account ID"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "classic_auto",
+      "dwelling_fire",
+      "homeowners",
+      "motorcycle",
+      "ocean_marine",
+      "personal_auto",
+      "personal_umbrella",
+      "recreational_vehicle"
+    ]
+  },
+  "policy.audit_frequency": {
+    "aliases": [
+      "SUBJECT TO AUDIT",
+      "Subject to Audit"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "classic_auto",
+      "dwelling_fire",
+      "homeowners",
+      "motorcycle",
+      "ocean_marine",
+      "personal_auto",
+      "personal_umbrella",
+      "recreational_vehicle"
+    ]
+  },
+  "policy.certificate_number": {
+    "aliases": [
+      "CERTIFICATE NUMBER"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "classic_auto",
+      "dwelling_fire",
+      "homeowners",
+      "motorcycle",
+      "ocean_marine",
+      "personal_auto",
+      "personal_umbrella",
+      "recreational_vehicle"
+    ]
+  },
+  "policy.effective_date": {
+    "aliases": [
+      "Both dates",
+      "Effective",
+      "Effective Date",
+      "Effective Date Of Policy",
+      "From",
+      "Inception Date",
+      "Policy Effective Date",
+      "Policy Period From",
+      "Policy Term Effective Date",
+      "Start Date"
+    ],
+    "confusables": [
+      "Issue Date",
+      "Date Printed",
+      "Expiration Date",
+      "Bind Date"
+    ],
+    "hand_seeded": true,
+    "lobs": [
+      "classic_auto",
+      "dwelling_fire",
+      "homeowners",
+      "motorcycle",
+      "ocean_marine",
+      "personal_auto",
+      "personal_umbrella",
+      "recreational_vehicle"
+    ]
+  },
+  "policy.expiration_date": {
+    "aliases": [
+      "Expiration",
+      "Expiration Date",
+      "Expiry Date",
+      "Policy Expiration Date",
+      "Policy Period To",
+      "Policy Term Expiration Date",
+      "To"
+    ],
+    "confusables": [
+      "Effective Date",
+      "Cancellation Date",
+      "Renewal Date"
+    ],
+    "hand_seeded": true,
+    "lobs": [
+      "classic_auto",
+      "dwelling_fire",
+      "homeowners",
+      "motorcycle",
+      "ocean_marine",
+      "personal_auto",
+      "personal_umbrella",
+      "recreational_vehicle"
+    ]
+  },
+  "policy.expiration_time": {
+    "aliases": [
+      "Expiration Time"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "classic_auto",
+      "dwelling_fire",
+      "homeowners",
+      "motorcycle",
+      "ocean_marine",
+      "personal_auto",
+      "personal_umbrella",
+      "recreational_vehicle"
+    ]
+  },
+  "policy.is_assessable": {
+    "aliases": [
+      "Assessable",
+      "Non-Assessable"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "classic_auto",
+      "dwelling_fire",
+      "homeowners",
+      "motorcycle",
+      "ocean_marine",
+      "personal_auto",
+      "personal_umbrella",
+      "recreational_vehicle"
+    ]
+  },
+  "policy.plan_type": {
+    "aliases": [
+      "Co-operative Plan",
+      "Cooperative Plan",
+      "Non-Participating",
+      "Participating"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "classic_auto",
+      "dwelling_fire",
+      "homeowners",
+      "motorcycle",
+      "ocean_marine",
+      "personal_auto",
+      "personal_umbrella",
+      "recreational_vehicle"
+    ]
+  },
+  "policy.policy_number": {
+    "aliases": [
+      "Pol. No.",
+      "Policy #",
+      "Policy No",
+      "Policy No.",
+      "Policy Number"
+    ],
+    "confusables": [
+      "Quote Number",
+      "Binder Number",
+      "Claim Number",
+      "Submission Number",
+      "Certificate Number"
+    ],
+    "hand_seeded": true,
+    "lobs": [
+      "classic_auto",
+      "dwelling_fire",
+      "homeowners",
+      "motorcycle",
+      "ocean_marine",
+      "personal_auto",
+      "personal_umbrella",
+      "recreational_vehicle"
+    ]
+  },
+  "policy.policyholder_since_date": {
+    "aliases": [
+      "Continuously Insured Since",
+      "Customer Since",
+      "Insured Since",
+      "Policyholder Since"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "classic_auto",
+      "dwelling_fire",
+      "homeowners",
+      "motorcycle",
+      "ocean_marine",
+      "personal_auto",
+      "personal_umbrella",
+      "recreational_vehicle"
+    ]
+  },
+  "policy.prior_policy_number": {
+    "aliases": [
+      "Renewal Of",
+      "Renewal of Policy ID"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "classic_auto",
+      "dwelling_fire",
+      "homeowners",
+      "motorcycle",
+      "ocean_marine",
+      "personal_auto",
+      "personal_umbrella",
+      "recreational_vehicle"
+    ]
+  },
+  "policy_number": {
+    "aliases": [
+      "Pol. No.",
+      "Policy #",
+      "Policy No",
+      "Policy No.",
+      "Policy Number"
+    ],
+    "confusables": [
+      "Quote Number",
+      "Binder Number",
+      "Claim Number",
+      "Submission Number",
+      "Certificate Number"
+    ],
+    "hand_seeded": true,
+    "lobs": [
+      "classic_auto",
+      "dwelling_fire",
+      "homeowners",
+      "motorcycle",
+      "ocean_marine",
+      "personal_auto",
+      "personal_umbrella",
+      "recreational_vehicle"
+    ],
+    "canonical_path": "policy.policy_number"
+  },
+  "premium": {
+    "aliases": [
+      "Policy Premium",
+      "Premium Summary",
+      "Total Premium"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "classic_auto",
+      "dwelling_fire",
+      "homeowners",
+      "motorcycle",
+      "ocean_marine",
+      "personal_auto",
+      "personal_umbrella",
+      "recreational_vehicle"
+    ]
+  },
+  "premium.additional_insured_processing_fee": {
+    "aliases": [
+      "AI Processing Fee"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "classic_auto",
+      "dwelling_fire",
+      "homeowners",
+      "motorcycle",
+      "ocean_marine",
+      "personal_auto",
+      "personal_umbrella",
+      "recreational_vehicle"
+    ]
+  },
+  "premium.administrative_fee": {
+    "aliases": [
+      "Maximum Administrative Fee"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "classic_auto",
+      "dwelling_fire",
+      "homeowners",
+      "motorcycle",
+      "ocean_marine",
+      "personal_auto",
+      "personal_umbrella",
+      "recreational_vehicle"
+    ]
+  },
+  "premium.basic_premium": {
+    "aliases": [
+      "Basic Premium",
+      "Premium At Inception"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "classic_auto",
+      "dwelling_fire",
+      "homeowners",
+      "motorcycle",
+      "ocean_marine",
+      "personal_auto",
+      "personal_umbrella",
+      "recreational_vehicle"
+    ]
+  },
+  "premium.fire_fee": {
+    "aliases": [
+      "Fire Insurance Fee",
+      "Includes New York Fire Fee Of",
+      "NY Fire Fee",
+      "NYS Fire Insurance Fee",
+      "New York Fire Fee",
+      "State Fire Fee"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "classic_auto",
+      "dwelling_fire",
+      "homeowners",
+      "motorcycle",
+      "ocean_marine",
+      "personal_auto",
+      "personal_umbrella",
+      "recreational_vehicle"
+    ]
+  },
+  "premium.forms_and_endorsements_premium": {
+    "aliases": [
+      "Endorsement Premium",
+      "Forms/Endorsements Premium",
+      "Total Endorsement Premium"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "classic_auto",
+      "dwelling_fire",
+      "homeowners",
+      "motorcycle",
+      "ocean_marine",
+      "personal_auto",
+      "personal_umbrella",
+      "recreational_vehicle"
+    ]
+  },
+  "premium.guaranty_association_surcharge": {
+    "aliases": [
+      "NJ Property-Liability Guaranty Association Surcharge"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "classic_auto",
+      "dwelling_fire",
+      "homeowners",
+      "motorcycle",
+      "ocean_marine",
+      "personal_auto",
+      "personal_umbrella",
+      "recreational_vehicle"
+    ]
+  },
+  "premium.motor_vehicle_law_enforcement_fee": {
+    "aliases": [
+      "DMV FEE",
+      "Enforcement Fee",
+      "MVLE Fee",
+      "Motor Vehicle Law Enforcement Fee",
+      "NEW YORK MOTOR VEHICLE LAW ENFORCEMENT FEE"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "classic_auto",
+      "dwelling_fire",
+      "homeowners",
+      "motorcycle",
+      "ocean_marine",
+      "personal_auto",
+      "personal_umbrella",
+      "recreational_vehicle"
+    ]
+  },
+  "premium.premium_by_coverage_part[].premium": {
+    "aliases": [
+      "Policy Premium",
+      "Premium Summary",
+      "Total Premium"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "classic_auto",
+      "ocean_marine",
+      "personal_umbrella"
+    ]
+  },
+  "premium.service_fee": {
+    "aliases": [
+      "Handling Fee",
+      "Paper Handling Fee",
+      "Service Fee"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "classic_auto",
+      "dwelling_fire",
+      "homeowners",
+      "motorcycle",
+      "ocean_marine",
+      "personal_auto",
+      "personal_umbrella",
+      "recreational_vehicle"
+    ]
+  },
+  "premium.total_policy_premium": {
+    "aliases": [
+      "Policy Premium",
+      "Policy Total Premium",
+      "Premium",
+      "Total Policy Premium",
+      "Total Premium"
+    ],
+    "confusables": [
+      "Deposit Premium",
+      "Minimum Premium",
+      "Estimated Premium",
+      "Premium by Coverage",
+      "Taxes and Fees"
+    ],
+    "hand_seeded": true,
+    "lobs": [
+      "classic_auto",
+      "dwelling_fire",
+      "homeowners",
+      "motorcycle",
+      "ocean_marine",
+      "personal_auto",
+      "personal_umbrella",
+      "recreational_vehicle"
+    ]
+  },
+  "producer": {
+    "aliases": [
+      "Agency",
+      "Agent",
+      "Broker",
+      "Producer",
+      "Producer Name"
+    ],
+    "confusables": [
+      "Carrier",
+      "Insurer",
+      "Named Insured",
+      "Underwriter"
+    ],
+    "hand_seeded": true,
+    "lobs": [
+      "classic_auto",
+      "dwelling_fire",
+      "homeowners",
+      "motorcycle",
+      "ocean_marine",
+      "personal_auto",
+      "personal_umbrella",
+      "recreational_vehicle"
+    ],
+    "canonical_path": "producer.agency_name"
+  },
+  "producer.agency_name": {
+    "aliases": [
+      "Agency",
+      "Agent",
+      "Broker",
+      "Producer",
+      "Producer Name"
+    ],
+    "confusables": [
+      "Carrier",
+      "Insurer",
+      "Named Insured",
+      "Underwriter"
+    ],
+    "hand_seeded": true,
+    "lobs": [
+      "classic_auto",
+      "dwelling_fire",
+      "homeowners",
+      "motorcycle",
+      "ocean_marine",
+      "personal_auto",
+      "personal_umbrella",
+      "recreational_vehicle"
+    ]
+  },
+  "producer.contact.fax": {
+    "aliases": [
+      "Agent Fax",
+      "Fax"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "classic_auto",
+      "dwelling_fire",
+      "homeowners",
+      "motorcycle",
+      "ocean_marine",
+      "personal_auto",
+      "personal_umbrella",
+      "recreational_vehicle"
+    ]
+  },
+  "producer.contact.phone": {
+    "aliases": [
+      "Home",
+      "Mobile",
+      "Work"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "classic_auto",
+      "dwelling_fire",
+      "homeowners",
+      "motorcycle",
+      "ocean_marine",
+      "personal_auto",
+      "personal_umbrella",
+      "recreational_vehicle"
+    ]
+  },
+  "producer.producer_code": {
+    "aliases": [
+      "Agency Code",
+      "Agent"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "classic_auto",
+      "dwelling_fire",
+      "homeowners",
+      "motorcycle",
+      "ocean_marine",
+      "personal_auto",
+      "personal_umbrella",
+      "recreational_vehicle"
+    ]
+  },
+  "recreational_vehicle.additional_coverages[].deductible_amount": {
+    "aliases": [
+      "ITEM IV. DEDUCTIBLE"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "recreational_vehicle"
+    ]
+  },
+  "recreational_vehicle.additional_coverages[].valuation_basis": {
+    "aliases": [
+      "Business Personal Property - Replacement Cost"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "recreational_vehicle"
+    ]
+  },
+  "recreational_vehicle.liability_coverages.medical_payments_limit": {
+    "aliases": [
+      "Medical Payments",
+      "Medical Payments Limit",
+      "Medical Payments Limit (any one person)"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "recreational_vehicle"
+    ]
+  },
+  "recreational_vehicle.no_fault_benefits.additional_pip_limit": {
+    "aliases": [
+      "Additional PIP",
+      "Increased PIP"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "recreational_vehicle"
+    ]
+  },
+  "recreational_vehicle.no_fault_benefits.mandatory_pedestrian_pip_limit": {
+    "aliases": [
+      "Mandatory Pedestrian Personal Injury Protection"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "recreational_vehicle"
+    ]
+  },
+  "recreational_vehicle.physical_damage_coverages.comprehensive_deductible": {
+    "aliases": [
+      "OTHER THAN COLL",
+      "Other Than Collision",
+      "Other Than Collision Loss"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "recreational_vehicle"
+    ]
+  },
+  "recreational_vehicle.units[].coverages[].deductible_amount": {
+    "aliases": [
+      "ITEM IV. DEDUCTIBLE"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "recreational_vehicle"
+    ]
+  },
+  "recreational_vehicle.units[].coverages[].valuation_basis": {
+    "aliases": [
+      "Business Personal Property - Replacement Cost"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "recreational_vehicle"
+    ]
+  },
+  "recreational_vehicle.units[].horsepower_or_cc": {
+    "aliases": [
+      "Engine Size"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "recreational_vehicle"
+    ]
+  },
+  "signature.countersignature_date": {
+    "aliases": [
+      "Countersignature Date"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "classic_auto",
+      "dwelling_fire",
+      "homeowners",
+      "motorcycle",
+      "ocean_marine",
+      "personal_auto",
+      "personal_umbrella",
+      "recreational_vehicle"
+    ]
+  },
+  "signature.countersignature_state": {
+    "aliases": [
+      "Authorized Countersignature",
+      "COUNTERSIGNED",
+      "Countersigned On"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "classic_auto",
+      "dwelling_fire",
+      "homeowners",
+      "motorcycle",
+      "ocean_marine",
+      "personal_auto",
+      "personal_umbrella",
+      "recreational_vehicle"
+    ]
+  },
+  "signature.title": {
+    "aliases": [
+      "Authorized Representative",
+      "Our Authorized Representative"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "classic_auto",
+      "dwelling_fire",
+      "homeowners",
+      "motorcycle",
+      "ocean_marine",
+      "personal_auto",
+      "personal_umbrella",
+      "recreational_vehicle"
+    ]
+  },
+  "state_notices[].notice_title": {
+    "aliases": [
+      "LVANIA NOTICE",
+      "NEW YORK NOTICE",
+      "NOTICE TO SENIOR CITIZENS",
+      "PENNSYLVANIA NOTICE",
+      "Privacy Disclosure Notice",
+      "State Notice"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "classic_auto",
+      "dwelling_fire",
+      "homeowners",
+      "motorcycle",
+      "ocean_marine",
+      "personal_auto",
+      "personal_umbrella",
+      "recreational_vehicle"
+    ]
+  },
+  "terrorism.terrorism_disposition": {
+    "aliases": [
+      "TERR-DISC"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "classic_auto",
+      "dwelling_fire",
+      "homeowners",
+      "motorcycle",
+      "ocean_marine",
+      "personal_auto",
+      "personal_umbrella",
+      "recreational_vehicle"
+    ]
+  },
+  "terrorism.terrorism_premium": {
+    "aliases": [
+      "TERR-COV",
+      "Terrorism Coverage"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "classic_auto",
+      "dwelling_fire",
+      "homeowners",
+      "motorcycle",
+      "ocean_marine",
+      "personal_auto",
+      "personal_umbrella",
+      "recreational_vehicle"
+    ]
   },
   "total_premium": {
-    "aliases": ["Total Premium", "Policy Premium", "Total Policy Premium", "Premium"],
-    "confusables": ["Deposit Premium", "Minimum Premium", "Surcharge", "Taxes and Fees"]
+    "aliases": [
+      "Policy Premium",
+      "Policy Total Premium",
+      "Premium",
+      "Total Policy Premium",
+      "Total Premium"
+    ],
+    "confusables": [
+      "Deposit Premium",
+      "Minimum Premium",
+      "Estimated Premium",
+      "Premium by Coverage",
+      "Taxes and Fees"
+    ],
+    "hand_seeded": true,
+    "lobs": [
+      "classic_auto",
+      "dwelling_fire",
+      "homeowners",
+      "motorcycle",
+      "ocean_marine",
+      "personal_auto",
+      "personal_umbrella",
+      "recreational_vehicle"
+    ],
+    "canonical_path": "premium.total_policy_premium"
+  },
+  "watercraft.additional_coverages[].deductible_amount": {
+    "aliases": [
+      "ITEM IV. DEDUCTIBLE"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "ocean_marine"
+    ]
+  },
+  "watercraft.additional_coverages[].premium": {
+    "aliases": [
+      "Policy Premium",
+      "Premium Summary",
+      "Total Premium"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "ocean_marine"
+    ]
+  },
+  "watercraft.additional_coverages[].valuation_basis": {
+    "aliases": [
+      "Business Personal Property - Replacement Cost"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "ocean_marine"
+    ]
+  },
+  "watercraft.physical_damage_coverages.comprehensive_deductible": {
+    "aliases": [
+      "OTHER THAN COLL",
+      "Other Than Collision",
+      "Other Than Collision Loss"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "ocean_marine"
+    ]
+  },
+  "watercraft.watercraft[].coverages[].deductible_amount": {
+    "aliases": [
+      "ITEM IV. DEDUCTIBLE"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "ocean_marine"
+    ]
+  },
+  "watercraft.watercraft[].coverages[].premium": {
+    "aliases": [
+      "Policy Premium",
+      "Premium Summary",
+      "Total Premium"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "ocean_marine"
+    ]
+  },
+  "watercraft.watercraft[].coverages[].valuation_basis": {
+    "aliases": [
+      "Business Personal Property - Replacement Cost"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "ocean_marine"
+    ]
+  },
+  "watercraft.watercraft[].premium": {
+    "aliases": [
+      "Policy Premium",
+      "Premium Summary",
+      "Total Premium"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "ocean_marine"
+    ]
+  },
+  "watercraft.watercraft[].trailer.vin": {
+    "aliases": [
+      "Identification Number",
+      "VEHICLENUMBER",
+      "Vehicle ID Number"
+    ],
+    "confusables": [],
+    "hand_seeded": false,
+    "lobs": [
+      "ocean_marine"
+    ]
   }
 }
