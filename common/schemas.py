@@ -289,6 +289,34 @@ def schema_selectors() -> list[tuple[str, str | None, str | None]]:
     return out
 
 
+def enum_vocabulary(
+    doc_type: str, acord_form: str | None = None, lob: str | list[str] | None = None
+) -> set[str]:
+    """Display forms of every enum value in a schema — ``{"general liability", ...}``.
+
+    An enum value reaches the prompt by construction: the model is shown the
+    values it must choose between. So a phrase that is also an alias cannot have
+    been "leaked" there by a field description — it was always going to be
+    present. Used by the no-alias-leak guards to tell domain vocabulary apart
+    from a label table, which is the thing those guards exist to keep out.
+    """
+    found: set[str] = set()
+
+    def walk(node: Any) -> None:
+        if isinstance(node, dict):
+            for value in node.get("enum") or []:
+                if isinstance(value, str):
+                    found.add(value.replace("_", " ").casefold())
+            for value in node.values():
+                walk(value)
+        elif isinstance(node, list):
+            for value in node:
+                walk(value)
+
+    walk(resolved_schema(doc_type, acord_form, lob))
+    return found
+
+
 def all_schema_keys() -> list[tuple[str, str | None]]:
     """Every (doc_type, acord_form) pair with a schema — for tests and sweeps."""
     out: list[tuple[str, str | None]] = []

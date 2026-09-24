@@ -1,10 +1,24 @@
-"""Build ``schemas/aliases/policy.aliases.json`` from the canonical LOB schemas.
+"""Build ``schemas/aliases/policy.aliases.json`` from the canonical schemas and
+the original documents.
 
-The canonical schemas under ``configs/canonical schema/policy_check/`` carry
-``fideon:aliases`` on their fields — the labels real forms print for each value,
-collected from actual documents. That is far better seed material than a
-hand-written list, so this derives the registry rather than anyone maintaining
-it by hand.
+Two sources, doing different jobs:
+
+* **The canonical schemas** (``configs/canonical schema/policy_check/``) carry
+  ``fideon:aliases`` — the labels forms print for each field. They say what to
+  look for.
+* **The original documents** (``training data/original data/``) say which of
+  those labels real pages actually print, and how often. An alias with no
+  document evidence is either a phrasing this book of business does not use, or
+  a mistake in the schema; either way a reader should be able to tell it apart
+  from one seen on sixty pages.
+
+**Aliases are UNIFIED across lines of business.** The canonical schemas nest
+line-specific fields under a per-LOB block (``homeowners.dwelling``,
+``auto.vehicles``), which would split one field into thirty-four. The block
+prefix is stripped, so ``discounts[].discount_name`` is one entry carrying every
+phrasing any line prints for it. A label means the same thing whichever policy
+prints it, and splitting them would mean the same discount name had to be
+learned once per line.
 
 **What this registry is, and is not.** It records which printed phrasings map to
 which canonical field, so corpus coverage can be measured and evaluation can
@@ -13,27 +27,22 @@ inference** (master §1.4, enforced by ``tests/test_no_runtime_aliases.py``): an
 alias table at inference is a lookup pretending to be comprehension, and it fails
 silently on the first phrasing nobody listed.
 
-**Three things it deliberately does not do.**
+**It never invents an alias.** Every string here appears in a canonical schema or
+in the hand-written seed below. Document mining only counts what is already
+listed — adding a discovered string automatically would be the registry learning
+from a guess.
 
-* It does not invent aliases. Every string here appears in a canonical schema.
-* It does not derive **confusables** — "Certificate Holder looks like Named
-  Insured but is a different party" is judgement, not something a schema states.
-  The hand-written ones are carried across to the canonical path they belong to
-  and the rest are left empty, to be filled by whoever knows the answer.
-* It does not carry **evidence**. Document counts and example source_ids come
-  from ``data_pipeline/labeling/derive_aliases.py`` once labeled documents exist
-  (SPEC_04 §3). A schema-derived alias says "a form prints this somewhere", not
-  "N documents in this corpus print it".
-
-Run after any schema change::
+Run after a schema change, or when documents are added::
 
     python -m scripts.derive_aliases_from_canonical --write
+    python -m scripts.derive_aliases_from_canonical --write --no-documents   # skip mining
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from collections.abc import Iterator
 from pathlib import Path
@@ -41,28 +50,19 @@ from typing import Any
 
 ROOT = Path(__file__).resolve().parent.parent
 CANONICAL = ROOT / "configs" / "canonical schema" / "policy_check"
+DOCUMENTS = ROOT / "training data" / "original data"
 TARGET = ROOT / "schemas" / "aliases" / "policy.aliases.json"
 
-#: The LOBs whose schemas are derived from. Personal lines is the family being
-#: trained; the others join when their adapter does, so the registry describes
-#: what the corpus actually contains rather than every schema on disk.
-LOBS: tuple[str, ...] = (
-    "homeowners",
-    "personal_auto",
-    "dwelling_fire",
-    "ocean_marine",
-    "classic_auto",
-    "motorcycle",
-    "recreational_vehicle",
-    "personal_umbrella",
-)
+#: An alias shorter than this matches inside other words, so counting it would
+#: report noise as evidence ("To", "From"). Such aliases stay in the registry;
+#: only their evidence is skipped.
+MIN_EVIDENCE_LENGTH = 4
 
-#: Hand-written aliases from the seed registry, re-keyed onto their canonical
-#: paths. Kept because the canonical schemas carry aliases for the SPECIFIC
-#: fields (prior_policy_number, certificate_number) and none at all for the
-#: obvious ones — policy_number, carrier.company_name, producer.agency_name have
-#: no `fideon:aliases` in any of the eight. Dropping these would leave the three
-#: fields every document prints with no phrasings recorded at all.
+#: Hand-written aliases, kept because the canonical schemas carry aliases for the
+#: SPECIFIC fields (prior_policy_number, certificate_number) and none at all for
+#: the obvious ones — policy_number, carrier.company_name and
+#: producer.agency_name have no ``fideon:aliases`` in any schema. Dropping these
+#: would leave the fields every document prints with no phrasings recorded.
 SEED_ALIASES: dict[str, list[str]] = {
     "named_insured.primary_name": [
         "Insured Name", "Named Insured", "Insured", "Applicant",
@@ -88,10 +88,8 @@ SEED_ALIASES: dict[str, list[str]] = {
     ],
 }
 
-#: Hand-written confusables from the seed registry, re-keyed onto the canonical
-#: path each one belongs to. These are the pairs that look alike on a page and
-#: mean different things — the distinction the misattribution metric scores, and
-#: the one thing in the old file worth keeping.
+#: Hand-written, because a schema cannot state that two labels look alike and
+#: mean different things — the distinction the misattribution metric scores.
 CONFUSABLES: dict[str, list[str]] = {
     "named_insured.primary_name": [
         "Certificate Holder", "Producer", "Agency", "Additional Insured",
@@ -119,14 +117,13 @@ CONFUSABLES: dict[str, list[str]] = {
     ],
 }
 
-
 #: The repo's own policy schema still names these fields flatly, and three
 #: consumers look them up that way: the confusable co-occurrence count
 #: (corpus_manifest), the provenance check that refuses a label naming a
 #: confusable (export_golden_labels), and the review tool's "NEVER take from"
 #: instruction. Until the canonical schemas ARE the repo's schemas, both keyings
-#: have to be present — a registry that serves only the future one silently
-#: empties all three.
+#: must be present — a registry serving only the future one silently empties all
+#: three, which the test suite catches.
 LEGACY_KEYS: dict[str, str] = {
     "insured_name": "named_insured.primary_name",
     "policy_number": "policy.policy_number",
@@ -136,6 +133,13 @@ LEGACY_KEYS: dict[str, str] = {
     "expiration_date": "policy.expiration_date",
     "total_premium": "premium.total_policy_premium",
 }
+
+_WS = re.compile(r"\s+")
+
+
+def normalise(text: str) -> str:
+    """Case- and whitespace-insensitive form, for matching a label on a page."""
+    return _WS.sub(" ", text.replace(" ", " ")).strip().casefold()
 
 
 def walk(node: Any, path: str = "") -> Iterator[tuple[str, list[str]]]:
@@ -152,113 +156,190 @@ def walk(node: Any, path: str = "") -> Iterator[tuple[str, list[str]]]:
         yield from walk(items, f"{path}[]")
 
 
-def collect() -> tuple[dict[str, dict[str, Any]], dict[str, str]]:
-    """Every aliased field across the LOB schemas, and the schema versions used."""
+def unify(field_path: str, line_block: str | None) -> str:
+    """Strip the per-LOB block, so one field is one entry across every line."""
+    if line_block and field_path.startswith(f"{line_block}."):
+        return field_path[len(line_block) + 1:]
+    return field_path
+
+
+def collect_schemas() -> tuple[dict[str, dict[str, Any]], dict[str, str]]:
+    """Every aliased field across every canonical schema, unified by field path."""
     fields: dict[str, dict[str, Any]] = {}
     versions: dict[str, str] = {}
 
-    for lob in LOBS:
-        path = CANONICAL / f"{lob}.json"
-        if not path.exists():
-            raise SystemExit(f"no canonical schema for {lob} at {path}")
+    for path in sorted(CANONICAL.glob("*.json")):
         schema = json.loads(path.read_text(encoding="utf-8"))
-        versions[lob] = str((schema.get("fideon:source") or {}).get("version", "unknown"))
+        source = schema.get("fideon:source") or {}
+        versions[path.stem] = str(source.get("version", "unknown"))
+        line_block = source.get("line_specific_block")
 
         for field_path, aliases in walk(schema):
-            entry = fields.setdefault(field_path, {"aliases": set(), "lobs": set(), "seeded": False})
+            unified = unify(field_path, line_block)
+            entry = fields.setdefault(
+                unified, {"aliases": set(), "schemas": set(), "seeded": False}
+            )
             entry["aliases"].update(a.strip() for a in aliases if a and a.strip())
-            entry["lobs"].add(lob)
+            entry["schemas"].add(path.stem)
 
-    # The header fields every document prints, which the schemas leave unaliased.
     for field_path, aliases in SEED_ALIASES.items():
-        entry = fields.setdefault(
-            field_path, {"aliases": set(), "lobs": set(LOBS), "seeded": False}
-        )
+        entry = fields.setdefault(field_path, {"aliases": set(), "schemas": set(), "seeded": False})
         entry["aliases"].update(aliases)
         entry["seeded"] = True
     return fields, versions
 
 
-def render() -> dict[str, Any]:
-    fields, versions = collect()
+def read_documents() -> list[str]:
+    """The normalised text of every original document.
+
+    Only the text is kept. Counting how many documents print a label is evidence;
+    recording WHICH ones would put client document paths into a checked-in file
+    for no gain — the count is what a reader acts on.
+    """
+    try:
+        import pymupdf
+    except ImportError as exc:  # pragma: no cover - optional
+        raise SystemExit(
+            "PyMuPDF is needed to mine the documents. Install it, or pass --no-documents "
+            f"to build the registry from the schemas alone ({exc})."
+        ) from exc
+
+    documents: list[str] = []
+    pdfs = sorted(DOCUMENTS.rglob("*.pdf"))
+    for index, pdf in enumerate(pdfs, start=1):
+        try:
+            with pymupdf.open(pdf) as doc:
+                text = " ".join(page.get_text() for page in doc)
+        except Exception as exc:  # noqa: BLE001 - one unreadable PDF must not stop the mine
+            print(f"  skipped {pdf.name}: {exc}", file=sys.stderr)
+            continue
+        documents.append(normalise(text))
+        if index % 100 == 0:
+            print(f"  read {index}/{len(pdfs)} documents", file=sys.stderr)
+    return documents
+
+
+def mine(fields: dict[str, dict[str, Any]], documents: list[str]) -> dict[str, int]:
+    """How many original documents print each alias."""
+    evidence: dict[str, int] = {}
+    wanted = sorted({a for entry in fields.values() for a in entry["aliases"]})
+
+    for alias in wanted:
+        if len(alias) < MIN_EVIDENCE_LENGTH:
+            continue
+        needle = normalise(alias)
+        seen = sum(1 for text in documents if needle in text)
+        if seen:
+            evidence[alias] = seen
+    return evidence
+
+
+def render(documents: list[str] | None) -> dict[str, Any]:
+    fields, versions = collect_schemas()
+    evidence = mine(fields, documents) if documents else {}
+
+    for legacy, canonical in LEGACY_KEYS.items():
+        if canonical in fields:
+            fields[legacy] = {**fields[canonical], "alias_of": canonical}
 
     registry: dict[str, Any] = {
         "$comment": (
-            "DERIVED from the canonical LOB schemas by "
-            "scripts/derive_aliases_from_canonical.py — do not hand-edit; fix the schema and "
-            "regenerate. Aliases are the labels real forms print for a field. Confusables are "
-            "hand-written, because a schema cannot state that two labels look alike and mean "
-            "different things. NO document evidence: these say a form prints this somewhere, "
-            "not that N documents in this corpus do — that comes from "
-            "data_pipeline/labeling/derive_aliases.py once labeled documents exist (SPEC_04 §3). "
-            "NEVER rendered into a prompt and NEVER consulted at inference (master §1.4)."
+            "DERIVED by scripts/derive_aliases_from_canonical.py from the canonical schemas "
+            "and the original documents - do not hand-edit; fix the source and regenerate. "
+            "Aliases are UNIFIED across lines of business: the per-LOB block is stripped, so a "
+            "field is one entry carrying every phrasing any line prints for it. "
+            "`documents_per_alias` is HOW MANY original documents print that alias - not which, "
+            "since that would put client document paths in the repo. An alias with none is a "
+            "phrasing this book does not use, or a mistake in the schema. Confusables are hand-written, because "
+            "a schema cannot state that two labels look alike and mean different things. "
+            "NEVER rendered into a prompt and NEVER consulted at inference (master 1.4)."
         ),
         "$doc_type": "policy",
         "$source": {
-            "kind": "canonical_schema",
-            "lobs": {lob: versions[lob] for lob in LOBS},
+            "kind": "canonical_schema+documents",
+            "schema_versions": versions,
+            "documents_scanned": len(documents or []),
             "field_count": len(fields),
         },
     }
 
-    # Both keyings, deliberately. The flat entry is what today's schema and its
-    # three consumers read; the canonical path is what they will read once the
-    # canonical schemas are registered. They carry the same strings, so there is
-    # one source of truth and two ways in.
-    for legacy, canonical in LEGACY_KEYS.items():
-        if canonical in fields:
-            fields[legacy] = {
-                **fields[canonical],
-                "alias_of": canonical,
-            }
-
     for field_path in sorted(fields):
         entry = fields[field_path]
-        registry[field_path] = {
-            "aliases": sorted(entry["aliases"]),
-            # Resolved through the canonical path for a legacy entry, or the
-            # flat copy would carry aliases and no confusables — which reads as
-            # "this field has no look-alikes" rather than "look them up over
-            # there", and the misattribution check would quietly score nothing.
+        aliases = sorted(entry["aliases"])
+        attested = {a: evidence[a] for a in aliases if a in evidence}
+
+        rendered: dict[str, Any] = {
+            "aliases": aliases,
             "confusables": (
                 CONFUSABLES.get(field_path)
                 or CONFUSABLES.get(str(entry.get("alias_of") or ""), [])
             ),
-            # Hand-written rather than schema-derived, so a later reader knows
-            # which entries a schema regeneration will NOT refresh.
             "hand_seeded": bool(entry.get("seeded")),
-            # Which lines print this field. A field carried by one LOB is a
-            # line-specific value; one carried by all eight is a header field,
-            # and the distinction matters when reading a coverage report.
-            "lobs": sorted(entry["lobs"]),
+            # Which canonical schemas declare this field. One schema means a
+            # line-specific value; thirty means a header field, and the
+            # difference matters when reading a coverage report.
+            "schemas": sorted(entry["schemas"]),
         }
+        if documents:
+            rendered["evidence"] = {
+                "attested_aliases": len(attested),
+                "unattested_aliases": [
+                    a for a in aliases
+                    if a not in attested and len(a) >= MIN_EVIDENCE_LENGTH
+                ],
+                # Counts only: how many documents print this label. Which ones is
+                # not recorded — it would put client document paths in the repo.
+                "documents_per_alias": {
+                    a: attested[a] for a in sorted(attested, key=lambda x: -attested[x])
+                },
+            }
         if entry.get("alias_of"):
-            # This entry exists under the repo's flat field name; the canonical
-            # path is where it will live once the schemas are adopted.
-            registry[field_path]["canonical_path"] = entry["alias_of"]
-
-    missing = sorted(set(CONFUSABLES) - set(fields))
-    if missing:
-        # A confusable list keyed to a path no schema has would never be read,
-        # which is worse than not having it: it reads as a guard that is in place.
-        print(f"WARNING: confusables for paths no schema carries: {missing}", file=sys.stderr)
+            rendered["canonical_path"] = entry["alias_of"]
+        registry[field_path] = rendered
     return registry
+
+
+def report(registry: dict[str, Any]) -> None:
+    """What a reader should know before trusting this file."""
+    fields = {k: v for k, v in registry.items() if not k.startswith("$")}
+    aliases = {a for v in fields.values() for a in v["aliases"]}
+    attested = {
+        a for v in fields.values()
+        for a in (v.get("evidence", {}).get("documents_per_alias") or {})
+    }
+    scanned = registry["$source"]["documents_scanned"]
+
+    if not scanned:
+        print(f"{len(fields)} field(s), {len(aliases)} alias(es); documents not mined")
+        return
+
+    unattested = sorted(a for a in aliases - attested if len(a) >= MIN_EVIDENCE_LENGTH)
+    print(
+        f"{len(fields)} field(s), {len(aliases)} alias(es); "
+        f"{len(attested)} attested in {scanned} document(s), {len(unattested)} unattested"
+    )
+    if unattested:
+        print("\nUnattested - no original document prints these. Either this book does not use")
+        print("the phrasing, or the schema is wrong. First 25:")
+        for alias in unattested[:25]:
+            print(f"  {alias!r}")
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Derive the policy alias registry")
     parser.add_argument("--write", action="store_true", help="write the file rather than checking")
+    parser.add_argument("--no-documents", action="store_true",
+                        help="skip document mining; aliases carry no evidence")
     args = parser.parse_args(argv)
 
-    registry = render()
+    documents = None if args.no_documents else read_documents()
+    registry = render(documents)
     body = json.dumps(registry, indent=2, ensure_ascii=False) + "\n"
 
     if args.write:
         TARGET.write_text(body, encoding="utf-8")
-        print(
-            f"wrote {TARGET.relative_to(ROOT)}: {registry['$source']['field_count']} field(s), "
-            f"{sum(len(v['aliases']) for k, v in registry.items() if not k.startswith('$'))} alias(es)"
-        )
+        print(f"wrote {TARGET.relative_to(ROOT)}")
+        report(registry)
         return 0
 
     if TARGET.exists() and TARGET.read_text(encoding="utf-8") == body:

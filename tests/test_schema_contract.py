@@ -192,11 +192,15 @@ def test_prompt_carries_descriptions_but_no_alias_strings(doc_type, acord_form):
     assert some_description[:40] in rendered, "field descriptions must reach the model"
 
     registry_doc_type = "acord" if doc_type == "acord" else doc_type
+    # Enum values are in the prompt by construction - the model is shown what it
+    # must choose between - so a phrase that is also an alias ("General
+    # Liability") was always going to be there. Everything else stays strict.
+    vocabulary = schemas.enum_vocabulary(doc_type, acord_form)
     for field, entry in aliases.load_registry(registry_doc_type).items():
         for alias in entry.aliases:
             # A one-word alias may legitimately collide with ordinary prose
             # ("Insured", "Company"); multi-word aliases are unambiguous.
-            if " " in alias:
+            if " " in alias and alias.casefold() not in vocabulary:
                 assert alias not in rendered, f"alias {alias!r} leaked into the prompt for {field}"
 
 
