@@ -58,14 +58,39 @@ FIXTURES = Path(__file__).resolve().parent / "fixtures"
 
 
 def _documents(n: int = 12) -> list[SourceDocument]:
+    """Flat Loss Run documents: exactly one row per input mode each.
+
+    The corpus rules these tests pin — one draw per epoch, the split, leakage —
+    are properties of the build, not of a document type. A flat type keeps the
+    row arithmetic one-per-mode; canonical policies, which expand into windows,
+    have their own tests below.
+    """
+    golden = json.loads((FIXTURES / "golden/lossrun_0001.golden.json").read_text(encoding="utf-8"))
+    ocr = (FIXTURES / "ocr/lossrun_0001_page_1.md").read_text(encoding="utf-8")
+    return [
+        SourceDocument(
+            source_id=f"lossrun_{i:04d}", doc_type="lossrun",
+            golden_label=golden, ocr_pages=[ocr],
+            image_paths=[f"processed/default/lossrun/lossrun_{i:04d}/page_1.png"],
+            tenant_id="default",
+        )
+        for i in range(1, n + 1)
+    ]
+
+
+def _policy_documents(n: int = 6, *, pages: int = 1, lob: str | None = "workers_comp"):
+    """Canonical policies. Page 1 carries the fixture's OCR; any further page is
+    a copy of it, so the router has a declarations page to find."""
     golden = json.loads((FIXTURES / "golden/policy_0001.golden.json").read_text(encoding="utf-8"))
     ocr = (FIXTURES / "ocr/policy_0001_page_1.md").read_text(encoding="utf-8")
     return [
         SourceDocument(
             source_id=f"policy_{i:04d}", doc_type="policy",
-            golden_label=golden, ocr_pages=[ocr],
-            image_paths=[f"processed/default/policy/policy_{i:04d}/page_1.png"],
-            tenant_id="default",
+            golden_label=golden, ocr_pages=[ocr] * pages,
+            image_paths=[
+                f"processed/default/policy/policy_{i:04d}/page_{p}.png" for p in range(1, pages + 1)
+            ],
+            lob=lob, tenant_id="default",
         )
         for i in range(1, n + 1)
     ]
@@ -77,7 +102,7 @@ def _documents(n: int = 12) -> list[SourceDocument]:
 
 def test_split_covers_every_document_exactly_once():
     docs = _documents(12)
-    assignment = assign_splits({"policy": [d.source_id for d in docs]})
+    assignment = assign_splits({"lossrun": [d.source_id for d in docs]})
     assert len(assignment.assignment) == 12
     assert set(assignment.assignment.values()) == {"train", "val", "test"}
 
@@ -207,7 +232,7 @@ def test_noisy_and_clean_rows_share_one_system_prompt():
 def test_no_source_id_crosses_splits():
     """THE leakage test. If expansion moved before the split, this fails."""
     docs = _documents(12)
-    assignment = assign_splits({"policy": [d.source_id for d in docs]})
+    assignment = assign_splits({"lossrun": [d.source_id for d in docs]})
     result = build_corpus(docs, assignment)
     assert_no_leakage(assignment, result.all_rows)
 
@@ -220,7 +245,7 @@ def test_no_source_id_crosses_splits():
 def test_leakage_is_detected_when_it_is_injected():
     """Mutation check — the guard must actually fire."""
     docs = _documents(6)
-    assignment = assign_splits({"policy": [d.source_id for d in docs]})
+    assignment = assign_splits({"lossrun": [d.source_id for d in docs]})
     result = build_corpus(docs, assignment)
 
     rows = list(result.all_rows)
@@ -243,7 +268,7 @@ def test_rebuild_with_the_same_seed_is_byte_identical():
     """A corpus that changes between builds cannot be compared across model
     versions."""
     docs = _documents(8)
-    assignment = assign_splits({"policy": [d.source_id for d in docs]})
+    assignment = assign_splits({"lossrun": [d.source_id for d in docs]})
     first = write_jsonl(build_corpus(docs, assignment, seed=42).all_rows)
     second = write_jsonl(build_corpus(docs, assignment, seed=42).all_rows)
     assert first == second
@@ -253,7 +278,7 @@ def test_every_epoch_file_holds_every_train_document_exactly_once():
     """The concatenated epoch files are the whole run. A document missing from
     one, or in one twice, trains on something the epoch count does not describe."""
     docs = _documents(30)
-    assignment = assign_splits({"policy": [d.source_id for d in docs]})
+    assignment = assign_splits({"lossrun": [d.source_id for d in docs]})
     built = build_corpus(docs, assignment)
 
     by_epoch = train_rows_by_epoch(built)
@@ -265,7 +290,7 @@ def test_every_epoch_file_holds_every_train_document_exactly_once():
 
 def test_an_epoch_missing_a_document_is_refused():
     docs = _documents(30)
-    assignment = assign_splits({"policy": [d.source_id for d in docs]})
+    assignment = assign_splits({"lossrun": [d.source_id for d in docs]})
     built = build_corpus(docs, assignment)
     dropped = next(r for r in built.rows_by_split["train"] if r["epoch"] == 2)
     built.rows_by_split["train"].remove(dropped)
@@ -278,7 +303,7 @@ def test_val_and_test_keep_all_three_variants():
     """So image-only and noisy-OCR accuracy are measured on the full eval
     population, not a sample of it."""
     docs = _documents(30)
-    assignment = assign_splits({"policy": [d.source_id for d in docs]})
+    assignment = assign_splits({"lossrun": [d.source_id for d in docs]})
     sampled = build_corpus(docs, assignment)
 
     for split in ("val", "test"):
@@ -369,7 +394,7 @@ def test_confusable_co_occurrence_is_counted():
 
 def test_manifest_records_every_pin_and_measurement():
     docs = _documents(12)
-    assignment = assign_splits({"policy": [d.source_id for d in docs]})
+    assignment = assign_splits({"lossrun": [d.source_id for d in docs]})
     result = build_corpus(docs, assignment)
 
     manifest, report = build_manifest(
@@ -905,8 +930,21 @@ def test_a_run_of_pages_is_not_split_until_it_has_to_be():
     from data_pipeline.dataset_builder.expand_tasks import plan_policy_windows
 
     assert plan_policy_windows([1, 2, 3, 10, 11, 12, 40], pages_per_window=4) == [
-        [1, 2, 3], [10, 11, 12], [40],
+        [1, 2, 3], [10, 11, 12, 40],
     ]
+    # A run too long for one window gets windows of its own, never mixed.
+    assert plan_policy_windows([1, 10, 11, 12, 13, 14, 40], pages_per_window=3) == [
+        [1], [10, 11, 12], [13, 14], [40],
+    ]
+
+
+def test_scattered_pages_share_a_window_rather_than_each_paying_a_prompt():
+    """Keyword routing returns scattered single pages. A window per page would
+    spend a whole system prompt — some eleven thousand tokens — on each one."""
+    from data_pipeline.dataset_builder.expand_tasks import plan_policy_windows
+
+    windows = plan_policy_windows([1, 7, 12, 19, 25, 31], pages_per_window=5)
+    assert windows == [[1], [7, 12, 19, 25, 31]]
 
 
 def test_how_many_pages_a_call_holds_depends_on_the_line():
@@ -934,7 +972,7 @@ def test_train_documents_get_one_row_per_epoch_not_one_per_regime():
     """v1 expanded every train document into all three regimes, so a 3-epoch run
     was nine passes. There is no longer any path that does that for train."""
     docs = _documents(30)
-    assignment = assign_splits({"policy": [d.source_id for d in docs]})
+    assignment = assign_splits({"lossrun": [d.source_id for d in docs]})
     built = build_corpus(docs, assignment)
 
     per_doc: dict[str, int] = {}

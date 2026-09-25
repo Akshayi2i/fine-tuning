@@ -141,7 +141,9 @@ def array_key(section: str) -> tuple[str, ...]:
 
     An array is asked over several page windows, so a table spanning a window
     boundary comes back twice — legitimately. Comparison is on normalised
-    values, so ``"LOC 1"`` and ``"1"`` are one location.
+    values — case, spacing, punctuation — so ``" TOLEDO "`` and ``"Toledo"``
+    match. A prefix is not stripped: ``"LOC 1"`` and ``"1"`` stay distinct,
+    because stripping would also merge ``"LOC 1"`` with ``"BLDG 1"``.
     """
     return tuple(_map().get("array_keys", {}).get(section, ()))
 

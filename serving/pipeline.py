@@ -187,8 +187,12 @@ def _generate_once(
     page_numbers: list[int] | None = None,
     total_pages: int | None = None,
     lob: str | list[str] | None = None,
+    sections: str | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any], float | None]:
     """One scoped generation. Returns ``(extraction, spans, latency_ms)``.
+
+    ``sections`` names the schema slice a policy window asks for; the prompt and
+    the structured-decoding schema are both that slice, from the same selectors.
 
     The extraction comes back with every date in ``MM/DD/YYYY`` and, for a
     canonical document, still in the model's sparse ``raw``/``parsed``/
@@ -202,6 +206,7 @@ def _generate_once(
         modality_mode,
         acord_form=route_.schema_acord_form,
         lob=lob,
+        sections=sections,
         page_numbers=page_numbers,
         total_pages=total_pages,
     )
@@ -210,7 +215,7 @@ def _generate_once(
     # unconstrained model, so one malformed bf16 output made every quantized
     # format unvalidatable.
     schema = (
-        resolved_schema(route_.schema_doc_type, route_.schema_acord_form, lob)
+        resolved_schema(route_.schema_doc_type, route_.schema_acord_form, lob, sections)
         if getattr(model.config, "structured_outputs", False) else None
     )
     result = generate(model, built.messages, adapter=route_.adapter, json_schema=schema)
@@ -237,6 +242,61 @@ def _generate_once(
     # model generated, and a reformatted date is the same value in other
     # characters, not a different value with different evidence.
     return with_output_dates(extraction), collapse_spans(spans), result.latency_ms
+
+
+def _extract_policy_windows(
+    request: ExtractionRequest,
+    model: LoadedModel,
+    route_: Route,
+    lob: str | list[str] | None,
+    *,
+    page_threshold: int,
+) -> tuple[dict[str, Any], dict[str, Any], float | None, list[int], list[str]]:
+    """Read a canonical policy window by window, then merge.
+
+    Returns ``(extraction, spans, latency_ms, pages_used, merge_flags)`` — the
+    merged model-form document and its spans, in the shape the single-call path
+    returns, so confidence, completeness and the envelope run on it unchanged.
+    """
+    from data_pipeline.dataset_builder.policy_windows import plan_windows, routed_pages
+    from serving.policy_merge import PolicyWindow, merge_policy_windows
+
+    image_only = request.modality_mode == "image_only"
+    page_count = len(request.page_texts) or len(request.image_paths)
+    texts: dict[int, str] = {}
+    if not image_only:
+        texts = dict(request.page_texts) or dict(enumerate(_all_page_texts(request), start=1))
+
+    # Routed on the same text, by the same rule, as the training rows were:
+    # every page when there is no OCR text to score.
+    routed, declarations_page = routed_pages(
+        texts or None, page_count, page_threshold=page_threshold
+    )
+    windows: list[PolicyWindow] = []
+    for plan in plan_windows(lob, routed, declarations_page):
+        pages = list(plan.pages)
+        extraction, spans, latency = _generate_once(
+            model, route_,
+            [_image_for(request, page) for page in pages],
+            None if image_only else [texts.get(page) or _EMPTY_PAGE for page in pages],
+            request.modality_mode,
+            page_numbers=pages, total_pages=page_count,
+            lob=lob, sections=plan.group,
+        )
+        windows.append(PolicyWindow(plan.group, pages, extraction, spans, latency))
+
+    merged = merge_policy_windows(windows)
+    latencies = [w.latency_ms for w in windows if w.latency_ms is not None]
+    log.info(
+        "%s read in %d window(s) over %d routed page(s); %d duplicate row(s) collapsed, "
+        "%d conflict(s)", request.source_id, len(windows), len(routed),
+        merged.duplicates_collapsed, len(merged.conflicts),
+    )
+    return (
+        merged.extraction, merged.spans,
+        sum(latencies) if latencies else None,
+        sorted(routed), merged.review_flags,
+    )
 
 
 def _calibration_for(
@@ -442,8 +502,18 @@ def extract(
         if request.page_texts and routes_pages else None
     )
     latency: float | None = None
+    merge_flags: list[str] = []
 
-    if page_plan and page_plan.routed:
+    if canonical and route_.schema_doc_type == "policy":
+        # Every canonical policy is read as windows — section group x page
+        # window — planned by the SAME function the corpus build expanded its
+        # training rows with, so a served window is a shape a training row had.
+        # Always, whatever the length: a threshold computed from prompt length
+        # would move between corpus builds and re-shape documents silently.
+        extraction, all_spans, latency, pages_used, merge_flags = _extract_policy_windows(
+            request, model, route_, lob, page_threshold=page_threshold,
+        )
+    elif page_plan and page_plan.routed:
         # The selected pages go in **one** call, not one call per page. Sending
         # them separately asked the model to produce a whole-document JSON from a
         # single page — a shape it never trained on — and stopped it from seeing
@@ -516,7 +586,9 @@ def extract(
         values, route_.schema_doc_type,
         ocr_meta=request.ocr_meta, pages_used=pages_used,
     )
-    flags = merge_review_flags(completeness, calibrated.review_flags + route_.review_flags)
+    flags = merge_review_flags(
+        completeness, calibrated.review_flags + route_.review_flags + merge_flags
+    )
 
     # --- the client's canonical envelope -----------------------------------
     # confidence and flagged are filled here, from the calibrated fields, never

@@ -112,8 +112,9 @@ pages:
 #
 # An array is asked over several page windows, so a table spanning a window
 # boundary legitimately comes back twice. De-duplication is load-bearing here,
-# not tidying. Keys are compared on NORMALISED values, so "LOC 1" and "1" are one
-# location.
+# not tidying. Keys are compared on NORMALISED values - case, spacing and
+# punctuation - so " TOLEDO " and "Toledo" match. A prefix such as "LOC 1" vs "1"
+# is NOT stripped: doing so would also merge "LOC 1" with "BLDG 1".
 array_keys:
   locations: [location_number, address]
   interested_parties: [name, party_type]

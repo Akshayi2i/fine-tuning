@@ -73,6 +73,9 @@ class BuiltMessages:
     resolution_cap_px: int
     page_count: int
     lob: str | list[str] | None = None
+    #: The schema slice this prompt carries (``configs/schema_sections.yaml``),
+    #: or ``None`` for the whole schema.
+    sections: str | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
 
     def system_prompt(self) -> str:
@@ -137,6 +140,7 @@ def build_messages(
     *,
     acord_form: str | None = None,
     lob: str | list[str] | None = None,
+    sections: str | None = None,
     assistant_content: str | None = None,
     check_resolution_parity: bool = True,
     page_numbers: Sequence[int] | None = None,
@@ -160,6 +164,9 @@ def build_messages(
         modality_mode: one of :data:`common.constants.MODALITY_MODES`.
         acord_form: required for ACORD — selects the schema (arch §4b).
         lob: a policy's line of business — selects the per-LOB canonical schema.
+        sections: the slice of that schema one window asks for — ``decl``,
+            ``arrays``, ``lineblk``, ``dtd``. The prompt then describes only what
+            the window can answer; ``None`` is the whole schema.
         assistant_content: the golden JSON, when building a *training* row.
             Omitted at inference, where the assistant turn is what gets generated.
         check_resolution_parity: assert the training and serving caps agree.
@@ -216,7 +223,7 @@ def build_messages(
         assert_resolution_parity()
     cap = resolution_cap_px()
 
-    system = render_system_prompt(doc_type, modality_mode, acord_form, lob)
+    system = render_system_prompt(doc_type, modality_mode, acord_form, lob, sections)
 
     # Each page's image, then that page's own text. The image comes first
     # because the page is the primary evidence; the text follows immediately so
@@ -248,11 +255,12 @@ def build_messages(
         acord_form=acord_form,
         modality_mode=modality_mode,
         prompt_template_version=PROMPT_TEMPLATE_VERSION,
-        schema_version=schema_version(doc_type, acord_form, lob),
-        prompt_fingerprint=prompt_fingerprint(doc_type, modality_mode, acord_form, lob),
+        schema_version=schema_version(doc_type, acord_form, lob, sections),
+        prompt_fingerprint=prompt_fingerprint(doc_type, modality_mode, acord_form, lob, sections),
         resolution_cap_px=cap,
         page_count=len(image_paths),
         lob=lob,
+        sections=sections,
     )
 
 
@@ -266,6 +274,7 @@ def build_training_row(
     *,
     acord_form: str | None = None,
     lob: str | list[str] | None = None,
+    sections: str | None = None,
     tenant_id: str | None = None,
     split: str | None = None,
     deidentified: bool = False,
@@ -287,10 +296,10 @@ def build_training_row(
     """
     built = build_messages(
         doc_type, image_paths, ocr_pages, modality_mode,
-        acord_form=acord_form, lob=lob, assistant_content=golden_json,
+        acord_form=acord_form, lob=lob, sections=sections, assistant_content=golden_json,
         page_numbers=page_numbers, total_pages=total_pages,
     )
-    return {
+    row = {
         "doc_type": doc_type,
         "acord_form": acord_form,
         "lob": lob,
@@ -301,6 +310,10 @@ def build_training_row(
         "deidentified": deidentified,
         "messages": built.messages,
     }
+    # Only on a windowed row, so a whole-schema row is byte-identical to before.
+    if sections:
+        row["sections"] = sections
+    return row
 
 
 def page_images_for(

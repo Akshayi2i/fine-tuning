@@ -353,8 +353,15 @@ def test_a_known_lob_selects_its_canonical_schema(client):
         _request(known_lob="homeowners"), load_model("base", client, backend_impl=backend),
         StaticClassifier("policy"), CALIBRATION,
     )
-    assert backend.calls[-1]["json_schema"] == resolved_schema("policy", None, "homeowners")
-    assert "homeowners" in backend.calls[-1]["json_schema"]["properties"]
+    from common.schema_sections import groups_for
+
+    # A policy is read in windows, each constrained to its slice of the LINE's
+    # schema — so the homeowners block reaches the model through `lineblk`.
+    schemas = [call["json_schema"] for call in backend.calls]
+    assert schemas == [
+        resolved_schema("policy", None, "homeowners", group) for group in groups_for("homeowners")
+    ]
+    assert any("homeowners" in schema["properties"] for schema in schemas)
 
 
 def test_a_policy_with_no_known_lob_still_returns_canonical_json(model):
@@ -822,7 +829,12 @@ def test_serving_generation_is_constrained_to_the_routed_schema(client):
     extract(_request(), constrained, StaticClassifier("policy"), CALIBRATION)
 
     assert backend.calls, "nothing was generated"
-    assert backend.calls[-1]["json_schema"] == resolved_schema("policy")
+    from common.schema_sections import groups_for
+
+    # Every window is constrained — each to its own slice of the routed schema.
+    assert [c["json_schema"] for c in backend.calls] == [
+        resolved_schema("policy", None, None, group) for group in groups_for(None)
+    ]
 
 
 def test_structured_decoding_on_masked_logprobs_is_refused_at_load():

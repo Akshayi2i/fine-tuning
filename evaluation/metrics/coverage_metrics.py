@@ -22,7 +22,6 @@ from typing import Any
 
 from common.lob import lob_values
 from common.normalize import values_match
-from common.schemas import is_valid
 
 # --------------------------------------------------------------------------
 # Line of Business (arch §0b)
@@ -139,8 +138,9 @@ def score_schema_validity(
 ) -> SchemaValidityReport:
     """Validate each output against its document type's schema.
 
-    Each entry is ``(source_id, output, doc_type, acord_form[, lob])``; the line
-    selects a policy's canonical schema.
+    Each entry is ``(source_id, output, doc_type, acord_form[, lob[, sections]])``;
+    the line selects a policy's canonical schema and ``sections`` the slice one
+    window was asked for.
 
     Mirrors the audit gate that runs on every production call, so a validity
     regression is caught before promotion rather than in production. A canonical
@@ -150,15 +150,16 @@ def score_schema_validity(
     wrote fields the pipeline adds.
     """
     from common.canonical import envelope
-    from common.schemas import is_canonical
+    from common.schemas import is_canonical, validator_for
 
     report = SchemaValidityReport()
     for source_id, output, doc_type, acord_form, *rest in outputs:
         lob = rest[0] if rest else None
+        sections = rest[1] if len(rest) > 1 else None
         report.total += 1
         if is_canonical(doc_type, acord_form, lob):
             output = envelope(output, {})
-        if is_valid(output, doc_type, acord_form, lob):
+        if validator_for(doc_type, acord_form, lob, sections).is_valid(output):
             report.valid += 1
         else:
             report.invalid_source_ids.append(source_id)

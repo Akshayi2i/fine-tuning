@@ -353,7 +353,10 @@ def score_subset(
         if doc_type == "acord" and not form:
             unselectable.append(meta.get("source_id", ""))
         else:
-            validatable.append((meta.get("source_id", ""), got, doc_type, form, meta.get("lob")))
+            validatable.append((
+                meta.get("source_id", ""), got, doc_type, form,
+                meta.get("lob"), meta.get("sections"),
+            ))
 
     validity = score_schema_validity(validatable)
     validity_total = validity.total + len(unselectable)

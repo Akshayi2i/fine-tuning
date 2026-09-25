@@ -311,8 +311,26 @@ def plan_policy_windows(pages: list[int], *, pages_per_window: int) -> list[list
     windows: list[list[int]] = []
     if declarations:
         windows.extend(_split_evenly(declarations, pages_per_window))
+
+    # Whole runs are packed together while they fit, so scattered single pages —
+    # the usual output of keyword routing — share a call rather than each paying
+    # the whole system prompt for one page. A run is never split to fill space
+    # and never mixed into another window once it has to be split: a run longer
+    # than one window gets windows of its own.
+    open_window: list[int] = []
     for run in _consecutive_runs(rest):
-        windows.extend(_split_evenly(run, pages_per_window))
+        if len(run) > pages_per_window:
+            if open_window:
+                windows.append(open_window)
+                open_window = []
+            windows.extend(_split_evenly(run, pages_per_window))
+        elif len(open_window) + len(run) <= pages_per_window:
+            open_window.extend(run)
+        else:
+            windows.append(open_window)
+            open_window = list(run)
+    if open_window:
+        windows.append(open_window)
     return windows
 
 
@@ -355,10 +373,18 @@ def pages_per_extraction_call(
     doc_type: str,
     acord_form: str | None = None,
     lob: str | list[str] | None = None,
+    sections: str | None = None,
     *,
     ocr_tokens_per_page: int = OCR_TOKENS_PER_PAGE,
 ) -> int:
     """How many pages one extraction call has room for, for this line.
+
+    ``sections`` names a slice (``configs/schema_sections.yaml``). A sliced call
+    is its group's own task — ``policy_declarations``, ``policy_schedule`` — so
+    it is sized against that task's sequence and vision budget and against the
+    sliced prompt, not the whole-schema ``extract`` call's. Training and serving
+    both plan windows through :mod:`data_pipeline.dataset_builder.policy_windows`,
+    which is what keeps the two sizes the same number.
 
     Derived rather than declared, because the answer moved when the schemas did.
     The prompt carries the whole canonical schema, so a line with a larger one
@@ -377,15 +403,22 @@ def pages_per_extraction_call(
         TEMPLATE_OVERHEAD_TOKENS,
     )
 
-    budget = sequence_for_task(str(Task.EXTRACT), doc_type)
-    prompt = len(render_system_prompt(doc_type, "ocr_plus_image", acord_form, lob)) / CHARS_PER_TOKEN
+    task = str(Task.EXTRACT)
+    if sections:
+        from common.schema_sections import task_for
+
+        task = task_for(sections)
+    budget = sequence_for_task(task, doc_type)
+    prompt = len(
+        render_system_prompt(doc_type, "ocr_plus_image", acord_form, lob, sections)
+    ) / CHARS_PER_TOKEN
     room = (
         budget["max_seq_len"]
         - budget["max_output_tokens"]
         - TEMPLATE_OVERHEAD_TOKENS
         - prompt
     )
-    per_page = vision_for_task(str(Task.EXTRACT))["max_pixels"] // 1024 + ocr_tokens_per_page
+    per_page = vision_for_task(task)["max_pixels"] // 1024 + ocr_tokens_per_page
     return max(1, int(room // per_page))
 
 

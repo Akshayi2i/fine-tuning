@@ -1,0 +1,279 @@
+"""Policy windows — how a canonical policy is read, in training and in serving.
+
+A policy is read as a cross product of section groups and page windows. These
+tests pin the properties that make that safe: a window's target is only what its
+own pages show, page numbers stay the document's, nothing reachable is lost, and
+the windows a model is trained on are exactly the windows it is served.
+"""
+
+from __future__ import annotations
+
+import json
+
+import pytest
+
+from artifact_registry.blob_client import BlobClient, InMemoryBackend
+from calibration.fit_calibration import CalibrationParams
+from data_pipeline.dataset_builder.build_jsonl import (
+    SourceDocument,
+    build_corpus,
+    expand_document,
+    train_rows_by_epoch,
+)
+from data_pipeline.dataset_builder.policy_windows import (
+    PolicyWindowPlan,
+    TargetReport,
+    plan_windows,
+    routed_pages,
+    unread_values,
+    window_target,
+)
+from data_pipeline.dataset_builder.split_groups import GroupRecord, assign_group_splits
+from inference_core.model_runner import EchoBackend, load_model
+from serving.doc_type_classifier import StaticClassifier
+from serving.pipeline import ExtractionRequest, extract
+
+TOTAL = 15
+#: A 15-page policy: declarations on page 1, a location schedule on 7-8, an
+#: endorsement on 12, boilerplate everywhere else.
+PAGE_TEXT = {
+    1: "Common Policy Declarations. Named Insured: Rivera Fabrication LLC. Policy Number WC-1.",
+    7: "Schedule of Locations",
+    8: "Schedule of Locations (continued)",
+    12: "Endorsement - Additional Insured",
+}
+TEXTS = [PAGE_TEXT.get(page, "Standard conditions and definitions.") for page in range(1, TOTAL + 1)]
+
+
+def _fv(value, page):
+    return {"raw": value, "parsed": value, "confidence": {"score": 1.0, "source": "audit"},
+            "page_ref": [page], "flagged": False}
+
+
+LABEL = {
+    "carrier": {"company_name": _fv("Granite Mutual", 1)},
+    "named_insured": {"primary_name": _fv("Rivera Fabrication LLC", 1)},
+    "policy": {"policy_number": _fv("WC-1", 1)},
+    "locations": [
+        {"location_number": _fv("1", 7), "address": {"city": _fv("Toledo", 7)}},
+        # One row printed across a page break: its city is on the next page.
+        {"location_number": _fv("2", 7), "address": {"city": _fv("Dayton", 8)}},
+    ],
+    "forms_and_endorsements": [{"form_number": _fv("CG 20 10", 12)}],
+    # A value printed on a page the keyword router does not route.
+    "state_notices": [{"state": _fv("OH", 14)}],
+}
+
+
+def _plans(lob=None):
+    routed, declarations = routed_pages(TEXTS, TOTAL)
+    return routed, plan_windows(lob, routed, declarations)
+
+
+# --------------------------------------------------------------------------
+# Planning
+# --------------------------------------------------------------------------
+
+def test_every_group_is_asked_over_every_page_that_could_carry_it():
+    routed, plans = _plans()
+    assert routed == [1, 7, 8, 12]
+    by_group: dict[str, set[int]] = {}
+    for plan in plans:
+        by_group.setdefault(plan.group, set()).update(plan.pages)
+    assert by_group["decl"] == {1}
+    assert by_group["arrays"] == set(routed)
+
+
+def test_a_short_policy_is_windowed_too():
+    """Always, whatever the length: a threshold computed from prompt length would
+    move between corpus builds and silently re-shape documents."""
+    routed, declarations = routed_pages(["Declarations"], 1)
+    groups = {plan.group for plan in plan_windows("homeowners", routed, declarations)}
+    assert groups == {"decl", "arrays", "lineblk"}
+
+
+def test_image_only_routes_every_page():
+    assert routed_pages(None, 4) == ([1, 2, 3, 4], None)
+
+
+# --------------------------------------------------------------------------
+# The gold slicer
+# --------------------------------------------------------------------------
+
+def _plan(group, pages, *, single=False, index=0):
+    return PolicyWindowPlan(group, index, tuple(pages), single=single)
+
+
+def test_a_window_target_holds_only_its_sections_on_its_pages():
+    target = window_target(LABEL, None, _plan("arrays", [12]))
+    assert set(target) == {"forms_and_endorsements"}
+    assert "carrier" not in target, "another group's section leaked into the slice"
+
+
+def test_page_ref_keeps_the_documents_page_numbers():
+    """A window-relative number would train the model to emit 1..n per window,
+    and every page_ref in production would be off by an offset nobody sees."""
+    target = window_target(LABEL, None, _plan("arrays", [12]))
+    assert target["forms_and_endorsements"][0]["form_number"]["page_ref"] == [12]
+
+
+def test_a_row_across_a_window_boundary_is_in_both_with_what_each_can_see():
+    first = window_target(LABEL, None, _plan("arrays", [7]))
+    second = window_target(LABEL, None, _plan("arrays", [8], index=1))
+    rows_first = first["locations"]
+    assert [r["location_number"]["raw"] for r in rows_first] == ["1", "2"]
+    assert "address" not in rows_first[1], "page 8's city is not visible in the page-7 window"
+    (row_second,) = second["locations"]
+    assert row_second["address"]["city"]["raw"] == "Dayton"
+
+
+def test_the_decl_target_keeps_its_required_objects():
+    target = window_target(LABEL, None, _plan("decl", [1], single=True))
+    assert {"carrier", "named_insured", "policy"} <= set(target)
+    assert set(target["carrier"]["company_name"]) == {"raw", "parsed", "page_ref"}
+
+
+def test_a_value_with_no_page_is_placed_only_when_there_is_one_window():
+    label = {"policy": {"policy_number": {**_fv("WC-1", 1), "page_ref": []}},
+             "carrier": {}, "named_insured": {}}
+    single = window_target(label, None, _plan("decl", [1], single=True))
+    assert single["policy"]["policy_number"]["raw"] == "WC-1"
+
+    report = TargetReport()
+    split = window_target(label, None, _plan("decl", [1], single=False), report)
+    assert "policy_number" not in split["policy"]
+    assert report.unplaced == ["decl:policy.policy_number"]
+
+
+def test_values_no_window_reads_are_reported():
+    """The router did not route page 14, so the state notice is unreachable at
+    serving too. Counting it is how a page rule that misses content shows up."""
+    _routed, plans = _plans()
+    assert unread_values(LABEL, None, plans) == ["state_notices[0].state"]
+
+
+# --------------------------------------------------------------------------
+# The corpus build
+# --------------------------------------------------------------------------
+
+def _document(source_id="policy_0001", lob=None, label=LABEL):
+    return SourceDocument(
+        source_id=source_id, doc_type="policy", golden_label=label, ocr_pages=list(TEXTS),
+        image_paths=[f"processed/default/policy/{source_id}/page_{p}.png" for p in range(1, TOTAL + 1)],
+        lob=lob, tenant_id="default",
+    )
+
+
+def test_a_policy_becomes_one_row_per_window_per_mode():
+    rows, details = expand_document(_document(), "train", modes=("ocr_plus_image",))
+    _routed, plans = _plans()
+    assert [(r["sections"], r["window_pages"]) for r in rows] == [
+        (p.group, list(p.pages)) for p in plans
+    ]
+    assert all(r["task"] for r in rows)
+    assert any("unread state_notices[0].state" in d for d in details)
+
+
+def test_a_row_carries_the_documents_page_markers():
+    rows, _ = expand_document(_document(), "train", modes=("ocr_plus_image",))
+    arrays = next(r for r in rows if r["sections"] == "arrays" and 12 in r["window_pages"])
+    text = json.dumps(arrays["messages"][1])
+    assert f"<page 12 of {TOTAL}>" in text
+    assert "<page 1 of 1>" not in text
+
+
+def test_a_row_prompts_for_its_slice_only():
+    rows, _ = expand_document(_document(), "train", modes=("ocr_plus_image",))
+    decl = next(r for r in rows if r["sections"] == "decl")["messages"][0]["content"]
+    arrays = next(r for r in rows if r["sections"] == "arrays")["messages"][0]["content"]
+    assert '"company_name"' in decl and '"company_name"' not in arrays
+    assert '"locations"' in arrays and '"locations"' not in decl
+
+
+def test_a_flat_policy_label_is_skipped_rather_than_trained_as_empty():
+    """A flat label has none of the canonical sections: every window's target
+    would be `{}`, teaching "this policy states nothing" with no error at all."""
+    flat = _document(label={"insured_name": "X", "line_of_business": ["workers_comp"]})
+    groups = {"policy": [GroupRecord(group_id=flat.source_id, doc_type="policy",
+                                     source_ids=[flat.source_id])]}
+    built = build_corpus([flat], assign_group_splits(groups, seed=42))
+    assert not built.all_rows
+    assert built.skipped and "pre-canonical" in built.skipped[0][1]
+
+
+def test_every_epoch_holds_every_windowed_policy():
+    docs = [_document(f"policy_{i:04d}") for i in range(1, 21)]
+    groups = {"policy": [GroupRecord(group_id=d.source_id, doc_type="policy",
+                                     source_ids=[d.source_id]) for d in docs]}
+    built = build_corpus(docs, assign_group_splits(groups, seed=42))
+    by_epoch = train_rows_by_epoch(built)
+    train_ids = {r["source_id"] for r in built.rows_by_split["train"]}
+    for rows in by_epoch.values():
+        assert {r["source_id"] for r in rows} == train_ids
+        assert len(rows) > len(train_ids), "a policy is several windows, so several rows"
+
+
+# --------------------------------------------------------------------------
+# Training and serving read the same windows
+# --------------------------------------------------------------------------
+
+@pytest.fixture
+def client() -> BlobClient:
+    return BlobClient(backend=InMemoryBackend(), container="main", raw_container="raw")
+
+
+def _serve(client, response, **request):
+    backend = EchoBackend(json.dumps(response))
+    model = load_model("base", client, backend_impl=backend)
+    result = extract(
+        ExtractionRequest(
+            source_id="policy_0001",
+            image_paths=[f"processed/default/policy/policy_0001/page_{p}.png"
+                         for p in range(1, TOTAL + 1)],
+            page_texts={p: t for p, t in enumerate(TEXTS, start=1)},
+            known_doc_type="policy", **request,
+        ),
+        model, StaticClassifier("policy"),
+        CalibrationParams(method="temperature", doc_type="policy",
+                          model_version="v1", temperature=1.0),
+    )
+    return result, backend
+
+
+def _decl_response():
+    return {
+        "carrier": {"company_name": {"raw": "Granite Mutual", "parsed": "Granite Mutual",
+                                     "page_ref": [1]}},
+        "named_insured": {"primary_name": {"raw": "Rivera", "parsed": "Rivera", "page_ref": [1]}},
+        "policy": {"policy_number": {"raw": "WC-1", "parsed": "WC-1", "page_ref": [1]}},
+    }
+
+
+def test_serving_asks_the_windows_training_built(client):
+    """The one property the whole design rests on. A served window that no
+    training row had is a shape the model was never taught."""
+    rows, _ = expand_document(_document(lob="homeowners"), "train", modes=("ocr_plus_image",))
+    trained = [(r["sections"], r["window_pages"]) for r in rows]
+
+    _result, backend = _serve(client, _decl_response(), known_lob="homeowners")
+    served_schemas = [call["json_schema"] for call in backend.calls]
+
+    assert len(backend.calls) == len(trained)
+    from common.schemas import resolved_schema
+
+    assert served_schemas == [
+        resolved_schema("policy", None, "homeowners", group) for group, _pages in trained
+    ]
+    served_prompts = [call["messages"][0]["content"] for call in backend.calls]
+    trained_prompts = [r["messages"][0]["content"] for r in rows]
+    assert served_prompts == trained_prompts, "a served prompt differs from its training row's"
+
+
+def test_serving_returns_one_canonical_document(client):
+    result, _ = _serve(client, _decl_response())
+    assert result.schema_valid
+    leaf = result.extraction["carrier"]["company_name"]
+    assert set(leaf) == {"raw", "parsed", "confidence", "page_ref", "flagged"}
+    assert result.pages_used == [1, 7, 8, 12]
+    # Every window echoed the same declarations: one value, not several.
+    assert not any(f.endswith(":merge_conflict") for f in result.review_flags)

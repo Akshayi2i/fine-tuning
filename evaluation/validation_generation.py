@@ -58,6 +58,9 @@ class ValidationGeneration:
             # policy was judged against the canonical fallback.
             "acord_form": self.row.get("acord_form"),
             "lob": self.row.get("lob"),
+            # A policy row is one window: its output is judged against the slice
+            # it was asked for, not the whole schema it is a part of.
+            "sections": self.row.get("sections"),
             "modality_mode": self.row.get("modality_mode", "ocr_plus_image"),
             # Not on the row. Unknown is recorded as not scanned, which only
             # affects which eval subset a document is also counted in.
@@ -122,7 +125,9 @@ def generate_validation(
         messages, golden = split_prompt(row)
         entry = ValidationGeneration(row=row, golden=golden)
         schema = (
-            resolved_schema(row["doc_type"], row.get("acord_form"), row.get("lob"))
+            resolved_schema(
+                row["doc_type"], row.get("acord_form"), row.get("lob"), row.get("sections")
+            )
             if constrain else None
         )
         try:

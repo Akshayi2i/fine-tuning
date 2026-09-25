@@ -22,9 +22,17 @@ from collections import Counter
 from dataclasses import dataclass, field
 from typing import Any
 
-from common.canonical import training_target
+from common.canonical import CanonicalLabelError, has_envelopes, training_target
 from common.constants import MODALITY_MODES
+from common.schemas import is_canonical
 from data_pipeline.dataset_builder.noisy_ocr_augment import corrupt_ocr_pages
+from data_pipeline.dataset_builder.policy_windows import (
+    TargetReport,
+    plan_windows,
+    routed_pages,
+    unread_values,
+    window_target,
+)
 from data_pipeline.dataset_builder.sample_modes import EPOCH_FILES, ModeAssignment, sample_modes
 from data_pipeline.dataset_builder.split_groups import (
     GroupSplitAssignment,
@@ -88,6 +96,11 @@ class BuildResult:
     modality_counts: Counter = field(default_factory=Counter)
     corruption_details: dict[str, list[str]] = field(default_factory=dict)
     skipped: list[tuple[str, str]] = field(default_factory=list)
+    #: Gold values no window's target could carry, per document: printed only on
+    #: pages no window of their group reads, or with no page recorded in a group
+    #: read over several windows. The same values are unreachable at serving, so
+    #: this is where a page rule that misses real content becomes visible.
+    window_notes: dict[str, list[str]] = field(default_factory=dict)
 
     @property
     def all_rows(self) -> list[dict[str, Any]]:
@@ -105,10 +118,18 @@ def expand_document(
     seed: int = 42,
     modes: tuple[str, ...] = MODALITY_MODES,
 ) -> tuple[list[dict[str, Any]], list[str]]:
-    """Expand one document into one row per mode in ``modes``.
+    """Expand one document into rows, per mode in ``modes``.
+
+    One row per mode for a flat document type. A canonical policy is read as
+    windows - a section group over a set of pages (``policy_windows``) - so it
+    becomes one row per window per mode, each prompting for its slice of the
+    schema and targeting its slice of the label. Every row carries
+    ``mode_index``, its position in ``modes``, which ``build_corpus`` stamps an
+    epoch from.
 
     Every row lands in the **same** split, because the document was assigned
-    before expansion. Returns ``(rows, corruption_details)``.
+    before expansion. Returns ``(rows, details)``; details prefixed ``window``
+    are the gold values no window could carry.
 
     Under arch v2.1 §6.1 the caller passes ONE mode per epoch, drawn by
     :mod:`data_pipeline.dataset_builder.sample_modes`. Passing all three — the v1
@@ -117,19 +138,29 @@ def expand_document(
     "3 epoch" run is nine passes. Val and test still take all three, so
     image-only accuracy is measured on the full eval population.
     """
-    # The target, not the label: a canonical policy label is narrowed to the
-    # sparse raw/parsed/page_ref form the prompt asks for, and every date is
-    # written MM/DD/YYYY. A flat pre-canonical policy label raises here and the
-    # document is skipped by `build_corpus` — trained under a canonical prompt it
-    # would teach the wrong shape.
-    target = training_target(
-        document.golden_label, document.doc_type, document.acord_form, document.lob
+    windowed = document.doc_type == "policy" and is_canonical(
+        document.doc_type, document.acord_form, document.lob
     )
-    golden_json = json.dumps(target, ensure_ascii=False, sort_keys=False)
+    if windowed and not has_envelopes(document.golden_label):
+        # Checked before slicing: a flat label has none of the canonical
+        # sections, so every window's target would come out `{}` and the corpus
+        # would teach "this policy states nothing" with no error anywhere.
+        raise CanonicalLabelError(
+            f"{document.source_id} is a policy with a flat, pre-canonical label. Convert it to "
+            "the canonical schema before it enters the corpus."
+        )
+
+    golden_json = ""
+    if not windowed:
+        # The target, not the label: every date is written MM/DD/YYYY.
+        target = training_target(
+            document.golden_label, document.doc_type, document.acord_form, document.lob
+        )
+        golden_json = json.dumps(target, ensure_ascii=False, sort_keys=False)
     rows: list[dict[str, Any]] = []
     details: list[str] = []
 
-    for mode in modes:
+    for mode_index, mode in enumerate(modes):
         if mode == "image_only":
             ocr_pages = None
         elif mode == "noisy_ocr_image":
@@ -142,6 +173,12 @@ def expand_document(
             details.extend(page_details)
         else:
             ocr_pages = list(document.ocr_pages)
+
+        if windowed:
+            for row in _policy_window_rows(document, split, mode, ocr_pages, details):
+                row["mode_index"] = mode_index
+                rows.append(row)
+            continue
 
         row = build_training_row(
             document.doc_type,
@@ -157,9 +194,68 @@ def expand_document(
             # Recorded, not enforced: de-identification is blocked (SPEC_05 §1).
             deidentified=False,
         )
+        row["mode_index"] = mode_index
         rows.append(row)
 
     return rows, details
+
+
+def _policy_window_rows(
+    document: SourceDocument,
+    split: str,
+    mode: str,
+    ocr_pages: list[str] | None,
+    details: list[str],
+) -> list[dict[str, Any]]:
+    """One row per window, planned exactly as serving plans them.
+
+    The routed pages come from the OCR text THIS row carries - clean, corrupted
+    or none - because that is what serving routes on for the same input.
+    """
+    page_count = len(document.image_paths)
+    routed, declarations_page = routed_pages(ocr_pages, page_count)
+    plans = plan_windows(document.lob, routed, declarations_page)
+
+    report = TargetReport()
+    rows: list[dict[str, Any]] = []
+    for plan in plans:
+        target = window_target(document.golden_label, document.lob, plan, report)
+        indices = [page - 1 for page in plan.pages]
+        row = build_training_row(
+            document.doc_type,
+            document.source_id,
+            [document.image_paths[i] for i in indices],
+            None if ocr_pages is None else [ocr_pages[i] for i in indices],
+            mode,
+            json.dumps(target, ensure_ascii=False, sort_keys=False),
+            acord_form=document.acord_form,
+            lob=document.lob,
+            sections=plan.group,
+            tenant_id=document.tenant_id,
+            split=split,
+            deidentified=False,
+            # The document's own page numbers, never window-relative: the
+            # target's page_ref is the document's, and so are the markers.
+            page_numbers=list(plan.pages),
+            total_pages=page_count,
+        )
+        row["task"] = plan.task
+        row["window_index"] = plan.window_index
+        row["window_pages"] = list(plan.pages)
+        rows.append(row)
+
+    notes = [f"window {mode}: unread {path}" for path in unread_values(
+        document.golden_label, document.lob, plans
+    )]
+    notes += [f"window {mode}: unplaced {path}" for path in report.unplaced]
+    if notes:
+        log.warning(
+            "%s (%s): %d gold value(s) no window can carry - printed on pages no window of "
+            "their group reads, or with no page recorded. Serving cannot reach them either.",
+            document.source_id, mode, len(notes),
+        )
+        details.extend(notes)
+    return rows
 
 
 def build_corpus(
@@ -208,9 +304,10 @@ def build_corpus(
         # Train rows are stamped with the epoch they belong to, so the corpus can
         # be written as epoch_1..4.jsonl and a run reproduced from the files
         # alone rather than from a sampler behaving identically at training time.
-        if split == "train":
-            for epoch, row in enumerate(rows, start=1):
-                row["epoch"] = epoch
+        for row in rows:
+            mode_index = row.pop("mode_index")
+            if split == "train":
+                row["epoch"] = mode_index + 1
 
         # Stamped here rather than inside expand_document: the family is a
         # property of the corpus build, not of one document's expansion, and the
@@ -224,8 +321,12 @@ def build_corpus(
         result.rows_by_split[split].extend(rows)
         for row in rows:
             result.modality_counts[row["modality_mode"]] += 1
-        if details:
-            result.corruption_details[document.source_id] = details
+        corruption = [d for d in details if not d.startswith("window ")]
+        windows = [d for d in details if d.startswith("window ")]
+        if corruption:
+            result.corruption_details[document.source_id] = corruption
+        if windows:
+            result.window_notes[document.source_id] = windows
 
     # The checks that make the ordering rule real rather than documented.
     assert_no_leakage(assignment, result.all_rows)
@@ -260,10 +361,16 @@ def train_rows_by_epoch(
 ) -> dict[int, list[dict[str, Any]]]:
     """Split the train rows into one list per epoch file.
 
-    Every epoch file must hold every train document exactly once. A document
-    missing from an epoch, or present twice, means the run trains on something
-    other than what the manifest's epoch count says, so that is refused here
-    rather than discovered in a loss curve.
+    Every epoch file must hold every train document, and no row twice. A
+    document missing from an epoch, or a row present twice, means the run trains
+    on something other than what the manifest's epoch count says, so that is
+    refused here rather than discovered in a loss curve.
+
+    A canonical policy is several windows, so it is several rows in every epoch.
+    Its windows can differ between epochs - each epoch draws the document in its
+    own input mode, and an image-only row routes every page where an OCR row
+    routes by keyword - so what must hold across epochs is the set of DOCUMENTS,
+    not the set of rows.
     """
     by_epoch: dict[int, list[dict[str, Any]]] = {e: [] for e in range(1, epochs + 1)}
     for row in result.rows_by_split.get("train", []):
@@ -277,21 +384,32 @@ def train_rows_by_epoch(
 
     expected = sorted({row["source_id"] for rows in by_epoch.values() for row in rows})
     for epoch, rows in by_epoch.items():
-        ids = sorted(row["source_id"] for row in rows)
+        keys = [_row_identity(row) for row in rows]
+        if len(keys) != len(set(keys)):
+            raise CorpusBuildError(f"epoch {epoch} holds a row twice.")
+        ids = sorted({row["source_id"] for row in rows})
         if ids != expected:
             raise CorpusBuildError(
-                f"epoch {epoch} does not hold every train document exactly once "
-                f"({len(ids)} rows for {len(expected)} documents)."
+                f"epoch {epoch} does not hold every train document "
+                f"({len(ids)} documents for {len(expected)} expected)."
             )
     return by_epoch
+
+
+def _row_identity(row: dict[str, Any]) -> tuple[str, str, str, int]:
+    """One row: its document, input mode, schema slice and window."""
+    return (
+        row["source_id"], row["modality_mode"],
+        row.get("sections") or "", int(row.get("window_index") or 0),
+    )
 
 
 def write_jsonl(rows: list[dict[str, Any]]) -> str:
     """Serialise rows to JSONL — one complete JSON object per line.
 
-    Sorted by ``(source_id, modality_mode)`` so a rebuild with the same seed is
-    byte-identical. A corpus that changes between builds cannot be compared
-    across model versions.
+    Sorted by ``(source_id, modality_mode, sections, window_index)`` so a rebuild
+    with the same seed is byte-identical. A corpus that changes between builds
+    cannot be compared across model versions.
     """
-    ordered = sorted(rows, key=lambda r: (r["source_id"], r["modality_mode"]))
+    ordered = sorted(rows, key=_row_identity)
     return "".join(json.dumps(row, ensure_ascii=False, sort_keys=True) + "\n" for row in ordered)
