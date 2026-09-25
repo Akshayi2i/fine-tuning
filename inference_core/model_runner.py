@@ -124,6 +124,26 @@ class ModelBackend(ABC):
     @abstractmethod
     def supports_logprobs(self) -> bool: ...
 
+    def generate_batch(
+        self,
+        messages_list: list[list[dict[str, Any]]],
+        configs: list[RunnerConfig],
+        adapter: str | None = None,
+    ) -> list[Generation | Exception]:
+        """Several independent requests. One result per request, in order.
+
+        A failure is returned in its slot rather than raised, so one bad request
+        does not lose the others. The default runs them one at a time; a backend
+        that can batch (vLLM) overrides it and runs them together.
+        """
+        out: list[Generation | Exception] = []
+        for messages, config in zip(messages_list, configs, strict=True):
+            try:
+                out.append(self.generate(messages, config, adapter=adapter))
+            except Exception as exc:  # noqa: BLE001 - reported per request, not raised
+                out.append(exc)
+        return out
+
 
 class EchoBackend(ModelBackend):
     """Deterministic stub for tests — no GPU, no weights, no network.
@@ -198,9 +218,8 @@ class VLLMBackend(ModelBackend):
         log.info("vLLM engine up on %s (lora=%s)", model_path, config.enable_lora)
         return self._engine
 
-    def generate(self, messages, config, adapter=None) -> Generation:
-        import time
-
+    @staticmethod
+    def _imports():
         try:
             from vllm import SamplingParams
             from vllm.lora.request import LoRARequest
@@ -208,8 +227,11 @@ class VLLMBackend(ModelBackend):
             raise ModelRunnerError(
                 'vLLM is not installed. Install the [serve] extra on the pod: pip install -e ".[serve]"'
             ) from exc
+        return SamplingParams, LoRARequest
 
-        engine = self._load(config)
+    @staticmethod
+    def _sampling_params(config: RunnerConfig):
+        SamplingParams, _ = VLLMBackend._imports()
         sampling: dict[str, Any] = {
             "temperature": config.temperature,
             "top_p": config.top_p,
@@ -242,19 +264,20 @@ class VLLMBackend(ModelBackend):
                     "NOT guaranteed at decode time and the SPEC_07 audit gate is the only "
                     "thing catching an invalid extraction (arch v2.1 §13)."
                 )
+        return SamplingParams(**{k: v for k, v in sampling.items() if v is not None})
 
-        params = SamplingParams(**{k: v for k, v in sampling.items() if v is not None})
+    @staticmethod
+    def _lora(adapter: str | None):
+        _, LoRARequest = VLLMBackend._imports()
         # Hot-swap rather than reload. The adapter is a per-request argument
         # precisely so one engine serves every document type (arch §4).
-        lora = LoRARequest(adapter, abs(hash(adapter)) % (10 ** 8), adapter) if adapter else None
+        return LoRARequest(adapter, abs(hash(adapter)) % (10 ** 8), adapter) if adapter else None
 
-        started = time.perf_counter()
-        outputs = engine.chat(messages, params, lora_request=lora)
-        latency_ms = (time.perf_counter() - started) * 1000
-
-        if not outputs or not outputs[0].outputs:
+    @staticmethod
+    def _to_generation(output: Any, config: RunnerConfig, latency_ms: float) -> Generation:
+        if not output or not output.outputs:
             raise ModelRunnerError("vLLM returned no completion for this request")
-        completion = outputs[0].outputs[0]
+        completion = output.outputs[0]
 
         tokens, logprobs = [], []
         token_ids = list(getattr(completion, "token_ids", None) or [])
@@ -284,6 +307,47 @@ class VLLMBackend(ModelBackend):
             generation_fingerprint=config.fingerprint(),
             latency_ms=round(latency_ms, 1),
         )
+
+    def generate(self, messages, config, adapter=None) -> Generation:
+        import time
+
+        engine = self._load(config)
+        params = self._sampling_params(config)
+        started = time.perf_counter()
+        outputs = engine.chat(messages, params, lora_request=self._lora(adapter))
+        latency_ms = (time.perf_counter() - started) * 1000
+        return self._to_generation(outputs[0] if outputs else None, config, latency_ms)
+
+    def generate_batch(self, messages_list, configs, adapter=None):
+        """All requests in ONE ``engine.chat`` call.
+
+        vLLM schedules them together (continuous batching), so a policy's windows
+        run concurrently rather than one after another. Each request keeps its
+        own sampling parameters — every window is constrained to a different
+        schema slice. The shared wall time is reported on each result, because
+        that is how long each one actually waited.
+        """
+        import time
+
+        if not messages_list:
+            return []
+        engine = self._load(configs[0])
+        params = [self._sampling_params(config) for config in configs]
+        started = time.perf_counter()
+        try:
+            outputs = engine.chat(list(messages_list), params, lora_request=self._lora(adapter))
+        except Exception as exc:  # noqa: BLE001 - the whole batch failed; say so per slot
+            return [exc for _ in messages_list]
+        latency_ms = (time.perf_counter() - started) * 1000
+
+        results: list[Generation | Exception] = []
+        for index, config in enumerate(configs):
+            try:
+                output = outputs[index] if index < len(outputs) else None
+                results.append(self._to_generation(output, config, latency_ms))
+            except Exception as exc:  # noqa: BLE001 - reported per request
+                results.append(exc)
+        return results
 
 
 class HFBackend(ModelBackend):
@@ -554,3 +618,48 @@ def generate(
             model.tag,
         )
     return result
+
+
+def generate_batch(
+    model: LoadedModel,
+    requests: list[tuple[list[dict[str, Any]], dict[str, Any] | None]],
+    *,
+    adapter: str | None = None,
+    want_logprobs: bool = True,
+) -> list[Generation | ModelRunnerError]:
+    """Several independent generations, run together where the backend can.
+
+    ``requests`` is ``[(messages, json_schema), ...]`` — each constrained to its
+    own schema, as a policy's windows are. One result per request, in order; a
+    failed request is a :class:`ModelRunnerError` in its slot, never raised, so
+    one window cannot lose the others. The checks :func:`generate` applies —
+    logprobs present — apply to each result.
+    """
+    import dataclasses
+
+    configs = [
+        dataclasses.replace(model.config, json_schema=schema) if schema else model.config
+        for _messages, schema in requests
+    ]
+    raw = model.backend.generate_batch(
+        [messages for messages, _schema in requests], configs, adapter=adapter
+    )
+
+    out: list[Generation | ModelRunnerError] = []
+    for result in raw:
+        if isinstance(result, Exception):
+            out.append(
+                result if isinstance(result, ModelRunnerError)
+                else ModelRunnerError(f"generation failed for {model.tag}: {result}")
+            )
+            continue
+        if not result.generation_fingerprint:
+            result.generation_fingerprint = model.config.fingerprint()
+        if want_logprobs and not result.has_logprobs:
+            try:
+                result.assert_logprobs()
+            except ModelRunnerError as exc:
+                out.append(exc)
+                continue
+        out.append(result)
+    return out

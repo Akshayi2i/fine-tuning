@@ -9,6 +9,7 @@ the windows a model is trained on are exactly the windows it is served.
 from __future__ import annotations
 
 import json
+import re
 
 import pytest
 
@@ -29,7 +30,7 @@ from data_pipeline.dataset_builder.policy_windows import (
     window_target,
 )
 from data_pipeline.dataset_builder.split_groups import GroupRecord, assign_group_splits
-from inference_core.model_runner import EchoBackend, load_model
+from inference_core.model_runner import EchoBackend, Generation, ModelBackend, load_model
 from serving.doc_type_classifier import StaticClassifier
 from serving.pipeline import ExtractionRequest, extract
 
@@ -277,3 +278,126 @@ def test_serving_returns_one_canonical_document(client):
     assert result.pages_used == [1, 7, 8, 12]
     # Every window echoed the same declarations: one value, not several.
     assert not any(f.endswith(":merge_conflict") for f in result.review_flags)
+
+
+# --------------------------------------------------------------------------
+# Concurrency, and a bad window not losing the document
+# --------------------------------------------------------------------------
+
+class _ScriptedBackend(ModelBackend):
+    """Answers each window by a rule over (group, pages), and records batches.
+
+    ``fail(group, pages)`` returns ``"garbage"``, ``"truncated"`` or ``None``.
+    """
+
+    def __init__(self, fail=lambda group, pages: None):
+        self.fail = fail
+        self.batches: list[int] = []
+        self.windows: list[tuple[str, list[int]]] = []
+
+    def supports_logprobs(self) -> bool:
+        return True
+
+    @staticmethod
+    def _window(messages, config):
+        properties = (config.json_schema or {}).get("properties", {})
+        group = "decl" if "carrier" in properties else "arrays" if "locations" in properties else "other"
+        text = json.dumps(messages[1]["content"])
+        pages = [int(n) for n in re.findall(r"<page (\d+) of", text)]
+        return group, pages
+
+    def generate_batch(self, messages_list, configs, adapter=None):
+        self.batches.append(len(messages_list))
+        return super().generate_batch(messages_list, configs, adapter)
+
+    def generate(self, messages, config, adapter=None) -> Generation:
+        group, pages = self._window(messages, config)
+        self.windows.append((group, pages))
+        mode = self.fail(group, pages)
+        body = _decl_response() if group == "decl" else {}
+        text = "{\"carrier\": {\"company" if mode == "garbage" else json.dumps(body)
+        tokens = [text[i:i + 4] for i in range(0, len(text), 4)]
+        return Generation(
+            text=text, tokens=tokens, token_logprobs=[-0.01] * len(tokens),
+            finish_reason="length" if mode == "truncated" else "stop",
+        )
+
+
+def _serve_with(client, backend):
+    from inference_core.model_runner import load_model as _load
+
+    model = _load("base", client, backend_impl=backend)
+    return extract(
+        ExtractionRequest(
+            source_id="policy_0001",
+            image_paths=[f"processed/default/policy/policy_0001/page_{p}.png"
+                         for p in range(1, TOTAL + 1)],
+            page_texts={p: t for p, t in enumerate(TEXTS, start=1)},
+            known_doc_type="policy",
+        ),
+        model, StaticClassifier("policy"),
+        CalibrationParams(method="temperature", doc_type="policy",
+                          model_version="v1", temperature=1.0),
+    )
+
+
+def test_every_window_goes_to_the_model_in_one_batch(client):
+    """vLLM schedules a batch together, so a policy costs about its slowest
+    window, not the sum of all of them."""
+    backend = _ScriptedBackend()
+    _serve_with(client, backend)
+    _routed, plans = _plans()
+    assert backend.batches == [len(plans)]
+
+
+def test_a_failed_window_is_split_and_retried_over_fewer_pages(client):
+    """Greedy decoding would write the same thing again, so the retry is a
+    smaller window — less to write — not the same one."""
+    backend = _ScriptedBackend(
+        fail=lambda group, pages: "truncated" if group == "arrays" and len(pages) > 1 else None
+    )
+    result = _serve_with(client, backend)
+
+    assert len(backend.batches) >= 2, "the failed window was never retried"
+    retried = [pages for group, pages in backend.windows if group == "arrays" and len(pages) == 1]
+    assert {p for pages in retried for p in pages} >= {7, 8, 12}
+    assert not any(f.startswith("window_failed") for f in result.review_flags)
+    assert result.schema_valid
+
+
+def test_a_window_that_fails_alone_is_flagged_and_the_rest_returned(client):
+    backend = _ScriptedBackend(
+        fail=lambda group, pages: "garbage" if group == "arrays" and 12 in pages else None
+    )
+    result = _serve_with(client, backend)
+
+    assert "window_failed:arrays:p12" in result.review_flags
+    assert result.extraction["carrier"]["company_name"]["parsed"] == "Granite Mutual"
+    assert result.schema_valid
+
+
+def test_a_document_with_no_readable_window_is_an_error(client):
+    from serving.pipeline import PipelineError
+
+    backend = _ScriptedBackend(fail=lambda group, pages: "garbage")
+    with pytest.raises(PipelineError, match="no window of policy_0001 could be read"):
+        _serve_with(client, backend)
+
+
+def test_a_batch_reports_one_failure_without_losing_the_others(client):
+    from inference_core.model_runner import ModelRunnerError, generate_batch
+    from inference_core.model_runner import load_model as _load
+
+    class _Half(_ScriptedBackend):
+        def generate(self, messages, config, adapter=None):
+            if messages[0]["content"] == "boom":
+                raise RuntimeError("backend fell over")
+            return super().generate(messages, config, adapter)
+
+    model = _load("base", client, backend_impl=_Half())
+    ok = [{"role": "system", "content": "x"}, {"role": "user", "content": [{"type": "text", "text": "<page 1 of 1>"}]}]
+    bad = [{"role": "system", "content": "boom"}, ok[1]]
+    results = generate_batch(model, [(ok, None), (bad, None), (ok, None)])
+
+    assert isinstance(results[1], ModelRunnerError) and "fell over" in str(results[1])
+    assert not isinstance(results[0], Exception) and not isinstance(results[2], Exception)

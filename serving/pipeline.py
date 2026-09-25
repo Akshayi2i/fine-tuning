@@ -24,6 +24,7 @@ from __future__ import annotations
 import json
 import logging
 import math
+import time
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any
@@ -40,7 +41,7 @@ from common.canonical import collapse_spans, envelope, values_view, with_output_
 from common.constants import DEFAULT_LONG_DOC_PAGE_THRESHOLD, DEFAULT_REVIEW_CONFIDENCE_THRESHOLD
 from common.schemas import is_canonical, is_valid, iter_validation_errors, resolved_schema
 from inference_core.input_builder import build_messages
-from inference_core.model_runner import LoadedModel, generate
+from inference_core.model_runner import Generation, LoadedModel, generate, generate_batch
 from inference_core.span_map import SpanMapError, map_field_spans
 from serving.adapter_router import Route, RoutingError, route
 from serving.doc_type_classifier import Classifier
@@ -177,7 +178,7 @@ def _all_page_texts(request: ExtractionRequest) -> list[str]:
     )
 
 
-def _generate_once(
+def _build_request(
     model: LoadedModel,
     route_: Route,
     image_paths: list[str],
@@ -188,16 +189,11 @@ def _generate_once(
     total_pages: int | None = None,
     lob: str | list[str] | None = None,
     sections: str | None = None,
-) -> tuple[dict[str, Any], dict[str, Any], float | None]:
-    """One scoped generation. Returns ``(extraction, spans, latency_ms)``.
+) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
+    """The messages and the decoding schema for one generation.
 
     ``sections`` names the schema slice a policy window asks for; the prompt and
     the structured-decoding schema are both that slice, from the same selectors.
-
-    The extraction comes back with every date in ``MM/DD/YYYY`` and, for a
-    canonical document, still in the model's sparse ``raw``/``parsed``/
-    ``page_ref`` form; the spans are keyed by values-view path. The caller adds
-    confidence and wraps it in the client's envelope.
     """
     built = build_messages(
         route_.schema_doc_type,
@@ -218,8 +214,28 @@ def _generate_once(
         resolved_schema(route_.schema_doc_type, route_.schema_acord_form, lob, sections)
         if getattr(model.config, "structured_outputs", False) else None
     )
-    result = generate(model, built.messages, adapter=route_.adapter, json_schema=schema)
+    return built.messages, schema
 
+
+def _parse_generation(
+    result: Generation, route_: Route, *, refuse_truncated: bool = False
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """``(extraction, spans)`` from one generation, or :class:`PipelineError`.
+
+    The extraction comes back with every date in ``MM/DD/YYYY`` and, for a
+    canonical document, still in the model's sparse ``raw``/``parsed``/
+    ``page_ref`` form; the spans are keyed by values-view path.
+
+    ``refuse_truncated`` treats output cut off at the token limit as a failure
+    even when what was cut still parses. A window can afford that: it is retried
+    over fewer pages. Parsing a truncated answer as complete would drop every
+    row after the cut with nothing to say so.
+    """
+    if refuse_truncated and result.truncated():
+        raise PipelineError(
+            f"the {route_.schema_doc_type} generation hit the token limit, so its output is "
+            "incomplete"
+        )
     # Parse and span-map together: both fail for the same underlying reason — the
     # model did not return JSON — and reporting that as two different errors from
     # two layers would obscure a single cause.
@@ -241,7 +257,34 @@ def _generate_once(
     # Dates are reformatted AFTER the span map: the spans describe the tokens the
     # model generated, and a reformatted date is the same value in other
     # characters, not a different value with different evidence.
-    return with_output_dates(extraction), collapse_spans(spans), result.latency_ms
+    return with_output_dates(extraction), collapse_spans(spans)
+
+
+def _generate_once(
+    model: LoadedModel,
+    route_: Route,
+    image_paths: list[str],
+    ocr_pages: list[str] | None,
+    modality_mode: str,
+    *,
+    page_numbers: list[int] | None = None,
+    total_pages: int | None = None,
+    lob: str | list[str] | None = None,
+    sections: str | None = None,
+) -> tuple[dict[str, Any], dict[str, Any], float | None]:
+    """One scoped generation. Returns ``(extraction, spans, latency_ms)``."""
+    messages, schema = _build_request(
+        model, route_, image_paths, ocr_pages, modality_mode,
+        page_numbers=page_numbers, total_pages=total_pages, lob=lob, sections=sections,
+    )
+    result = generate(model, messages, adapter=route_.adapter, json_schema=schema)
+    extraction, spans = _parse_generation(result, route_)
+    return extraction, spans, result.latency_ms
+
+
+#: The review flag a window that could not be read leaves on the document. The
+#: values its pages carried are missing, and nothing else would say so.
+WINDOW_FAILED_FLAG = "window_failed"
 
 
 def _extract_policy_windows(
@@ -254,9 +297,24 @@ def _extract_policy_windows(
 ) -> tuple[dict[str, Any], dict[str, Any], float | None, list[int], list[str]]:
     """Read a canonical policy window by window, then merge.
 
-    Returns ``(extraction, spans, latency_ms, pages_used, merge_flags)`` — the
-    merged model-form document and its spans, in the shape the single-call path
+    Returns ``(extraction, spans, latency_ms, pages_used, flags)`` — the merged
+    model-form document and its spans, in the shape the single-call path
     returns, so confidence, completeness and the envelope run on it unchanged.
+
+    **Concurrent.** Every window of a round goes to the model in one batch; vLLM
+    schedules them together, so a 17-window policy costs roughly the time of its
+    slowest window rather than the sum of all of them. ``latency_ms`` is the
+    wall time actually spent.
+
+    **One bad window does not lose the document.** A window whose output is not
+    parseable JSON, or was cut off at the token limit — the usual cause on a
+    dense schedule page — is split in half and retried in the next round, since
+    fewer pages means less to write. Retrying it unchanged would be pointless:
+    decoding is greedy, so it would write the same thing again. A window that
+    still fails at a single page is dropped and flagged ``window_failed``, so the
+    document comes back with everything else and a person is told which pages
+    it could not read. Only when no window at all succeeds is the request an
+    error.
     """
     from data_pipeline.dataset_builder.policy_windows import plan_windows, routed_pages
     from serving.policy_merge import PolicyWindow, merge_policy_windows
@@ -272,31 +330,71 @@ def _extract_policy_windows(
     routed, declarations_page = routed_pages(
         texts or None, page_count, page_threshold=page_threshold
     )
+    pending: list[tuple[str, list[int]]] = [
+        (plan.group, list(plan.pages)) for plan in plan_windows(lob, routed, declarations_page)
+    ]
+
     windows: list[PolicyWindow] = []
-    for plan in plan_windows(lob, routed, declarations_page):
-        pages = list(plan.pages)
-        extraction, spans, latency = _generate_once(
-            model, route_,
-            [_image_for(request, page) for page in pages],
-            None if image_only else [texts.get(page) or _EMPTY_PAGE for page in pages],
-            request.modality_mode,
-            page_numbers=pages, total_pages=page_count,
-            lob=lob, sections=plan.group,
+    failed: list[str] = []
+    first_cause: str | None = None
+    wall_ms = 0.0
+    rounds = 0
+    while pending:
+        rounds += 1
+        requests = [
+            _build_request(
+                model, route_,
+                [_image_for(request, page) for page in pages],
+                None if image_only else [texts.get(page) or _EMPTY_PAGE for page in pages],
+                request.modality_mode,
+                page_numbers=pages, total_pages=page_count,
+                lob=lob, sections=group,
+            )
+            for group, pages in pending
+        ]
+        started = time.perf_counter()
+        results = generate_batch(model, requests, adapter=route_.adapter)
+        wall_ms += (time.perf_counter() - started) * 1000
+
+        retry: list[tuple[str, list[int]]] = []
+        for (group, pages), result in zip(pending, results, strict=True):
+            try:
+                if isinstance(result, Exception):
+                    raise PipelineError(str(result))
+                extraction, spans = _parse_generation(result, route_, refuse_truncated=True)
+            except PipelineError as exc:
+                first_cause = first_cause or str(exc)
+                if len(pages) > 1:
+                    half = len(pages) // 2
+                    retry += [(group, pages[:half]), (group, pages[half:])]
+                    log.warning(
+                        "%s: %s window over pages %s failed (%s); retrying as two smaller "
+                        "windows", request.source_id, group, pages, exc,
+                    )
+                else:
+                    failed.append(f"{group}:p{pages[0]}")
+                    log.warning(
+                        "%s: %s window over page %s failed even alone (%s); dropped and "
+                        "flagged for review", request.source_id, group, pages[0], exc,
+                    )
+                continue
+            windows.append(PolicyWindow(group, pages, extraction, spans, result.latency_ms))
+        pending = retry
+
+    if not windows:
+        raise PipelineError(
+            f"no window of {request.source_id} could be read ({len(failed)} failed: "
+            f"{', '.join(failed[:6])}). The first failure: {first_cause}"
         )
-        windows.append(PolicyWindow(plan.group, pages, extraction, spans, latency))
 
     merged = merge_policy_windows(windows)
-    latencies = [w.latency_ms for w in windows if w.latency_ms is not None]
+    flags = merged.review_flags + [f"{WINDOW_FAILED_FLAG}:{entry}" for entry in failed]
     log.info(
-        "%s read in %d window(s) over %d routed page(s); %d duplicate row(s) collapsed, "
-        "%d conflict(s)", request.source_id, len(windows), len(routed),
-        merged.duplicates_collapsed, len(merged.conflicts),
+        "%s read in %d window(s) over %d routed page(s) in %d round(s); %d duplicate row(s) "
+        "collapsed, %d conflict(s), %d window(s) unreadable", request.source_id, len(windows),
+        len(routed), rounds, merged.duplicates_collapsed, len(merged.conflicts), len(failed),
     )
-    return (
-        merged.extraction, merged.spans,
-        sum(latencies) if latencies else None,
-        sorted(routed), merged.review_flags,
-    )
+    return merged.extraction, merged.spans, round(wall_ms, 1), sorted(routed), flags
 
 
 def _calibration_for(
