@@ -442,17 +442,18 @@ def test_a_policy_falls_back_to_the_generic_schema_until_an_lob_file_exists():
 
 
 def test_an_lob_selects_a_schema_only_when_one_is_registered():
-    """Simulates the state after per-LOB schemas land, without shipping one."""
+    """The per-LOB schemas have landed, so this tests them rather than a stand-in.
+
+    Previously this monkeypatched a fake entry into ``_SCHEMA_FILES`` to simulate
+    the state after they arrived. They have arrived, and a test that still asserts
+    against a fake would keep passing if the real registration broke.
+    """
     from common import schemas
 
-    registered = dict(schemas._SCHEMA_FILES)
-    registered["policy:workers_comp"] = "policy_doc.schema.json"
-    original, schemas._SCHEMA_FILES = schemas._SCHEMA_FILES, registered
-    try:
-        assert schemas.schema_key("policy", None, "workers_comp") == "policy:workers_comp"
-        assert schemas.schema_key("policy", None, "commercial_auto") == "policy"
-    finally:
-        schemas._SCHEMA_FILES = original
+    assert schemas.schema_key("policy", None, "homeowners") == "policy:homeowners"
+    assert schemas.schema_key("policy", None, ["ocean_marine"]) == "policy:ocean_marine"
+    # A commercial line, with no canonical file registered: still the generic one.
+    assert schemas.schema_key("policy", None, "commercial_auto") == "policy"
 
 
 def test_a_package_policy_uses_the_generic_schema_rather_than_one_of_its_lines():
@@ -461,15 +462,150 @@ def test_a_package_policy_uses_the_generic_schema_rather_than_one_of_its_lines()
     third of itself."""
     from common import schemas
 
-    registered = dict(schemas._SCHEMA_FILES)
-    registered["policy:workers_comp"] = "policy_doc.schema.json"
-    original, schemas._SCHEMA_FILES = schemas._SCHEMA_FILES, registered
-    try:
-        assert schemas.schema_key(
-            "policy", None, ["workers_comp", "general_liability"]
-        ) == "policy"
-    finally:
-        schemas._SCHEMA_FILES = original
+    assert schemas.schema_key("policy", None, ["homeowners", "personal_auto"]) == "policy"
+
+
+# --------------------------------------------------------------------------
+# The client's canonical schemas (configs/canonical schema/policy_check)
+# --------------------------------------------------------------------------
+
+#: The five schemas that predate the canonical files, hashed before they were
+#: registered. Registering more schemas must not move any of these by one byte:
+#: they are what every existing corpus, adapter and release was built against.
+_PRE_CANONICAL_SCHEMA_TEXT = {
+    ("lossrun", None): "5507f66d8c0a44ba6cc4992250a13694013e65049be0a8cfb2cf1baebcecf524",
+    ("policy", None): "06c9c1ffc3184ea73e2e0abba5ae00f5e3667a9321cb8c0c75dd93597e6c47a2",
+    ("acord", "25"): "d6f31d382e18fcfa97e2648203802a4bf4c6d66d456d78894a71484c2867a076",
+    ("acord", "125"): "0fc5c210e389d63431790ec4a8d186fa3c1f2830915e77e407f6e4b949dd7816",
+    ("acord", "140"): "218698aaf1319fefaca28786ff03c3b42d46619f695d2a0e80330814e4535375",
+}
+
+
+def test_the_five_original_schemas_are_byte_identical_after_registering_canonical():
+    """Additive means additive.
+
+    `resolved_schema` grew a branch for the canonical files. If that branch
+    changed the other path by so much as a key order, every prompt fingerprint
+    and every corpus schema pin would move, and no other test would say why.
+    """
+    import hashlib
+
+    from common import schemas
+
+    for (doc_type, form), want in _PRE_CANONICAL_SCHEMA_TEXT.items():
+        got = hashlib.sha256(schemas.schema_text(doc_type, form).encode()).hexdigest()
+        assert got == want, f"{doc_type}/{form} schema text changed"
+
+
+def test_every_personal_lines_lob_has_a_registered_canonical_schema():
+    """One list of the family's LOBs, in configs/layout_families.yaml.
+
+    A second hand-kept copy would drift, and the symptom is a document routed to
+    an adapter that never saw its layout — which reads as a bad extraction and
+    nothing else.
+    """
+    from common.config import lobs_in_family
+    from common.schemas import CANONICAL_FAMILY, schema_key
+
+    lobs = lobs_in_family(CANONICAL_FAMILY)
+    assert len(lobs) == 8
+    for lob in lobs:
+        assert schema_key("policy", None, lob) == f"policy:{lob}", (
+            f"{lob} is declared in the {CANONICAL_FAMILY} family but has no canonical schema, "
+            "so it would silently fall back to the generic policy schema"
+        )
+
+
+def test_a_canonical_schema_is_not_ref_inlined():
+    """Every leaf $refs #/$defs/FieldValue — 532 of them in homeowners.
+
+    Inlining them restates the same 480-character envelope once per field, which
+    turns a 42k-character schema into 281k characters of prompt: ~70k tokens
+    saying one thing over and over, and far past any sequence budget.
+    """
+    from common.schemas import resolved_schema, schema_text
+
+    schema = resolved_schema("policy", None, ["homeowners"])
+    assert "$defs" in schema and "FieldValue" in schema["$defs"]
+    assert "$ref" in json.dumps(schema), "refs were inlined"
+    assert len(schema_text("policy", None, ["homeowners"])) < 60_000
+
+
+def test_no_fideon_key_survives_into_the_schema_the_model_sees():
+    """fideon:aliases records the printed labels carriers use for each field.
+
+    That is corpus-analysis knowledge and it is barred from the prompt (master
+    §1.4): a model handed the lookup table never learns the semantics, and the
+    first label not in the table misses with nothing to signal it.
+
+    The registry's own guard is an AST import check on `common.aliases`, which
+    this walks straight past — these aliases arrive inside the client's schema
+    file, not through that module.
+    """
+    from common.config import lobs_in_family
+    from common.schemas import CANONICAL_FAMILY, load_schema, schema_text
+
+    for lob in lobs_in_family(CANONICAL_FAMILY):
+        assert "fideon:" not in schema_text("policy", None, lob), f"{lob} leaks fideon: keys"
+        # …while the raw schema, which is what validation judges against, keeps them.
+        assert "fideon:" in json.dumps(load_schema("policy", None, lob))
+
+
+def test_a_canonical_schema_version_comes_from_fideon_source():
+    """These files carry no top-level `version`; theirs is under `fideon:source`.
+
+    `schema_version` is called for every registered schema when a corpus manifest
+    is written, so reading the wrong path fails the whole build.
+    """
+    from common.schemas import schema_version
+
+    assert schema_version("policy", None, ["homeowners"]) == "1.4.0"
+    assert schema_version("policy", None, ["ocean_marine"]) == "3.0.0"
+    assert schema_version("policy") == schema_version("policy", None, ["commercial_auto"])
+
+
+def test_a_canonical_schema_validates_the_fieldvalue_envelope():
+    """Validation judges a label against the client's file byte for byte —
+    `fideon:` keys and all — because that file is the contract, not our
+    rendering of it."""
+    from common.schemas import is_valid, required_fields
+
+    fv = {
+        "raw": "HO-1234", "parsed": "HO-1234",
+        "confidence": {"score": 0.97, "source": "vlm"},
+        "page_ref": [1], "flagged": False,
+    }
+    whole = {
+        "carrier": {"company_name": fv},
+        "named_insured": {"primary_name": fv},
+        "policy": {"policy_number": fv},
+    }
+    assert is_valid(whole, "policy", None, ["homeowners"])
+    assert required_fields("policy", None, ["homeowners"]) == [
+        "carrier", "named_insured", "policy",
+    ]
+
+    # Assert on the REASON, not just the verdict. The generic policy schema
+    # rejects this instance too, for its own unrelated reasons, so a bare
+    # `not is_valid` would pass even if the canonical schema were never reached.
+    from common.schemas import iter_validation_errors
+
+    bare = {**whole, "carrier": {"company_name": {"raw": "X"}}}
+    errors = list(iter_validation_errors(bare, "policy", None, ["homeowners"]))
+    assert any("'confidence' is a required property" in e for e in errors), (
+        f"validation did not enforce the FieldValue envelope; got: {errors[:3]}"
+    )
+
+
+def test_unqualified_selectors_come_first():
+    """Callers that scan until they find what they need should read the five small
+    generic schemas before the eight large canonical ones."""
+    from common.schemas import schema_selectors
+
+    selectors = schema_selectors()
+    qualified = [i for i, s in enumerate(selectors) if s[1] or s[2]]
+    unqualified = [i for i, s in enumerate(selectors) if not (s[1] or s[2])]
+    assert max(unqualified) < min(qualified)
 
 
 def test_a_list_valued_lob_does_not_break_the_schema_cache():

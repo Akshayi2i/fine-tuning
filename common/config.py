@@ -43,6 +43,13 @@ SHARED_SEQUENCE_CONFIG = CONFIG_DIR / "shared" / "sequence.yaml"
 #: one coverage and served as another.
 SCOPES_CONFIG = CONFIG_DIR / "scopes.yaml"
 
+#: WHICH LOBs share a visual grammar (SPEC_09 §2.1). One table, two readers:
+#: training uses it to decide which documents a family's adapter trains on, and
+#: the schema registry uses it to decide which canonical schemas to register.
+#: Two copies of this mapping would eventually disagree, and the symptom would be
+#: a document extracted by an adapter that never saw its layout.
+LAYOUT_FAMILIES_CONFIG = CONFIG_DIR / "layout_families.yaml"
+
 
 class ConfigError(RuntimeError):
     """Raised on a missing config, a missing required env var, or a broken invariant."""
@@ -96,6 +103,30 @@ def env(name: str, default: str | None = None, *, required: bool = False) -> str
 def scopes_config() -> dict[str, Any]:
     """The raw scope declarations. Parsed and validated by :mod:`common.scopes`."""
     return load_yaml(SCOPES_CONFIG)
+
+
+@lru_cache(maxsize=1)
+def layout_families_config() -> dict[str, Any]:
+    """The raw family declarations. See :func:`lobs_in_family`."""
+    return load_yaml(LAYOUT_FAMILIES_CONFIG)
+
+
+def lobs_in_family(family: str) -> tuple[str, ...]:
+    """The lines of business belonging to one layout family, in declared order.
+
+    Order is preserved because it is the order the LOBs are registered in and
+    reported in; a set would make the schema registry's iteration order depend on
+    hash seeding, and a corpus manifest that lists its schemas in a different
+    order on every build cannot be diffed across model versions.
+    """
+    families = layout_families_config().get("families") or {}
+    entry = families.get(family)
+    if entry is None:
+        raise ConfigError(
+            f"no layout family {family!r} in {LAYOUT_FAMILIES_CONFIG.name}; "
+            f"declared families: {sorted(families)}"
+        )
+    return tuple(entry.get("lobs") or ())
 
 
 @lru_cache(maxsize=1)
