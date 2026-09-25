@@ -49,7 +49,12 @@ DENSE_WINDOW = (1, 0)   # > 25 rows/page -> single page, no overlap
 #: Pages always added to a policy's routed set — the declarations area carries
 #: the policy-level fields whatever the page selector says (§7b).
 DECLARATIONS_PAGES = 3
-MAX_ROUTED_PAGES = 6
+
+#: OCR markdown charged per routed page when sizing a window. Deliberately thin:
+#: this decides how many pages a call is given, and over-estimating the text
+#: leaves capacity unused while under-estimating is caught by ``cap_check``,
+#: which rejects the row rather than truncating it.
+OCR_TOKENS_PER_PAGE = 700
 
 #: Above this, thumbnails are sent in chunks and the selections unioned.
 PAGE_SELECT_CHUNK = 60
@@ -245,31 +250,143 @@ def select_policy_pages(
     *,
     distractors: list[int] | None = None,
 ) -> list[int]:
-    """The routed page set for a policy extraction (arch v2.1 §7b).
+    """Every page a policy extraction must read, in page order.
 
     Pages 1-3 are **always** included: the declarations area carries the
     policy-level fields, and a selector that misses it produces an extraction with
-    no policy number. Capped at six pages; beyond that the highest-relevance pages
-    are kept and the rest logged, because an uncapped set defeats the routing.
+    no policy number.
+
+    Returns the whole set. It is :func:`plan_policy_windows` that decides how many
+    calls the set takes — this function no longer truncates it.
+
+    It used to. The cap was six pages, and beyond that it kept the declarations
+    plus the numerically *lowest* remaining pages and logged the rest, under a
+    docstring claiming the highest-relevance ones were kept. There was never a
+    relevance score in it. On a 200-page policy with the vehicle schedule on
+    pp.140-146, the locations on pp.150-152 and the endorsements on pp.180-190,
+    that kept ``[1, 2, 3, 12, 140, 141]`` and discarded fourteen pages including
+    every endorsement. The extraction then validated cleanly against the schema
+    and was missing most of the policy, and the only trace was a log line nobody
+    reads at corpus-build time.
+
+    A page set larger than one call is a document that needs more than one call.
+    It is not a document with fewer pages.
     """
     if total_pages <= 0:
         raise ExpansionError("a policy needs at least one page")
 
     declarations = list(range(1, min(DECLARATIONS_PAGES, total_pages) + 1))
-    selected = sorted(set(declarations) | {p for p in provenance_pages if 1 <= p <= total_pages})
-    selected += [p for p in (distractors or []) if 1 <= p <= total_pages and p not in selected]
-    selected = sorted(set(selected))
+    selected = set(declarations) | {p for p in provenance_pages if 1 <= p <= total_pages}
+    selected |= {p for p in (distractors or []) if 1 <= p <= total_pages}
+    return sorted(selected)
 
-    if len(selected) > MAX_ROUTED_PAGES:
-        kept = declarations + [p for p in selected if p not in declarations]
-        dropped = kept[MAX_ROUTED_PAGES:]
-        selected = sorted(kept[:MAX_ROUTED_PAGES])
-        log.warning(
-            "policy page selection returned %d pages; kept %s and dropped %s. A routed set that "
-            "is not capped defeats the routing (arch v2.1 §7b).",
-            len(kept), selected, dropped,
-        )
-    return selected
+
+def plan_policy_windows(pages: list[int], *, pages_per_window: int) -> list[list[int]]:
+    """Split a routed page set into calls, dropping nothing.
+
+    ``pages_per_window`` is how many pages one extraction call can carry, which
+    :func:`pages_per_extraction_call` derives from the line's own budget — a
+    bigger canonical schema leaves room for fewer pages, so ocean marine gets
+    four where dwelling fire gets six.
+
+    Two rules, both about keeping a window readable rather than merely legal:
+
+    * **The declarations lead.** Pages 1-3 go in the first window, so the window
+      that carries the policy-level fields is the one holding the page they are
+      printed on.
+    * **Runs stay whole where they fit.** A vehicle schedule printed across
+      pp.140-146 is one table; splitting it at an arbitrary page boundary hands
+      the model half a table with no header. Consecutive pages are grouped first
+      and a run only breaks when it is longer than one window.
+    """
+    if pages_per_window < 1:
+        raise ExpansionError(f"a window must hold at least one page, got {pages_per_window}")
+    if not pages:
+        return []
+
+    ordered = sorted(set(pages))
+    declarations = [p for p in ordered if p <= DECLARATIONS_PAGES]
+    rest = [p for p in ordered if p > DECLARATIONS_PAGES]
+
+    windows: list[list[int]] = []
+    if declarations:
+        windows.extend(_split_evenly(declarations, pages_per_window))
+    for run in _consecutive_runs(rest):
+        windows.extend(_split_evenly(run, pages_per_window))
+    return windows
+
+
+def _consecutive_runs(pages: list[int]) -> list[list[int]]:
+    """``[12, 140, 141, 142, 150]`` -> ``[[12], [140, 141, 142], [150]]``."""
+    runs: list[list[int]] = []
+    for page in pages:
+        if runs and page == runs[-1][-1] + 1:
+            runs[-1].append(page)
+        else:
+            runs.append([page])
+    return runs
+
+
+def _split_evenly(pages: list[int], limit: int) -> list[list[int]]:
+    """Split into the fewest windows of at most ``limit``, as evenly as possible.
+
+    Seven pages at a limit of six is two windows, and they are 4+3 rather than
+    6+1. Both are legal; the even one is cheaper and reads better. Cheaper
+    because a window pays the whole system prompt whatever it holds — some eleven
+    thousand tokens for a canonical line — so a one-page window spends a full
+    prompt on a single page. Reads better because these runs are usually one
+    table printed across several pages, and halving it leaves two comparable
+    pieces rather than a body and an orphan.
+    """
+    windows_needed = -(-len(pages) // limit)
+    if windows_needed <= 1:
+        return [pages]
+    size, remainder = divmod(len(pages), windows_needed)
+    out: list[list[int]] = []
+    start = 0
+    for index in range(windows_needed):
+        take = size + (1 if index < remainder else 0)
+        out.append(pages[start:start + take])
+        start += take
+    return out
+
+
+def pages_per_extraction_call(
+    doc_type: str,
+    acord_form: str | None = None,
+    lob: str | list[str] | None = None,
+    *,
+    ocr_tokens_per_page: int = OCR_TOKENS_PER_PAGE,
+) -> int:
+    """How many pages one extraction call has room for, for this line.
+
+    Derived rather than declared, because the answer moved when the schemas did.
+    The prompt carries the whole canonical schema, so a line with a larger one
+    leaves less room for pages: measured, dwelling fire fits six and ocean marine
+    four. A single ``MAX_ROUTED_PAGES`` constant cannot express that, and the one
+    that existed was set when a policy meant twelve flat fields.
+
+    Never returns less than one: a budget that cannot hold a single page is a
+    budget problem, and ``cap_check`` is where that surfaces with the arithmetic
+    attached rather than here as an empty window list.
+    """
+    from common.config import sequence_for_task, vision_for_task
+    from common.prompts import render_system_prompt
+    from data_pipeline.dataset_builder.cap_check import (
+        CHARS_PER_TOKEN,
+        TEMPLATE_OVERHEAD_TOKENS,
+    )
+
+    budget = sequence_for_task(str(Task.EXTRACT), doc_type)
+    prompt = len(render_system_prompt(doc_type, "ocr_plus_image", acord_form, lob)) / CHARS_PER_TOKEN
+    room = (
+        budget["max_seq_len"]
+        - budget["max_output_tokens"]
+        - TEMPLATE_OVERHEAD_TOKENS
+        - prompt
+    )
+    per_page = vision_for_task(str(Task.EXTRACT))["max_pixels"] // 1024 + ocr_tokens_per_page
+    return max(1, int(room // per_page))
 
 
 def page_select_chunks(total_pages: int, chunk: int = PAGE_SELECT_CHUNK) -> list[list[int]]:

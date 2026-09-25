@@ -860,13 +860,63 @@ def test_the_declarations_pages_are_always_routed():
     assert select_policy_pages([22, 31], 40)[:3] == [1, 2, 3]
 
 
-def test_the_routed_page_set_is_capped():
-    """An uncapped routed set defeats the routing."""
-    from data_pipeline.dataset_builder.expand_tasks import MAX_ROUTED_PAGES, select_policy_pages
+def test_no_routed_page_is_ever_dropped():
+    """The routed set used to be truncated at six pages, keeping the declarations
+    and the numerically LOWEST remaining pages — under a docstring claiming the
+    highest-relevance ones survived, with no relevance score anywhere in it.
 
-    selected = select_policy_pages([5, 9, 14, 22, 31, 33, 38], 40)
-    assert len(selected) == MAX_ROUTED_PAGES
-    assert selected[:3] == [1, 2, 3], "declarations survive the cap"
+    A page set larger than one call is a document that needs more than one call.
+    It is not a document with fewer pages.
+    """
+    from data_pipeline.dataset_builder.expand_tasks import select_policy_pages
+
+    found = [5, 9, 14, 22, 31, 33, 38]
+    selected = select_policy_pages(found, 40)
+    assert selected[:3] == [1, 2, 3], "the declarations lead"
+    assert set(found) <= set(selected), f"dropped {sorted(set(found) - set(selected))}"
+
+
+def test_a_long_policy_keeps_its_schedules_and_endorsements():
+    """The case the old cap silently destroyed: a 200-page policy whose vehicle
+    schedule, locations and endorsements all sit past page 100."""
+    from data_pipeline.dataset_builder.expand_tasks import (
+        plan_policy_windows,
+        select_policy_pages,
+    )
+
+    found = [12, *range(140, 147), 150, 151, 152, *range(180, 186)]
+    selected = select_policy_pages(found, 200)
+    assert set(found) <= set(selected), f"dropped {sorted(set(found) - set(selected))}"
+
+    windows = plan_policy_windows(selected, pages_per_window=5)
+    assert [p for w in windows for p in w] == selected, "windowing lost a page"
+    assert windows[0] == [1, 2, 3], "the declarations lead their own window"
+    assert all(len(w) <= 5 for w in windows)
+    # The vehicle schedule is one table printed across seven pages. It may span
+    # two windows because seven does not fit in five, but it must not be
+    # interleaved with the endorsements twenty pages later.
+    schedule = [w for w in windows if any(140 <= p <= 146 for p in w)]
+    assert all(all(140 <= p <= 146 for p in w) for w in schedule)
+
+
+def test_a_run_of_pages_is_not_split_until_it_has_to_be():
+    """A table printed across consecutive pages is one table; splitting it at an
+    arbitrary boundary hands the model half a table with no header."""
+    from data_pipeline.dataset_builder.expand_tasks import plan_policy_windows
+
+    assert plan_policy_windows([1, 2, 3, 10, 11, 12, 40], pages_per_window=4) == [
+        [1, 2, 3], [10, 11, 12], [40],
+    ]
+
+
+def test_how_many_pages_a_call_holds_depends_on_the_line():
+    """The prompt carries the whole canonical schema, so a line with a larger one
+    leaves less room for pages. One constant cannot express that."""
+    from data_pipeline.dataset_builder.expand_tasks import pages_per_extraction_call
+
+    ocean = pages_per_extraction_call("policy", None, "ocean_marine")
+    dwelling = pages_per_extraction_call("policy", None, "dwelling_fire")
+    assert 1 <= ocean < dwelling, f"ocean_marine {ocean} should fit fewer than dwelling_fire {dwelling}"
 
 
 def test_a_long_policy_is_thumbnailed_in_chunks():
