@@ -1,16 +1,146 @@
 {
-  "insured_name": "Kestrel Logistics Inc",
-  "insured_address": "77 Harbor Way, Cleveland OH 44113",
-  "policy_number": "CA-3310945-00",
-  "effective_date": "2026-06-15",
-  "expiration_date": "2027-06-15",
-  "carrier": "Northbridge Casualty Company",
-  "producer": "Beacon Commercial Brokers",
-  "total_premium": 18900.0,
-  "line_of_business": [
-    "commercial_auto"
-  ],
-  "coverage_schedule": [],
-  "endorsements": null,
-  "line_of_business_other": []
+  "carrier": {
+    "company_name": {
+      "raw": "Northbridge Casualty Company",
+      "parsed": "Northbridge Casualty Company",
+      "confidence": {
+        "score": 1.0,
+        "source": "audit"
+      },
+      "page_ref": [
+        1
+      ],
+      "flagged": false
+    }
+  },
+  "producer": {
+    "agency_name": {
+      "raw": "Beacon Commercial Brokers",
+      "parsed": "Beacon Commercial Brokers",
+      "confidence": {
+        "score": 1.0,
+        "source": "audit"
+      },
+      "page_ref": [
+        1
+      ],
+      "flagged": false
+    }
+  },
+  "policy": {
+    "policy_number": {
+      "raw": "CA-3310945-00",
+      "parsed": "CA-3310945-00",
+      "confidence": {
+        "score": 1.0,
+        "source": "audit"
+      },
+      "page_ref": [
+        1
+      ],
+      "flagged": false
+    },
+    "effective_date": {
+      "raw": "06/15/2026",
+      "parsed": "2026-06-15",
+      "confidence": {
+        "score": 1.0,
+        "source": "audit"
+      },
+      "page_ref": [
+        1
+      ],
+      "flagged": false
+    },
+    "expiration_date": {
+      "raw": "06/15/2027",
+      "parsed": "2027-06-15",
+      "confidence": {
+        "score": 1.0,
+        "source": "audit"
+      },
+      "page_ref": [
+        1
+      ],
+      "flagged": false
+    }
+  },
+  "named_insured": {
+    "primary_name": {
+      "raw": "Kestrel Logistics Inc",
+      "parsed": "Kestrel Logistics Inc",
+      "confidence": {
+        "score": 1.0,
+        "source": "audit"
+      },
+      "page_ref": [
+        1
+      ],
+      "flagged": false
+    },
+    "mailing_address": {
+      "line_1": {
+        "raw": "77 Harbor Way",
+        "parsed": "77 Harbor Way",
+        "confidence": {
+          "score": 1.0,
+          "source": "audit"
+        },
+        "page_ref": [
+          1
+        ],
+        "flagged": false
+      },
+      "city": {
+        "raw": "Cleveland",
+        "parsed": "Cleveland",
+        "confidence": {
+          "score": 1.0,
+          "source": "audit"
+        },
+        "page_ref": [
+          1
+        ],
+        "flagged": false
+      },
+      "state": {
+        "raw": "OH",
+        "parsed": "OH",
+        "confidence": {
+          "score": 1.0,
+          "source": "audit"
+        },
+        "page_ref": [
+          1
+        ],
+        "flagged": false
+      },
+      "postal_code": {
+        "raw": "44113",
+        "parsed": "44113",
+        "confidence": {
+          "score": 1.0,
+          "source": "audit"
+        },
+        "page_ref": [
+          1
+        ],
+        "flagged": false
+      }
+    }
+  },
+  "premium": {
+    "total_policy_premium": {
+      "raw": "$18,900.00",
+      "parsed": 18900.0,
+      "confidence": {
+        "score": 1.0,
+        "source": "audit"
+      },
+      "page_ref": [
+        1
+      ],
+      "flagged": false
+    }
+  }
 }

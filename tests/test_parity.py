@@ -228,4 +228,15 @@ def test_the_parity_fixtures_exist_for_the_gpu_run():
     assert golden, "no golden fixtures to build parity examples from"
     for path in golden:
         payload = json.loads(path.read_text(encoding="utf-8"))
-        assert "line_of_business" in payload
+        # The line of business sits in one of two places depending on the shape.
+        # A flat label carries it as a top-level key. A canonical one has no such
+        # key — the client's schema records the printed line as
+        # `document.line_of_business_as_stated`, which is what the page said, not
+        # what the document IS — so the label's own line lives beside it in the
+        # metadata sidecar. Either is a line; neither is a fixture that cannot be
+        # routed to a schema.
+        sidecar = path.with_name(path.name.replace(".golden.json", ".label_metadata.json"))
+        metadata = json.loads(sidecar.read_text(encoding="utf-8")) if sidecar.exists() else {}
+        assert "line_of_business" in payload or metadata.get("lob"), (
+            f"{path.name} names no line of business, so no schema can be selected for it"
+        )

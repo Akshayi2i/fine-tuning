@@ -53,6 +53,11 @@ class ValidationGeneration:
         return {
             "source_id": self.row.get("source_id", ""),
             "doc_type": self.row.get("doc_type", "unknown"),
+            # Both select the schema the output is validated against. Without the
+            # form every ACORD row scored as unselectable; without the line every
+            # policy was judged against the canonical fallback.
+            "acord_form": self.row.get("acord_form"),
+            "lob": self.row.get("lob"),
             "modality_mode": self.row.get("modality_mode", "ocr_plus_image"),
             # Not on the row. Unknown is recorded as not scanned, which only
             # affects which eval subset a document is also counted in.
@@ -104,6 +109,7 @@ def generate_validation(
     distribution serving will produce; a calibrator fitted on unconstrained
     generations describes a model nobody serves.
     """
+    from common.canonical import collapse_spans, with_output_dates
     from common.schemas import resolved_schema
     from inference_core.model_runner import generate
     from inference_core.span_map import map_field_spans
@@ -116,14 +122,21 @@ def generate_validation(
         messages, golden = split_prompt(row)
         entry = ValidationGeneration(row=row, golden=golden)
         schema = (
-            resolved_schema(row["doc_type"], row.get("acord_form")) if constrain else None
+            resolved_schema(row["doc_type"], row.get("acord_form"), row.get("lob"))
+            if constrain else None
         )
         try:
             result = generate(model, messages, adapter=adapter, json_schema=schema)
             extraction = json.loads(result.text)
             if not isinstance(extraction, dict):
                 raise TypeError(f"expected a JSON object, got {type(extraction).__name__}")
-            spans = map_field_spans(result.text, result.tokens, result.token_logprobs)
+            # Keyed and formatted exactly as serving does it (serving.pipeline),
+            # or the calibrators are fitted on paths and values serving never
+            # looks up.
+            spans = collapse_spans(
+                map_field_spans(result.text, result.tokens, result.token_logprobs)
+            )
+            extraction = with_output_dates(extraction)
         except Exception as exc:  # noqa: BLE001 - one bad row must not lose the rest
             # Scored as an empty extraction, not skipped: a model that cannot
             # produce JSON for a document has got every field on it wrong, and

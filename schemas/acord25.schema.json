@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://fideon.local/schemas/acord25.schema.json",
   "title": "ACORD 25 - Certificate of Liability Insurance",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Canonical extraction target for ACORD form 25 (Fideon SPEC_00 ACORDMappingDocument, doc_type 'acord', acord_form '25'). This form is the sharpest test of confusable discrimination: the insured, the producer, the certificate holder, and up to six insurers all appear as organisation names on a single page (arch 0c).",
   "type": "object",
   "additionalProperties": false,
@@ -42,7 +42,7 @@
         "string",
         "null"
       ],
-      "description": "The date this certificate was issued, as YYYY-MM-DD. Not a policy effective or expiration date."
+      "description": "The date this certificate was issued, as MM/DD/YYYY. Not a policy effective or expiration date."
     },
     "insurers": {
       "type": "array",

@@ -27,11 +27,21 @@ from serving.pipeline import ExtractionRequest, PipelineError, extract
 from testing.run_extraction import run_document, summarise
 from training.merge import plan_merge
 
+
+def _fv(raw, parsed=None, page=1):
+    """One canonical leaf as the model writes it: raw, parsed, page_ref."""
+    return {"raw": raw, "parsed": raw if parsed is None else parsed, "page_ref": [page]}
+
+
+#: A policy in the model's canonical form: the client's tree, sparse, each leaf
+#: a raw/parsed/page_ref envelope. The pipeline adds confidence and flagged.
 GOLDEN = {
-    "insured_name": "Rivera Fabrication LLC",
-    "policy_number": "WC-8842317-01",
-    "line_of_business": ["workers_comp"],
-    "effective_date": "2026-04-01",
+    "carrier": {"company_name": _fv("Granite Mutual Insurance Co")},
+    "named_insured": {"primary_name": _fv("Rivera Fabrication LLC")},
+    "policy": {
+        "policy_number": _fv("WC-8842317-01"),
+        "effective_date": _fv("04/01/2026", "04/01/2026"),
+    },
 }
 RESPONSE = json.dumps(GOLDEN)
 CALIBRATION = CalibrationParams(
@@ -265,17 +275,93 @@ def test_list_fields_concatenate_across_pages():
 # --------------------------------------------------------------------------
 
 def test_pipeline_produces_the_output_contract(model):
+    """A policy comes back as the client's canonical JSON: every leaf a full
+    FieldValue envelope, confidence and flagged filled by the pipeline."""
     result = extract(_request(), model, StaticClassifier("policy"), CALIBRATION)
     assert result.schema_valid
     assert result.doc_type == "policy"
-    # A list under arch v2.1 §0b. The span mapper emits one span per value —
-    # each has its own tokens and its own logprob — and the pipeline collapses
-    # them into one field carrying the weakest value's confidence.
-    assert result.line_of_business["value"] == ["workers_comp"]
-    assert 0.0 <= result.line_of_business["confidence"] <= 1.0
-    assert "insured_name" in result.fields
-    assert set(result.fields["insured_name"]) == {"value", "confidence"}
+
+    leaf = result.extraction["named_insured"]["primary_name"]
+    assert set(leaf) == {"raw", "parsed", "confidence", "page_ref", "flagged"}
+    assert leaf["parsed"] == "Rivera Fabrication LLC"
+    assert leaf["confidence"]["source"] == "vlm"
+    assert 0.0 <= leaf["confidence"]["score"] <= 1.0
+    assert isinstance(leaf["flagged"], bool)
+    assert leaf["page_ref"] == [1]
+
+    assert "named_insured.primary_name" in result.fields
+    assert set(result.fields["named_insured.primary_name"]) == {"value", "confidence"}
     assert result.pages_used
+
+
+def test_a_canonical_leaf_carries_its_own_calibrated_confidence(model):
+    """The envelope's score IS the calibrated field's, not a default: the two
+    are one number reported in two places."""
+    result = extract(_request(), model, StaticClassifier("policy"), CALIBRATION)
+    leaf = result.extraction["policy"]["policy_number"]
+    field = result.fields["policy.policy_number"]
+    assert leaf["confidence"]["score"] == round(field["confidence"], 4)
+
+
+def test_every_output_date_is_mm_dd_yyyy_whatever_the_model_wrote(client):
+    """The format is enforced after generation, not merely requested: a model
+    that writes ISO still returns MM/DD/YYYY, and raw stays as printed."""
+    iso = json.dumps({
+        **GOLDEN,
+        "policy": {
+            "policy_number": _fv("WC-8842317-01"),
+            "effective_date": _fv("April 1, 2026", "2026-04-01"),
+            "expiration_date": _fv("4/1/27", "2027-04-01"),
+        },
+    })
+    result = extract(
+        _request(), load_model("base", client, backend_impl=EchoBackend(iso)),
+        StaticClassifier("policy"), CALIBRATION,
+    )
+    policy = result.extraction["policy"]
+    assert policy["effective_date"]["parsed"] == "04/01/2026"
+    assert policy["expiration_date"]["parsed"] == "04/01/2027"
+    assert policy["effective_date"]["raw"] == "April 1, 2026"
+
+
+def test_a_flat_document_type_also_returns_mm_dd_yyyy(client):
+    """ACORD and Loss Run keep their flat schemas; the date rule is the same."""
+    response = json.dumps({
+        "carrier": "Sentinel", "policy_number": "WC-1", "valuation_date": "2026-03-31",
+        "line_of_business": ["workers_comp"], "total_claims_reported": 1,
+        "claims": [{"claim_number": "C1", "loss_date": "2024-01-01", "status": "open"}],
+    })
+    result = extract(
+        _request(source_id="lossrun_0001", known_doc_type="lossrun"),
+        load_model("base", client, backend_impl=EchoBackend(response)),
+        StaticClassifier("lossrun"),
+        CalibrationParams(method="temperature", doc_type="lossrun",
+                          model_version="v1", temperature=1.0),
+        strict_schema=False,
+    )
+    assert result.extraction["valuation_date"] == "03/31/2026"
+    assert result.extraction["claims"][0]["loss_date"] == "01/01/2024"
+
+
+def test_a_known_lob_selects_its_canonical_schema(client):
+    """The line is the caller's to give. It selects the schema the model is
+    shown, constrained to and validated against."""
+    from common.schemas import resolved_schema
+
+    backend = EchoBackend(RESPONSE)
+    extract(
+        _request(known_lob="homeowners"), load_model("base", client, backend_impl=backend),
+        StaticClassifier("policy"), CALIBRATION,
+    )
+    assert backend.calls[-1]["json_schema"] == resolved_schema("policy", None, "homeowners")
+    assert "homeowners" in backend.calls[-1]["json_schema"]["properties"]
+
+
+def test_a_policy_with_no_known_lob_still_returns_canonical_json(model):
+    """No line means the client's canonical fallback, never the flat schema."""
+    result = extract(_request(), model, StaticClassifier("policy"), CALIBRATION)
+    assert result.schema_valid
+    assert "confidence" in result.extraction["policy"]["effective_date"]
 
 
 def test_schema_invalid_output_is_rejected_not_returned(client):

@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://fideon.local/schemas/policy_doc.schema.json",
   "title": "Policy Document",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Canonical extraction target for a Policy document (Fideon SPEC_00 PolicyCheckDocument, doc_type 'policy'). Policy documents are the type most likely to carry several organisation names on one page - insured, carrier, producer, certificate holder - so the exclusion clauses in the shared field definitions are load-bearing here (arch 0c).",
   "type": "object",
   "additionalProperties": false,

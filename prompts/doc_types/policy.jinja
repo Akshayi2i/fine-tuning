@@ -10,6 +10,14 @@
   `output_shape` is derived from the schema at render time, never hand-written:
   a hand-kept key list drifts the first time a field is added, and the drift is
   silent because the model is shown one shape and validated against another.
+
+  That applies to the PROSE here too, which is why none of it names a field.
+  This block closed by naming `coverage_schedule` and `endorsements` for as long
+  as those were the generic policy schema's two arrays. Once a policy could be
+  rendered against a per-LOB canonical schema, the sentence named two keys that
+  document's schema did not define - four lines under an `output_shape`, derived
+  from that schema, that disagreed with it. State the RULE for arrays; let the
+  shape say which keys are arrays.
 -#}
 # This document type: Policy
 
@@ -54,4 +62,4 @@ Section 4 is usually most of the document by page count and carries **no extract
 {{ output_shape }}
 }
 ```
-Emit exactly these keys. `coverage_schedule` is an array of coverage entries in document order; `endorsements` lists the endorsements attached. Both are `[]` when the document shows none and never omitted. The schema below is the authority on types and permitted values.
+These are the top-level keys. Emit {{ required_keys }} always, even when empty, and any other key only when the document states something under it. Every key shown as an array holds its entries in document order, and is omitted when the document shows none. The schema below is the authority on types and permitted values.

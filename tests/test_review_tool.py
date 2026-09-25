@@ -32,8 +32,8 @@ def test_every_schema_field_appears_on_the_form():
     keep filling a form the corpus builder no longer validates against."""
     from common.schemas import resolved_schema
 
-    fields = {f.path for f in review_fields_for("policy")}
-    assert fields == set(resolved_schema("policy")["properties"])
+    fields = {f.path for f in review_fields_for("lossrun")}
+    assert fields == set(resolved_schema("lossrun")["properties"])
 
 
 def test_each_field_carries_the_same_gloss_the_model_gets():
@@ -41,8 +41,8 @@ def test_each_field_carries_the_same_gloss_the_model_gets():
     thing while the prompt asks for another."""
     from common.schemas import resolved_schema
 
-    schema = resolved_schema("policy")["properties"]
-    for f in review_fields_for("policy"):
+    schema = resolved_schema("lossrun")["properties"]
+    for f in review_fields_for("lossrun"):
         assert f.gloss == schema[f.path].get("description", "")
         assert f.gloss, f"{f.path} has no definition for the reviewer"
 
@@ -50,7 +50,7 @@ def test_each_field_carries_the_same_gloss_the_model_gets():
 def test_line_of_business_is_mandatory_on_every_type():
     """arch §0b — it cannot be left unset, because unset is indistinguishable
     from undetermined downstream."""
-    for doc_type, form in (("policy", None), ("lossrun", None), ("acord", "25")):
+    for doc_type, form in (("lossrun", None), ("acord", "25"), ("acord", "140")):
         lob = next(f for f in review_fields_for(doc_type, form) if f.path == "line_of_business")
         assert lob.required
 
@@ -58,14 +58,14 @@ def test_line_of_business_is_mandatory_on_every_type():
 def test_confusables_are_shown_as_a_negative_instruction():
     """The boundary reviewers get wrong most often, and the one the
     misattribution metric scores the model on later."""
-    assert "NEVER take from:" in build_labeling_config("policy")
+    assert "NEVER take from:" in build_labeling_config("lossrun")
 
 
 def test_the_form_shows_expected_surface_labels_to_the_human():
     """The opposite of the master §1.4 anti-pattern: a reviewer reading the alias
     list is what makes the corpus teach the mapping. Only a *runtime* lookup is
     forbidden."""
-    assert "Commonly labelled:" in build_labeling_config("policy")
+    assert "Commonly labelled:" in build_labeling_config("lossrun")
 
 
 def test_list_fields_name_their_row_fields():
@@ -81,7 +81,7 @@ def test_a_list_valued_enum_is_multi_select_with_an_explicit_none():
     line_of_business is what made the v1 annotator pick one line off a package
     policy and discard the rest: the control and the label shape have to agree,
     or the tool quietly caps what can be recorded (arch v2.1 §0b)."""
-    config = build_labeling_config("policy")
+    config = build_labeling_config("lossrun")
     assert 'name="line_of_business"' in config
     assert 'choice="multiple"' in config
     assert "select none if the document determines no value" in config
@@ -90,7 +90,7 @@ def test_a_list_valued_enum_is_multi_select_with_an_explicit_none():
 def test_a_multi_select_is_not_marked_required():
     """Selecting nothing IS the answer for a document that determines no line.
     A required control makes that undetermined-but-correct label unrecordable."""
-    config = build_labeling_config("policy")
+    config = build_labeling_config("lossrun")
     block = config.split('name="line_of_business"')[1].split(">")[0]
     assert 'required="false"' in block
 
@@ -101,7 +101,7 @@ def test_the_lob_control_still_offers_every_enum_value():
     anything."""
     from common.lob import lob_values
 
-    config = build_labeling_config("policy")
+    config = build_labeling_config("lossrun")
     for value in lob_values():
         assert f'<Choice value="{value}"/>' in config
 
@@ -109,13 +109,24 @@ def test_the_lob_control_still_offers_every_enum_value():
 def test_every_field_has_a_provenance_input():
     """One extra field per value, and it is what makes per-alias diagnosis and
     alias derivation possible at all."""
-    config = build_labeling_config("policy")
+    config = build_labeling_config("lossrun")
     for path in ("insured_name", "policy_number"):
         assert f'name="{path}__seen_as"' in config
 
 
+def test_a_canonical_policy_is_refused_rather_than_given_a_broken_form():
+    """This form is built from top-level fields and yields a flat label. For a
+    canonical policy that is one free-text box per section, and every label it
+    produced would fail canonical validation at export — so it refuses, and
+    says where canonical labels come in instead."""
+    with pytest.raises(ReviewToolError, match="canonical"):
+        build_labeling_config("policy")
+    with pytest.raises(ReviewToolError, match="import_labeled_pdfs"):
+        review_fields_for("policy")
+
+
 def test_the_form_shows_the_pages_and_the_ocr_side_by_side():
-    config = build_labeling_config("policy")
+    config = build_labeling_config("lossrun")
     assert "$page_images" in config and "$ocr_text" in config
 
 

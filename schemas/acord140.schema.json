@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://fideon.local/schemas/acord140.schema.json",
   "title": "ACORD 140 - Property Section",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Canonical extraction target for ACORD form 140 (doc_type 'acord', acord_form '140'). A supplementary property section, normally filed alongside an ACORD 125, so it repeats the applicant identity and adds per-building detail.",
   "type": "object",
   "additionalProperties": false,

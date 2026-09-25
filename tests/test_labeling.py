@@ -28,9 +28,33 @@ def client() -> BlobClient:
 
 
 def _policy_label(**over):
+    """A canonical policy label: the client's tree, every value in an envelope."""
     label = json.loads((FIXTURES / "golden/policy_0001.golden.json").read_text(encoding="utf-8"))
     label.update(over)
     return label
+
+
+def _with_insured(name: str) -> dict:
+    """The canonical policy label with its named insured replaced."""
+    label = _policy_label()
+    label["named_insured"] = {
+        **label["named_insured"],
+        "primary_name": {**label["named_insured"]["primary_name"], "raw": name, "parsed": name},
+    }
+    return label
+
+
+def _flat_label(**over):
+    """A flat label — a Loss Run. The line_of_business rules are properties of
+    the flat schemas, which carry the field at the top level; a canonical policy
+    takes its line from metadata instead (see the canonical tests below)."""
+    label = json.loads((FIXTURES / "golden/lossrun_0001.golden.json").read_text(encoding="utf-8"))
+    label.update(over)
+    return label
+
+
+def _acord_label():
+    return json.loads((FIXTURES / "golden/acord_0001.golden.json").read_text(encoding="utf-8"))
 
 
 def _fixture_documents():
@@ -52,27 +76,28 @@ def _fixture_documents():
 # --------------------------------------------------------------------------
 
 def test_valid_label_passes():
-    validate_golden_label(_policy_label(), "policy")
+    validate_golden_label(_policy_label(), "policy", lob="workers_comp")
+    validate_golden_label(_flat_label(), "lossrun")
 
 
 def test_label_without_line_of_business_is_rejected():
-    """Required in every label, every type, even when empty (arch §0b)."""
-    label = _policy_label()
+    """Required in every flat label, even when empty (arch §0b)."""
+    label = _flat_label()
     del label["line_of_business"]
     with pytest.raises(LabelValidationError, match="line_of_business is missing"):
-        validate_golden_label(label, "policy")
+        validate_golden_label(label, "lossrun")
 
 
 def test_out_of_enum_line_of_business_is_rejected():
     with pytest.raises(LabelValidationError, match="invalid line_of_business"):
-        validate_golden_label(_policy_label(line_of_business=["marine_cargo"]), "policy")
+        validate_golden_label(_flat_label(line_of_business=["marine_cargo"]), "lossrun")
 
 
 def test_an_empty_line_of_business_is_accepted():
     """An empty list means the document does not determine a line — a correct
     answer, and distinct from omitting the field. Under v1 this was `null`;
     v2.1 §0b makes it a list, so `[]` carries that meaning."""
-    validate_golden_label(_policy_label(line_of_business=[]), "policy")
+    validate_golden_label(_flat_label(line_of_business=[]), "lossrun")
 
 
 def test_several_lines_are_accepted_on_one_document():
@@ -80,14 +105,56 @@ def test_several_lines_are_accepted_on_one_document():
     routinely covers several lines, and the v1 scalar forced the annotator to
     pick one and discard the rest."""
     validate_golden_label(
-        _policy_label(line_of_business=["general_liability", "property"]), "policy"
+        _flat_label(line_of_business=["general_liability", "property"]), "lossrun"
     )
 
 
 def test_a_duplicated_line_is_rejected():
     validate = validate_golden_label
     with pytest.raises(LabelValidationError):
-        validate(_policy_label(line_of_business=["property", "property"]), "policy")
+        validate(_flat_label(line_of_business=["property", "property"]), "lossrun")
+
+
+# --------------------------------------------------------------------------
+# Canonical policy labels
+# --------------------------------------------------------------------------
+
+def test_a_canonical_policy_label_needs_no_top_level_line_of_business():
+    """The client's schema has no top-level line_of_business, so a canonical
+    label cannot carry one. Its line travels in the metadata instead."""
+    label = _policy_label()
+    assert "line_of_business" not in label
+    validate_golden_label(label, "policy", lob="workers_comp")
+    validate_golden_label(label, "policy")   # an unknown line: the fallback schema
+
+
+def test_a_canonical_policy_label_with_an_out_of_enum_line_is_rejected():
+    with pytest.raises(LabelValidationError, match="invalid line_of_business"):
+        validate_golden_label(_policy_label(), "policy", lob="marine_cargo")
+
+
+def test_a_flat_label_under_a_canonical_policy_is_rejected():
+    """A pre-canonical policy label is the wrong shape for every policy now."""
+    flat = {"insured_name": "Rivera Fabrication LLC", "line_of_business": ["workers_comp"]}
+    with pytest.raises(LabelValidationError, match="required property"):
+        validate_golden_label(flat, "policy", lob="workers_comp")
+
+
+def test_a_canonical_provenance_names_a_nested_path():
+    validate_golden_label(
+        _policy_label(), "policy", lob="workers_comp",
+        field_provenance={"named_insured.primary_name": "Applicant"},
+    )
+
+
+def test_a_canonical_provenance_naming_a_confusable_is_rejected():
+    """The alias registry is keyed by canonical field name, so a nested path is
+    checked by its leaf — and the confusable check still bites."""
+    with pytest.raises(LabelValidationError, match="registered CONFUSABLE"):
+        validate_golden_label(
+            _policy_label(), "policy", lob="workers_comp",
+            field_provenance={"named_insured.primary_name": "Certificate Holder"},
+        )
 
 
 def test_acord_label_without_a_form_is_rejected():
@@ -102,14 +169,14 @@ def test_provenance_naming_a_confusable_is_rejected():
     conflate distinct parties, and it would train perfectly happily."""
     with pytest.raises(LabelValidationError, match="registered CONFUSABLE"):
         validate_golden_label(
-            _policy_label(), "policy",
+            _acord_label(), "acord", acord_form="25",
             field_provenance={"insured_name": "Certificate Holder"},
         )
 
 
 def test_provenance_with_a_real_alias_is_accepted():
     validate_golden_label(
-        _policy_label(), "policy", field_provenance={"insured_name": "Applicant"}
+        _acord_label(), "acord", acord_form="25", field_provenance={"insured_name": "INSURED"}
     )
 
 
@@ -143,15 +210,18 @@ def test_export_writes_label_and_provenance(client):
     export_golden_label(
         _policy_label(), "policy_0001", "policy", client,
         reviewer_id="alice", draft_backend="base_qwen3vl",
-        field_provenance={"insured_name": "Applicant"},
+        field_provenance={"named_insured.primary_name": "Applicant"},
+        lob="workers_comp",
     )
     assert client.exists(paths.golden_label("policy", "policy_0001"))
 
     meta = client.read_json(paths.label_metadata("policy", "policy_0001"))
     assert meta["reviewer_id"] == "alice"
     assert meta["draft_backend"] == "base_qwen3vl"
-    assert meta["field_provenance"]["insured_name"] == "Applicant"
+    assert meta["field_provenance"]["named_insured.primary_name"] == "Applicant"
     assert meta["review_requirement"] == "full"
+    # Where the dataset build reads the line from to select the schema.
+    assert meta["lob"] == "workers_comp"
 
 
 def test_labeled_source_ids_are_listed(client):
@@ -164,21 +234,33 @@ def test_inter_annotator_agreement_measures_labeling_noise():
     """Sets a realistic ceiling on model scores — some residual error at plateau
     is human disagreement, not model failure (arch §7)."""
     a = _policy_label()
-    b = _policy_label(insured_name="Someone Else Entirely")
+    b = _with_insured("Someone Else Entirely")
     agreement, disagreements = inter_annotator_agreement(a, b)
     assert agreement < 1.0
-    assert "insured_name" in disagreements
+    # Field by field, not object by object: one wrong name is one disagreement,
+    # not the whole `named_insured` block.
+    assert disagreements == ["named_insured.primary_name"]
 
     perfect, none = inter_annotator_agreement(a, _policy_label())
     assert perfect == 1.0 and not none
 
 
+def test_agreement_ignores_the_annotators_own_confidence():
+    """The envelope's confidence is not an annotation. Two annotators who agree
+    on every value agree, whatever scores their tools attached."""
+    a = _policy_label()
+    b = _policy_label()
+    b["policy"]["policy_number"] = {**b["policy"]["policy_number"],
+                                    "confidence": {"score": 0.4, "source": "vlm"}}
+    assert inter_annotator_agreement(a, b) == (1.0, [])
+
+
 def test_agreement_uses_normalized_comparison():
     """`Acme Mfg LLC` and `ACME MANUFACTURING LLC` are the same answer."""
-    a = _policy_label(insured_name="Acme Mfg LLC")
-    b = _policy_label(insured_name="ACME MANUFACTURING LLC")
+    a = _with_insured("Acme Mfg LLC")
+    b = _with_insured("ACME MANUFACTURING LLC")
     agreement, disagreements = inter_annotator_agreement(a, b)
-    assert "insured_name" not in disagreements
+    assert "named_insured.primary_name" not in disagreements
     assert agreement == 1.0
 
 
@@ -190,8 +272,20 @@ def test_one_canonical_field_derives_its_several_surface_labels():
     """The whole point: the golden JSON gives the value, the OCR gives the text,
     and the label is whatever introduces that value on the page."""
     report = DA.derive_aliases(_fixture_documents())
-    labels = {label.casefold() for label in report.aliases["insured_name"]}
-    assert {"applicant", "named insured", "insured"} <= labels
+    # The canonical policies' named insured, found under two different labels.
+    policy = {label.casefold() for label in report.aliases["named_insured.primary_name"]}
+    assert {"applicant", "named insured"} <= policy
+    # The flat types keep their own field name, and their own labels.
+    assert "insured" in {label.casefold() for label in report.aliases["insured_name"]}
+
+
+def test_a_canonical_label_is_aligned_by_its_printed_value():
+    """The envelope's keys are not fields: no `…raw` or `…confidence` path may
+    come out of derivation, or the registry fills with nonsense aliases."""
+    report = DA.derive_aliases(_fixture_documents())
+    for field in report.aliases:
+        assert not field.endswith((".raw", ".parsed", ".page_ref", ".flagged")), field
+        assert ".confidence" not in field, field
 
 
 def test_normalized_matching_anchors_dates_and_currency():
@@ -200,7 +294,7 @@ def test_normalized_matching_anchors_dates_and_currency():
     unresolved."""
     report = DA.derive_aliases(_fixture_documents())
     assert "Valued As Of" in report.aliases["valuation_date"]
-    assert any("Premium" in label for label in report.aliases["total_premium"])
+    assert any("Premium" in label for label in report.aliases["premium.total_policy_premium"])
 
 
 def test_table_cells_resolve_to_their_column_header():
@@ -230,8 +324,8 @@ def test_confusables_are_derived_from_co_occurrence():
 
 def test_provenance_is_backfilled_without_reannotation():
     report = DA.derive_aliases(_fixture_documents())
-    assert report.provenance["policy_0001"]["insured_name"] == "Applicant"
-    assert report.provenance["policy_0002"]["insured_name"] == "Named Insured"
+    assert report.provenance["policy_0001"]["named_insured.primary_name"] == "Applicant"
+    assert report.provenance["policy_0002"]["named_insured.primary_name"] == "Named Insured"
 
 
 def test_values_absent_from_their_document_are_reported():

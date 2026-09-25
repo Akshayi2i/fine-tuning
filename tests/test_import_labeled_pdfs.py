@@ -12,6 +12,7 @@ and an invalid label never reaches the label store whatever the report says.
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 
@@ -24,12 +25,13 @@ from data_pipeline.ingestion.import_labeled_pdfs import (
     read_bundle,
 )
 
-GOLDEN = {
-    "insured_name": "Rivera Fabrication LLC",
-    "policy_number": "WC-8842317-01",
-    "effective_date": "2026-04-01",
-    "line_of_business": ["workers_comp"],
-}
+#: A canonical policy label — every policy is written in the client's canonical
+#: schema. Its line travels in metadata (`lob`), since that schema has no
+#: top-level home for one.
+GOLDEN = json.loads(
+    (Path(__file__).resolve().parent / "fixtures/golden/policy_0001.golden.json")
+    .read_text(encoding="utf-8")
+)
 
 
 @pytest.fixture
@@ -143,7 +145,7 @@ def test_a_missing_provenance_warns_without_blocking(tmp_path):
 
 def test_a_complete_bundle_reports_nothing(tmp_path):
     complete = bundle(tmp_path, metadata={
-        "field_provenance": {"insured_name": 1},
+        "field_provenance": {"named_insured.primary_name": 1},
         "policy_number": "WC-8842317-01",
         "lob": ["workers_comp"],
     })
@@ -197,7 +199,8 @@ def test_re_importing_a_corrected_batch_relabels_rather_than_duplicating(
     root = batch(tmp_path, ("only",))
     first = import_batch(root, "policy", client, raw_client).imported["only"]
 
-    corrected = {**GOLDEN, "insured_name": "Rivera Fabrication LLC (corrected)"}
+    corrected = json.loads(json.dumps(GOLDEN))
+    corrected["named_insured"]["primary_name"]["raw"] = "Rivera Fabrication LLC (corrected)"
     (root / "only" / "golden.json").write_text(json.dumps(corrected), encoding="utf-8")
     second_report = import_batch(root, "policy", client, raw_client)
 

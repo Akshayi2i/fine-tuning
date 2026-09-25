@@ -19,11 +19,11 @@
     },
     "effective_date": {
       "type": ["string", "null"],
-      "description": "The date coverage begins, as YYYY-MM-DD. Not the date the document was issued, printed, or signed."
+      "description": "The date coverage begins, as MM/DD/YYYY. Not the date the document was issued, printed, or signed."
     },
     "expiration_date": {
       "type": ["string", "null"],
-      "description": "The date coverage ends, as YYYY-MM-DD. Not a cancellation date and not a renewal date."
+      "description": "The date coverage ends, as MM/DD/YYYY. Not a cancellation date and not a renewal date."
     },
     "carrier": {
       "type": ["string", "null"],

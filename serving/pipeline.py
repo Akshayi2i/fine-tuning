@@ -30,10 +30,15 @@ from typing import Any
 
 from calibration.apply_calibration import CalibratedField, CalibratedResult, apply_calibration
 from calibration.fit_calibration import CalibrationParams
-from calibration.list_completeness import check_document, merge_review_flags
+from calibration.list_completeness import (
+    check_document,
+    is_row_completeness_flag,
+    merge_review_flags,
+)
 from calibration.logprob_confidence import field_confidences
+from common.canonical import collapse_spans, envelope, values_view, with_output_dates
 from common.constants import DEFAULT_LONG_DOC_PAGE_THRESHOLD, DEFAULT_REVIEW_CONFIDENCE_THRESHOLD
-from common.schemas import is_valid, iter_validation_errors, resolved_schema
+from common.schemas import is_canonical, is_valid, iter_validation_errors, resolved_schema
 from inference_core.input_builder import build_messages
 from inference_core.model_runner import LoadedModel, generate
 from inference_core.span_map import SpanMapError, map_field_spans
@@ -61,6 +66,11 @@ class ExtractionRequest:
     #: Skip classification when the caller already knows the type.
     known_doc_type: str | None = None
     known_acord_form: str | None = None
+    #: A policy's line of business, when the caller (L1/L2) knows it. Selects the
+    #: line's canonical schema; absent — or naming several lines — the policy is
+    #: extracted into the client's canonical fallback. Either way the output is
+    #: canonical JSON.
+    known_lob: str | list[str] | None = None
 
 
 @dataclass
@@ -176,14 +186,22 @@ def _generate_once(
     *,
     page_numbers: list[int] | None = None,
     total_pages: int | None = None,
+    lob: str | list[str] | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any], float | None]:
-    """One scoped generation. Returns ``(extraction, spans, latency_ms)``."""
+    """One scoped generation. Returns ``(extraction, spans, latency_ms)``.
+
+    The extraction comes back with every date in ``MM/DD/YYYY`` and, for a
+    canonical document, still in the model's sparse ``raw``/``parsed``/
+    ``page_ref`` form; the spans are keyed by values-view path. The caller adds
+    confidence and wraps it in the client's envelope.
+    """
     built = build_messages(
         route_.schema_doc_type,
         image_paths,
         ocr_pages,
         modality_mode,
         acord_form=route_.schema_acord_form,
+        lob=lob,
         page_numbers=page_numbers,
         total_pages=total_pages,
     )
@@ -192,7 +210,7 @@ def _generate_once(
     # unconstrained model, so one malformed bf16 output made every quantized
     # format unvalidatable.
     schema = (
-        resolved_schema(route_.schema_doc_type, route_.schema_acord_form)
+        resolved_schema(route_.schema_doc_type, route_.schema_acord_form, lob)
         if getattr(model.config, "structured_outputs", False) else None
     )
     result = generate(model, built.messages, adapter=route_.adapter, json_schema=schema)
@@ -215,7 +233,10 @@ def _generate_once(
             f"{result.text[:160]!r}. The prompt asks for JSON only with no fences, so this is a "
             f"generation failure rather than a formatting quirk to work around ({exc})."
         ) from exc
-    return extraction, spans, result.latency_ms
+    # Dates are reformatted AFTER the span map: the spans describe the tokens the
+    # model generated, and a reformatted date is the same value in other
+    # characters, not a different value with different evidence.
+    return with_output_dates(extraction), collapse_spans(spans), result.latency_ms
 
 
 def _calibration_for(
@@ -408,6 +429,12 @@ def extract(
     # extraction ever ran.
     calibration = _calibration_for(calibration, route_.doc_type)
 
+    # The line selects the policy's canonical schema. It is the caller's to
+    # supply; with none, `schema_key` selects the client's canonical fallback,
+    # so a policy's output is canonical JSON either way.
+    lob = request.known_lob
+    canonical = is_canonical(route_.schema_doc_type, route_.schema_acord_form, lob)
+
     # --- page routing, for long documents only -----------------------------
     routes_pages = route_.doc_type in long_doc_types
     page_plan = (
@@ -432,6 +459,7 @@ def extract(
         extraction, all_spans, latency = _generate_once(
             model, route_, page_images, page_ocr, request.modality_mode,
             page_numbers=pages_used, total_pages=len(request.page_texts) or len(pages_used),
+            lob=lob,
         )
     else:
         # Derived from the images actually sent, not from page_texts: an
@@ -446,7 +474,13 @@ def extract(
         extraction, all_spans, latency = _generate_once(
             model, route_, request.image_paths, page_ocr, request.modality_mode,
             page_numbers=pages_used if request.page_texts else None,
+            lob=lob,
         )
+
+    # Calibration, completeness and the per-field output all read VALUES. For a
+    # canonical document that is each envelope's `parsed`; a flat document is
+    # its own values view. The spans were re-keyed to the same paths.
+    values = values_view(extraction)
 
     # --- confidence --------------------------------------------------------
     # One span map for one generation, on both paths: a routed request is now a
@@ -463,7 +497,7 @@ def extract(
     # equivalent.
     if calibrators is not None:
         calibrated: CalibratedResult = _feature_calibrated(
-            extraction=extraction, spans=all_spans,
+            extraction=values, spans=all_spans,
             calibrators=calibrators, thresholds=thresholds,
             page_text=request.ocr_text,
         )
@@ -479,17 +513,42 @@ def extract(
 
     # --- list completeness: the signal logprobs cannot see ------------------
     completeness = check_document(
-        extraction, route_.schema_doc_type,
+        values, route_.schema_doc_type,
         ocr_meta=request.ocr_meta, pages_used=pages_used,
     )
     flags = merge_review_flags(completeness, calibrated.review_flags + route_.review_flags)
 
+    # --- the client's canonical envelope -----------------------------------
+    # confidence and flagged are filled here, from the calibrated fields, never
+    # by the model. A list whose row count disagrees with the document is
+    # flagged on every value in it: the rows present may each be confident, and
+    # the list as a whole still needs a person.
+    if canonical:
+        incomplete = tuple(
+            flag.split(":", 1)[0] for flag in flags if is_row_completeness_flag(flag)
+        )
+        scores = {
+            path: (
+                f.confidence,
+                f.needs_review or any(
+                    path == name or path.startswith((f"{name}[", f"{name}."))
+                    for name in incomplete
+                ),
+            )
+            for path, f in calibrated.fields.items()
+        }
+        output = envelope(extraction, scores)
+    else:
+        output = extraction
+
     # --- schema validation, mirroring the audit gate ------------------------
-    schema_valid = is_valid(extraction, route_.schema_doc_type, route_.schema_acord_form)
+    # Against the client's FULL schema for a canonical document, envelope and
+    # all — the model form it was generated in is ours, the contract is theirs.
+    schema_valid = is_valid(output, route_.schema_doc_type, route_.schema_acord_form, lob)
     validation_errors: list[str] = []
     if not schema_valid:
         validation_errors = list(
-            iter_validation_errors(extraction, route_.schema_doc_type, route_.schema_acord_form)
+            iter_validation_errors(output, route_.schema_doc_type, route_.schema_acord_form, lob)
         )
         if strict_schema:
             raise PipelineError(
@@ -506,14 +565,14 @@ def extract(
         mode=request.modality_mode,
         schema_valid=schema_valid,
         overall_confidence=calibrated.overall_confidence,
-        extraction=extraction,
+        extraction=output,
         fields={
             path: f.as_output()
             for path, f in sorted(calibrated.fields.items())
             if path != "line_of_business" and "[" not in path
         },
         list_fields={
-            name: {"rows": extraction.get(name, []), **signal.as_output()}
+            name: {"rows": values.get(name, []), **signal.as_output()}
             for name, signal in sorted(completeness.items())
         },
         line_of_business=_lob_output(calibrated.fields),

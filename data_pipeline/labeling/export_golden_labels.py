@@ -27,9 +27,10 @@ from typing import Any, Literal
 from artifact_registry import paths
 from artifact_registry.blob_client import BlobClient
 from common import aliases
+from common.canonical import field_paths
 from common.constants import DAY_ZERO_MIN_LABELS_PER_TYPE
 from common.lob import LobError, validate_lob
-from common.schemas import SchemaError, is_valid, iter_validation_errors
+from common.schemas import SchemaError, is_canonical, is_valid, iter_validation_errors
 
 log = logging.getLogger(__name__)
 
@@ -80,8 +81,14 @@ def validate_golden_label(
     *,
     acord_form: str | None = None,
     field_provenance: dict[str, str] | None = None,
+    lob: str | list[str] | None = None,
 ) -> None:
-    """Run every admission check. Raises :class:`LabelValidationError`."""
+    """Run every admission check. Raises :class:`LabelValidationError`.
+
+    ``lob`` selects a policy's canonical schema. A canonical label carries no
+    top-level ``line_of_business`` — the client's schema has none — so for one
+    the line is the one given here, from the label's metadata.
+    """
     problems: list[str] = []
 
     # This check comes FIRST: schema *selection* depends on the form, so
@@ -95,12 +102,23 @@ def validate_golden_label(
         )
 
     try:
-        if not is_valid(label, doc_type, acord_form):
-            problems.extend(iter_validation_errors(label, doc_type, acord_form))
+        if not is_valid(label, doc_type, acord_form, lob):
+            problems.extend(iter_validation_errors(label, doc_type, acord_form, lob))
+        canonical = is_canonical(doc_type, acord_form, lob)
     except SchemaError as exc:
         problems.append(str(exc))
+        canonical = False
 
-    if "line_of_business" not in label:
+    if canonical:
+        # The line travels in the metadata, beside the client's label rather than
+        # inside it. Checked against the same enum when given; absent is
+        # allowed, because the canonical fallback exists for exactly that case.
+        if lob:
+            try:
+                validate_lob(lob)
+            except LobError as exc:
+                problems.append(str(exc))
+    elif "line_of_business" not in label:
         problems.append(
             "line_of_business is missing. It is required in every golden label for every "
             "document type, even when empty — the VLM is the fallback LoB detector when L1/L2 "
@@ -113,12 +131,17 @@ def validate_golden_label(
         except LobError as exc:
             problems.append(str(exc))
 
+    # A canonical label nests its fields (`named_insured.primary_name`), so a
+    # provenance entry names a path; a flat label's fields are its top level.
+    present = field_paths(label)
     for field, surface_label in (field_provenance or {}).items():
-        if field not in label:
+        if field not in present:
             problems.append(
                 f"field_provenance names {field!r}, which is not in the label"
             )
-        elif aliases.is_confusable(doc_type, field, surface_label):
+        # The alias registry is keyed by canonical field name, not by where the
+        # field sits, so a nested path is checked by its leaf.
+        elif aliases.is_confusable(doc_type, field.rsplit(".", 1)[-1], surface_label):
             problems.append(
                 f"field_provenance says {field!r} was found under {surface_label!r}, which is a "
                 f"registered CONFUSABLE for that field. Accepting this would train the model to "
@@ -147,6 +170,7 @@ def export_golden_label(
     double_annotated: bool = False,
     agreement_score: float | None = None,
     accepted_without_review: bool = False,
+    lob: str | list[str] | None = None,
 ) -> str:
     """Validate and write a golden label plus its provenance metadata.
 
@@ -166,7 +190,9 @@ def export_golden_label(
             "trusting one would put its errors into the training target."
         )
 
-    validate_golden_label(label, doc_type, acord_form=acord_form, field_provenance=field_provenance)
+    validate_golden_label(
+        label, doc_type, acord_form=acord_form, field_provenance=field_provenance, lob=lob
+    )
 
     label_key = paths.golden_label(doc_type, source_id, tenant_id)
     client.write_json(label_key, label)
@@ -175,6 +201,9 @@ def export_golden_label(
         "source_id": source_id,
         "doc_type": doc_type,
         "acord_form": acord_form,
+        # Where the dataset build reads a policy's line from, to select the
+        # canonical schema its prompt and training target use.
+        "lob": lob,
         "reviewer_id": reviewer_id,
         "review_date": datetime.now(UTC).isoformat(),
         "draft_backend": draft_backend,
@@ -229,7 +258,15 @@ def inter_annotator_agreement(
 
     Returns ``(agreement, disagreeing_fields)``.
     """
+    from common.canonical import has_envelopes, leaf_values
     from common.normalize import values_match
+
+    # A canonical label nests every value in an envelope under an object, so
+    # comparing its top-level keys would compare whole objects — and the
+    # annotators' own confidence entries with them. Compared field by field on
+    # values instead. A flat label keeps its top-level comparison.
+    if has_envelopes(label_a) or has_envelopes(label_b):
+        label_a, label_b = leaf_values(label_a), leaf_values(label_b)
 
     fields = sorted(set(label_a) | set(label_b))
     if not fields:

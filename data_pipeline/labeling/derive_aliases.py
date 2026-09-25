@@ -27,6 +27,7 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
+from common.canonical import printed_view
 from common.normalize import normalize_entity_name, normalize_text, normalize_value
 
 log = logging.getLogger(__name__)
@@ -382,7 +383,11 @@ def derive_from_document(
     provenance: dict[str, str] = {}
     located: dict[str, tuple[str, Any]] = {}   # field -> (surface_label, value)
 
-    for field_path, value in _iter_leaf_fields(golden):
+    # A canonical label nests each value in an envelope; the value that can be
+    # found in the OCR text is the one printed on the page (`raw`), not its
+    # normalised form. Collapsed first, the envelope's own keys never become
+    # "fields" with aliases of their own. A flat label passes through unchanged.
+    for field_path, value in _iter_leaf_fields(printed_view(golden)):
         if value is None:
             continue
         canonical = canonical_field_of(field_path)

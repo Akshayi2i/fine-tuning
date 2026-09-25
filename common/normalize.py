@@ -27,6 +27,7 @@ from typing import Any
 __all__ = [
     "normalize_text",
     "normalize_date",
+    "format_output_date",
     "normalize_currency",
     "normalize_identifier",
     "normalize_entity_name",
@@ -111,6 +112,31 @@ def normalize_date(value: Any) -> str | None:
             parsed = parsed.replace(year=parsed.year + 100)
         return parsed.isoformat()
     return None
+
+
+#: How every date leaves the model and the pipeline: `MM/DD/YYYY`. One
+#: definition, read by the prompt, the training targets and the serving
+#: post-process, because a target written one way and a request told another is
+#: a model trained against its own instructions.
+OUTPUT_DATE_LABEL = "MM/DD/YYYY"
+OUTPUT_DATE_FORMAT = "%m/%d/%Y"
+
+
+def format_output_date(value: Any) -> str | None:
+    """Render a date in the output format, ``MM/DD/YYYY``.
+
+    Accepts anything :func:`normalize_date` can parse. Returns ``None`` when the
+    value is not a recognisable date, so a caller keeps the original rather than
+    replacing a value it could not read with nothing.
+
+    Comparison is unaffected: :func:`normalize_date` still reduces both sides to
+    ISO before they are compared or ordered, and it reads ``MM/DD/YYYY`` back.
+    Output format and comparison format are deliberately separate things.
+    """
+    iso = normalize_date(value)
+    if iso is None:
+        return None
+    return datetime.strptime(iso, "%Y-%m-%d").strftime(OUTPUT_DATE_FORMAT)
 
 
 def normalize_currency(value: Any) -> float | None:

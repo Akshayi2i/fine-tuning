@@ -8,11 +8,12 @@
   "agreement_score": null,
   "review_requirement": "full",
   "field_provenance": {
-    "insured_name": "Named Insured",
-    "policy_number": "Policy Number",
-    "carrier": "Insurer",
-    "producer": "Agency",
-    "total_premium": "Total Policy Premium"
+    "named_insured.primary_name": "Named Insured",
+    "policy.policy_number": "Policy Number",
+    "carrier.company_name": "Insurer",
+    "producer.agency_name": "Agency",
+    "premium.total_policy_premium": "Total Policy Premium"
   },
-  "$comment": "ALIAS VARIETY fixture, paired with policy_0001. The SAME canonical field insured_name appears here under 'Named Insured' and there under 'Applicant'. Without two surface labels for one field there is nothing for alias_accuracy to slice, so this pair is what makes per-alias diagnosis testable at all. Also carries a different LoB value from policy_0001, so LoB coverage has more than one class."
+  "lob": "commercial_auto",
+  "$comment": "ALIAS VARIETY fixture, paired with policy_0001. The SAME canonical field named_insured.primary_name appears here under 'Named Insured' and there under 'Applicant'. Without two surface labels for one field there is nothing for alias_accuracy to slice, so this pair is what makes per-alias diagnosis testable at all. Also carries a different LoB value from policy_0001, so LoB coverage has more than one class."
 }

@@ -9,23 +9,34 @@ would surface as a worse model, weeks later, with no obvious cause.
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 import pytest
 
 from common import aliases, prompts, schemas
+from common.config import lobs_in_family, sequence_for_task
 from common.constants import ACORD_FORMS, ACTIVE_DOC_TYPES, MODALITY_MODES, canonical_key, canonical_model
 from common.lob import lob_values
 
 ROOT = Path(__file__).resolve().parent.parent
+
+#: The flat schemas: one object, scalar leaves, every key emitted with `null` for
+#: absence, and `line_of_business` a top-level required list.
 EXAMPLE_STEMS = {
     ("lossrun", None): "lossrun",
-    ("policy", None): "policy_doc",
     ("acord", "25"): "acord25",
     ("acord", "125"): "acord125",
     ("acord", "140"): "acord140",
 }
-ALL_KEYS = list(EXAMPLE_STEMS)
+FLAT_KEYS = list(EXAMPLE_STEMS)
+
+#: The client's canonical schemas: a nested tree whose every leaf is a
+#: `FieldValue` envelope, emitted sparsely. `policy` is one of these now — the
+#: bare key resolves to their `_fallback.json`, not the old flat policy schema.
+CANONICAL_KEYS = [("policy", None)]
+
+ALL_KEYS = FLAT_KEYS + CANONICAL_KEYS
 
 
 # --------------------------------------------------------------------------
@@ -33,14 +44,32 @@ ALL_KEYS = list(EXAMPLE_STEMS)
 # --------------------------------------------------------------------------
 
 @pytest.mark.parametrize("doc_type,acord_form", ALL_KEYS)
-def test_schema_loads_and_refs_resolve(doc_type, acord_form):
+def test_schema_loads_and_no_ref_points_outside_the_document(doc_type, acord_form):
+    """A ref the model cannot follow must be inlined. A ref it can, need not be.
+
+    This asserted that NO ``$ref`` survived, which was right while every schema
+    ``$ref``-ed another file: ``common_fields.json#/$defs/insured_name`` means
+    nothing to a model that was never shown that file.
+
+    The canonical schemas ``$ref`` only ``#/$defs/FieldValue``, in their own
+    document, and ``$defs`` travels with the schema into the prompt — so the
+    model can already see what it points at. Inlining those would restate one
+    480-character envelope once per leaf: 532 times in homeowners, turning a 42k
+    schema into 281k characters of prompt.
+    """
     resolved = schemas.resolved_schema(doc_type, acord_form)
     assert resolved["type"] == "object"
     assert json.dumps(resolved), "resolved schema must be JSON-serialisable for prompt injection"
-    assert "$ref" not in json.dumps(resolved), "every $ref must be inlined — the model cannot follow a pointer"
+
+    for ref in re.findall(r'"\$ref"\s*:\s*"([^"]+)"', json.dumps(resolved)):
+        assert ref.startswith("#/"), f"{ref!r} points outside the document the model is shown"
+        pointer = resolved
+        for step in ref[2:].split("/"):
+            assert isinstance(pointer, dict) and step in pointer, f"{ref!r} does not resolve"
+            pointer = pointer[step]
 
 
-@pytest.mark.parametrize("doc_type,acord_form", ALL_KEYS)
+@pytest.mark.parametrize("doc_type,acord_form", FLAT_KEYS)
 def test_every_field_has_a_description(doc_type, acord_form):
     """Descriptions are prompt text (arch §0c), not documentation.
 
@@ -50,7 +79,7 @@ def test_every_field_has_a_description(doc_type, acord_form):
     schemas.assert_all_fields_described(doc_type, acord_form)
 
 
-@pytest.mark.parametrize("doc_type,acord_form", ALL_KEYS)
+@pytest.mark.parametrize("doc_type,acord_form", FLAT_KEYS)
 def test_line_of_business_is_a_required_list_of_enum_values(doc_type, acord_form):
     """The VLM is the fallback LoB detector when L1/L2 miss (arch §0b), and it is
     a LIST under v2.1: a certificate or package policy routinely covers several
@@ -64,7 +93,7 @@ def test_line_of_business_is_a_required_list_of_enum_values(doc_type, acord_form
     assert lob.get("uniqueItems") is True, "the same line twice is a labelling error"
 
 
-@pytest.mark.parametrize("doc_type,acord_form", ALL_KEYS)
+@pytest.mark.parametrize("doc_type,acord_form", FLAT_KEYS)
 def test_an_empty_lob_list_is_valid_and_means_undetermined(doc_type, acord_form):
     """Undetermined is a correct answer, not a missing one. Under v1 that was
     `null`; under a list it is `[]`, and it must stay representable or the model
@@ -85,7 +114,7 @@ def test_lines_outside_the_enum_go_to_their_own_field():
     schemas.validate(inst, "lossrun")
 
 
-@pytest.mark.parametrize("doc_type,acord_form", ALL_KEYS)
+@pytest.mark.parametrize("doc_type,acord_form", FLAT_KEYS)
 def test_schema_validates_its_example(doc_type, acord_form):
     path = ROOT / "schemas" / "examples" / f"{EXAMPLE_STEMS[(doc_type, acord_form)]}.example.json"
     schemas.validate(json.loads(path.read_text(encoding="utf-8")), doc_type, acord_form)
@@ -112,9 +141,17 @@ def test_schema_rejects_a_duplicated_line():
 
 
 def test_schema_rejects_unexpected_field():
-    inst = json.loads((ROOT / "schemas/examples/policy_doc.example.json").read_text(encoding="utf-8"))
+    """A surface label arriving as a KEY, rather than as a value under one.
+
+    Read from the lossrun example rather than the policy one: `policy` now
+    resolves to the client's canonical schema, so a flat policy example is
+    invalid before the extra key is added and the test would pass without
+    testing anything.
+    """
+    inst = json.loads((ROOT / "schemas/examples/lossrun.example.json").read_text(encoding="utf-8"))
+    assert schemas.is_valid(inst, "lossrun"), "the example must be valid before we break it"
     inst["surface_label_leaked_in"] = "Applicant"
-    assert not schemas.is_valid(inst, "policy")
+    assert not schemas.is_valid(inst, "lossrun")
 
 
 def test_shared_fields_do_not_drift_between_schemas():
@@ -123,10 +160,16 @@ def test_shared_fields_do_not_drift_between_schemas():
     Defining ``insured_name`` per-schema lets two definitions of the same
     canonical field diverge, and nothing catches it — each schema still validates
     on its own. This is the test that would.
+
+    Scoped to the flat schemas, because they are the ones that share that file.
+    The canonical schemas are the client's, pre-merged by their own registry from
+    their own ``_common``; they do not ``$ref`` ours and have no field named
+    ``insured_name``. Holding them to a common file they never referenced would
+    fail on a difference that is not drift.
     """
     per_schema = {
         key: dict(schemas.iter_described_fields(schemas.resolved_schema(*key)))
-        for key in ALL_KEYS
+        for key in FLAT_KEYS
     }
     shared = set.intersection(*(set(d) for d in per_schema.values()))
     assert {"insured_name", "line_of_business"} <= shared
@@ -179,18 +222,16 @@ def test_image_only_prompt_declares_the_absence(doc_type, acord_form):
 
 
 @pytest.mark.parametrize("doc_type,acord_form", ALL_KEYS)
-def test_prompt_carries_descriptions_but_no_alias_strings(doc_type, acord_form):
-    """The gloss goes in; the alias registry never does (master §1.4).
+def test_no_alias_string_reaches_the_prompt(doc_type, acord_form):
+    """The alias registry never goes in (master §1.4).
 
     An alias list in the prompt gives the model a lexical prior that makes
     confusable errors worse, and would make every newly observed alias a retrain
-    trigger.
+    trigger. Covers the canonical schemas too, which is where the risk is real:
+    they carry ``fideon:aliases`` inline, and only the strip in
+    ``resolved_schema`` keeps those out of the prompt.
     """
     rendered = prompts.render_system_prompt(doc_type, "ocr_plus_image", acord_form)
-    resolved = schemas.resolved_schema(doc_type, acord_form)
-    some_description = resolved["properties"]["line_of_business"]["description"]
-    assert some_description[:40] in rendered, "field descriptions must reach the model"
-
     registry_doc_type = "acord" if doc_type == "acord" else doc_type
     # The prompt embeds the schema, so anything the SCHEMA says reaches the model
     # by construction — a field description mentioning "Hired Auto" is not the
@@ -202,6 +243,32 @@ def test_prompt_carries_descriptions_but_no_alias_strings(doc_type, acord_form):
             # ("Insured", "Company"); multi-word aliases are unambiguous.
             if " " in alias and alias not in embedded:
                 assert alias not in rendered, f"alias {alias!r} leaked into the prompt for {field}"
+
+
+@pytest.mark.parametrize("doc_type,acord_form", FLAT_KEYS)
+def test_field_descriptions_reach_the_model(doc_type, acord_form):
+    """The gloss is how the model maps an unseen surface label onto a canonical
+    key (arch §0c) — it is the thing that stands in for the alias list the prompt
+    is forbidden to carry."""
+    rendered = prompts.render_system_prompt(doc_type, "ocr_plus_image", acord_form)
+    resolved = schemas.resolved_schema(doc_type, acord_form)
+    some_description = resolved["properties"]["line_of_business"]["description"]
+    assert some_description[:40] in rendered, "field descriptions must reach the model"
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason=(
+        "The client's canonical schemas carry 5 descriptions across 532 fields, so the prompt's "
+        "own instruction — 'Each field's description in the schema is its definition' — is true "
+        "of almost none of them. Closed by the descriptions sidecar "
+        "(schemas/descriptions/{lob}.json, merged at render time, their files never edited). "
+        "strict=True so this FAILS once the sidecar lands, forcing the marker off."
+    ),
+)
+@pytest.mark.parametrize("lob", lobs_in_family(schemas.CANONICAL_FAMILY))
+def test_every_canonical_field_has_a_description(lob):
+    schemas.assert_all_fields_described("policy", None, lob)
 
 
 @pytest.mark.parametrize("modality_mode", MODALITY_MODES)
@@ -277,16 +344,75 @@ def test_the_schema_is_the_last_thing_in_the_prompt(doc_type, acord_form):
 
 
 @pytest.mark.parametrize("doc_type,acord_form", ALL_KEYS)
-def test_the_prompt_stays_inside_its_token_budget(doc_type, acord_form):
-    """This prompt is the conditioning input on **every** training row and every
-    request, so its length is a recurring cost rather than a one-off. The
-    ceiling is deliberately loose; it exists so that doubling the prompt is a
-    decision someone makes rather than one that accumulates."""
+def test_the_prompt_leaves_room_for_the_document(doc_type, acord_form):
+    """The prompt is a fixed cost on every row; the document is what varies.
+
+    This used to be a flat ``< 4000`` — a number with no derivation, which said
+    nothing about whether a prompt actually fit. Now it is arithmetic against the
+    task's own budget: whatever the prompt spends, the pages and their OCR have
+    to fit in what is left, or the row is rejected at corpus-build time.
+
+    ``PAGES`` is the routed-page count the policy budget is written for, and OCR
+    is charged at a deliberately thin ~700 tokens a page. Thin because this is a
+    floor, not a forecast: a prompt that fails here cannot carry a short
+    document, let alone a real one.
+    """
+    from data_pipeline.dataset_builder.cap_check import (
+        CHARS_PER_TOKEN,
+        TEMPLATE_OVERHEAD_TOKENS,
+        estimate_visual_tokens,
+    )
+
+    PAGES, OCR_PER_PAGE = 4, 700
+    budget = sequence_for_task("extract", doc_type)
     rendered = prompts.render_system_prompt(doc_type, "ocr_plus_image", acord_form)
-    approx_tokens = len(rendered) / 4
-    assert approx_tokens < 4000, (
-        f"{doc_type} prompt is ~{approx_tokens:.0f} tokens. Rules and schema descriptions both "
-        "cost tokens on every example — trim before raising this."
+    prompt_tokens = len(rendered) / CHARS_PER_TOKEN
+
+    spent = (
+        prompt_tokens
+        + estimate_visual_tokens(PAGES, "extract")
+        + PAGES * OCR_PER_PAGE
+        + TEMPLATE_OVERHEAD_TOKENS
+        + budget["max_output_tokens"]
+    )
+    assert spent < budget["max_seq_len"], (
+        f"{doc_type}{'/' + acord_form if acord_form else ''} spends ~{spent:.0f} of "
+        f"{budget['max_seq_len']} tokens on a {PAGES}-page document, of which the prompt alone is "
+        f"~{prompt_tokens:.0f}. The prompt is paid on every row — slice the schema per window "
+        "rather than raising the cap."
+    )
+
+
+@pytest.mark.parametrize("lob", lobs_in_family(schemas.CANONICAL_FAMILY))
+def test_each_canonical_line_leaves_room_for_the_document(lob):
+    """The same arithmetic per line of business, which is where it actually bites.
+
+    A canonical schema is an order of magnitude larger than the flat one it
+    replaced, and it is the whole schema that goes into the prompt. Nothing else
+    covers the per-LOB prompts, so without this the first evidence that a line
+    does not fit would be a corpus build rejecting every one of its documents.
+    """
+    from data_pipeline.dataset_builder.cap_check import (
+        CHARS_PER_TOKEN,
+        TEMPLATE_OVERHEAD_TOKENS,
+        estimate_visual_tokens,
+    )
+
+    PAGES, OCR_PER_PAGE = 4, 700
+    budget = sequence_for_task("extract", "policy")
+    prompt_tokens = (
+        len(prompts.render_system_prompt("policy", "ocr_plus_image", lob=lob)) / CHARS_PER_TOKEN
+    )
+    spent = (
+        prompt_tokens
+        + estimate_visual_tokens(PAGES, "extract")
+        + PAGES * OCR_PER_PAGE
+        + TEMPLATE_OVERHEAD_TOKENS
+        + budget["max_output_tokens"]
+    )
+    assert spent < budget["max_seq_len"], (
+        f"a {PAGES}-page {lob} policy spends ~{spent:.0f} of {budget['max_seq_len']} tokens, "
+        f"of which the prompt alone is ~{prompt_tokens:.0f}. Slice the schema per window."
     )
 
 
@@ -430,15 +556,16 @@ def test_the_output_shape_is_an_outline_not_a_second_schema(doc_type, acord_form
 # --------------------------------------------------------------------------
 
 
-def test_a_policy_falls_back_to_the_generic_schema_until_an_lob_file_exists():
-    """Adding a per-LOB schema later is a single _SCHEMA_FILES entry and no
-    call-site change — which is the whole point of resolving the fallback here
-    rather than at each caller."""
+def test_a_policy_with_no_line_of_its_own_falls_back():
+    """A line with no canonical file of its own resolves to the bare `policy`
+    key — which is itself the client's `_fallback.json`, not the old flat schema.
+    Their own note on that file says it is "used when the line is unknown or no
+    line-specific schema exists", so the fallback is their rule, not ours."""
     from common.schemas import schema_key
 
     assert schema_key("policy") == "policy"
-    assert schema_key("policy", None, "workers_comp") == "policy"
-    assert schema_key("policy", None, ["workers_comp"]) == "policy"
+    assert schema_key("policy", None, "a_line_with_no_file") == "policy"
+    assert schema_key("policy", None, ["a_line_with_no_file"]) == "policy"
 
 
 def test_an_lob_selects_a_schema_only_when_one_is_registered():
@@ -452,8 +579,11 @@ def test_an_lob_selects_a_schema_only_when_one_is_registered():
 
     assert schemas.schema_key("policy", None, "homeowners") == "policy:homeowners"
     assert schemas.schema_key("policy", None, ["ocean_marine"]) == "policy:ocean_marine"
-    # A commercial line, with no canonical file registered: still the generic one.
-    assert schemas.schema_key("policy", None, "commercial_auto") == "policy"
+    # Our LOB enum and the client's filenames disagree for a few lines, so the
+    # enum value is translated rather than looked up directly. Without that a
+    # Workers' Comp policy finds no `workers_comp.json` and silently falls back.
+    assert schemas.schema_key("policy", None, "workers_comp") == "policy:wc"
+    assert schemas.schema_key("policy", None, "commercial_auto") == "policy:auto"
 
 
 def test_a_package_policy_uses_the_generic_schema_rather_than_one_of_its_lines():
@@ -469,30 +599,32 @@ def test_a_package_policy_uses_the_generic_schema_rather_than_one_of_its_lines()
 # The client's canonical schemas (configs/canonical schema/policy_check)
 # --------------------------------------------------------------------------
 
-#: The five schemas that predate the canonical files, hashed before they were
-#: registered. Registering more schemas must not move any of these by one byte:
-#: they are what every existing corpus, adapter and release was built against.
-_PRE_CANONICAL_SCHEMA_TEXT = {
-    ("lossrun", None): "5507f66d8c0a44ba6cc4992250a13694013e65049be0a8cfb2cf1baebcecf524",
-    ("policy", None): "06c9c1ffc3184ea73e2e0abba5ae00f5e3667a9321cb8c0c75dd93597e6c47a2",
-    ("acord", "25"): "d6f31d382e18fcfa97e2648203802a4bf4c6d66d456d78894a71484c2867a076",
-    ("acord", "125"): "0fc5c210e389d63431790ec4a8d186fa3c1f2830915e77e407f6e4b949dd7816",
-    ("acord", "140"): "218698aaf1319fefaca28786ff03c3b42d46619f695d2a0e80330814e4535375",
+#: The flat schemas — the ones the canonical files did NOT replace. Hashed so
+#: that a change to the canonical branch of `resolved_schema` cannot move them
+#: unnoticed: every prompt fingerprint and corpus schema pin is downstream of
+#: this text, and a silent shift would invalidate a corpus with nothing to say so.
+#:
+#: `policy` is deliberately absent. It no longer names the flat
+#: `policy_doc.schema.json`; a policy's output contract is now the client's
+#: canonical JSON whatever its line, so the generic key resolves to their
+#: `_fallback.json`. Pinning it here would pin the shape we just replaced.
+_FLAT_SCHEMA_TEXT = {
+    ("lossrun", None): "a441703fbaf9f5858bcf1e5d54aeb0e1a3a91030e46ac012d428a72d2fbb3edd",
+    ("acord", "25"): "21fb86cdbe3e2358fbe514a24c4bc17737bf19fcb77381b620665fd6ec73db51",
+    ("acord", "125"): "eb37ee58f8e068097e334f753072b2c0899c5a047792d8e71fe54bd7ef6e200c",
+    ("acord", "140"): "bcac38a83e4064249e0c665051b53938f90742847cb5498953e3b0abb3afac84",
 }
 
 
-def test_the_five_original_schemas_are_byte_identical_after_registering_canonical():
-    """Additive means additive.
-
-    `resolved_schema` grew a branch for the canonical files. If that branch
-    changed the other path by so much as a key order, every prompt fingerprint
-    and every corpus schema pin would move, and no other test would say why.
-    """
+def test_the_flat_schemas_are_not_moved_by_the_canonical_branch():
+    """`resolved_schema` grew a branch for the canonical files. If that branch
+    touched the other path by so much as a key order, every prompt fingerprint
+    and every corpus schema pin would move and no other test would say why."""
     import hashlib
 
     from common import schemas
 
-    for (doc_type, form), want in _PRE_CANONICAL_SCHEMA_TEXT.items():
+    for (doc_type, form), want in _FLAT_SCHEMA_TEXT.items():
         got = hashlib.sha256(schemas.schema_text(doc_type, form).encode()).hexdigest()
         assert got == want, f"{doc_type}/{form} schema text changed"
 
@@ -608,11 +740,92 @@ def test_unqualified_selectors_come_first():
     assert max(unqualified) < min(qualified)
 
 
+def test_the_lob_reaches_the_rendered_prompt():
+    """`lob` used to die in common.prompts: the schemas were selectable for
+    validation and invisible to the model, so a homeowners document trained
+    against the generic policy schema and nothing said so."""
+    from common.prompts import render_system_prompt
+
+    home = render_system_prompt("policy", "ocr_plus_image", lob="homeowners")
+    auto = render_system_prompt("policy", "ocr_plus_image", lob="personal_auto")
+    generic = render_system_prompt("policy", "ocr_plus_image")
+
+    assert home != auto != generic
+    assert "scheduled_personal_property" in home
+    assert "scheduled_personal_property" not in auto
+    # A package policy names more than one line, so it still gets the generic one.
+    assert render_system_prompt(
+        "policy", "ocr_plus_image", lob=["homeowners", "personal_auto"]
+    ) == generic
+
+
+def test_the_outline_and_the_schema_describe_the_same_line():
+    """They render into the same prompt a few lines apart. Given different lines
+    they would disagree about the field set, and the model is told the schema is
+    the authority — so it would be shown an outline it must not follow."""
+    from common.prompts import output_shape_for_prompt, schema_json_for_prompt
+
+    for lob in ("homeowners", "ocean_marine"):
+        outline = output_shape_for_prompt("policy", None, lob)
+        schema = schema_json_for_prompt("policy", None, lob)
+        names = set(re.findall(r"[A-Za-z_][A-Za-z0-9_]*", outline))
+        assert names, f"{lob}: outline named nothing"
+        for key in sorted(names):
+            assert f'"{key}"' in schema, f"{lob}: outline names {key!r}, schema does not"
+
+
+def test_the_fingerprint_distinguishes_lines_of_business():
+    """A fingerprint blind to `lob` reports two different prompts as the same
+    one, which is exactly the drift it exists to catch."""
+    from common.prompts import prompt_fingerprint
+
+    prints = {
+        lob: prompt_fingerprint("policy", "ocr_plus_image", None, lob)
+        for lob in (None, "homeowners", "personal_auto", "ocean_marine")
+    }
+    assert len(set(prints.values())) == len(prints), f"fingerprints collided: {prints}"
+
+
+def test_a_windowed_row_carries_its_real_page_numbers():
+    """build_messages has accepted page_numbers/total_pages all along and
+    build_training_row never passed them, so every windowed row would have
+    claimed to be pages 1..n of an n-page document — while the template tells the
+    model that skipped numbers mean it is seeing selected pages."""
+    from inference_core.input_builder import build_training_row
+
+    row = build_training_row(
+        "policy", "policy_0001", ["p9.png", "p10.png"], ["nine", "ten"],
+        "ocr_plus_image", "{}", page_numbers=[9, 10], total_pages=20,
+    )
+    rendered = json.dumps(row["messages"])
+    assert "page 9 of 20" in rendered and "page 10 of 20" in rendered
+    assert "page 1 of 2" not in rendered
+
+
+def test_the_corpus_drift_check_reads_the_key_the_manifest_writes():
+    """It read `schema_version`; the manifest writes `schema_versions`, a dict
+    keyed by selector. The lookup returned None on every real manifest, the guard
+    fell through, and the check reported agreement including when it disagreed."""
+    from inference_core.input_builder import InputBuilderError, build_messages
+
+    built = build_messages("policy", ["p1.png"], ["text"], "ocr_plus_image", lob="homeowners")
+    assert built.schema_version == "1.4.0"
+
+    built.assert_matches_corpus({"schema_versions": {"policy:homeowners": "1.4.0"}})
+    with pytest.raises(InputBuilderError, match="drift"):
+        built.assert_matches_corpus({"schema_versions": {"policy:homeowners": "0.0.1"}})
+    # A pin for a different line says nothing about this row.
+    built.assert_matches_corpus({"schema_versions": {"policy:personal_auto": "0.0.1"}})
+
+
 def test_a_list_valued_lob_does_not_break_the_schema_cache():
     """line_of_business is a list, and the loaders are cached — caching on the
     arguments would raise 'unhashable type: list' on every multi-LOB call."""
     from common.schemas import load_schema, resolved_schema, validator_for
 
     assert load_schema("policy", None, ["workers_comp", "property"])["type"] == "object"
-    assert validator_for("policy", None, ["workers_comp"]) is validator_for("policy")
     assert resolved_schema("policy", None, ["workers_comp"])["properties"]
+    # Two argument sets that resolve to one key share one parsed copy — the
+    # point of caching on the key string rather than on the signature.
+    assert validator_for("policy", None, ["a_line_with_no_file"]) is validator_for("policy")
+    assert validator_for("policy", None, ["workers_comp"]) is validator_for("policy", None, "wc")

@@ -22,6 +22,7 @@ from collections import Counter
 from dataclasses import dataclass, field
 from typing import Any
 
+from common.canonical import training_target
 from common.constants import MODALITY_MODES
 from data_pipeline.dataset_builder.noisy_ocr_augment import corrupt_ocr_pages
 from data_pipeline.dataset_builder.sample_modes import EPOCH_FILES, ModeAssignment, sample_modes
@@ -53,6 +54,10 @@ class SourceDocument:
     ocr_pages: list[str]
     image_paths: list[str]
     acord_form: str | None = None
+    #: A policy's line of business, from its label metadata. Selects the
+    #: canonical schema the prompt carries and the target is written in; absent,
+    #: the policy uses the client's canonical fallback.
+    lob: str | list[str] | None = None
     tenant_id: str | None = None
     field_provenance: dict[str, str] = field(default_factory=dict)
     is_scanned: bool = False
@@ -112,7 +117,15 @@ def expand_document(
     "3 epoch" run is nine passes. Val and test still take all three, so
     image-only accuracy is measured on the full eval population.
     """
-    golden_json = json.dumps(document.golden_label, ensure_ascii=False, sort_keys=False)
+    # The target, not the label: a canonical policy label is narrowed to the
+    # sparse raw/parsed/page_ref form the prompt asks for, and every date is
+    # written MM/DD/YYYY. A flat pre-canonical policy label raises here and the
+    # document is skipped by `build_corpus` — trained under a canonical prompt it
+    # would teach the wrong shape.
+    target = training_target(
+        document.golden_label, document.doc_type, document.acord_form, document.lob
+    )
+    golden_json = json.dumps(target, ensure_ascii=False, sort_keys=False)
     rows: list[dict[str, Any]] = []
     details: list[str] = []
 
@@ -138,6 +151,7 @@ def expand_document(
             mode,
             golden_json,
             acord_form=document.acord_form,
+            lob=document.lob,
             tenant_id=document.tenant_id,
             split=split,
             # Recorded, not enforced: de-identification is blocked (SPEC_05 §1).

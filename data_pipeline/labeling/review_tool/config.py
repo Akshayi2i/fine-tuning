@@ -77,7 +77,26 @@ def _types(node: dict[str, Any]) -> list[str]:
 
 
 def review_fields_for(doc_type: str, acord_form: str | None = None) -> list[ReviewField]:
-    """Every field a reviewer fills for this document type, in schema order."""
+    """Every field a reviewer fills for this document type, in schema order.
+
+    Refuses a canonical policy. This form is built from a schema's TOP-LEVEL
+    fields and its answers become a flat label; a canonical policy nests every
+    value in a ``FieldValue`` envelope several objects deep, carries no field
+    descriptions and no top-level ``line_of_business``. Built anyway, it would be
+    one free-text box per section — ``carrier``, ``policy`` — and every label it
+    produced would fail canonical validation at export. Refusing says so now,
+    rather than after a reviewer has spent a day filling it.
+    """
+    from common.schemas import is_canonical
+    from data_pipeline.labeling.review_tool.tasks import ReviewToolError
+
+    if is_canonical(doc_type, acord_form):
+        raise ReviewToolError(
+            f"the review form does not yet support {doc_type!r}: its labels are the client's "
+            "canonical FieldValue JSON, which this flat, top-level form cannot produce. Import "
+            "canonical labels with data_pipeline.ingestion.import_labeled_pdfs or "
+            "import_prepared until a canonical review form exists."
+        )
     schema = resolved_schema(doc_type, acord_form)
     required = set(schema.get("required", []))
     registry = alias_registry.load_registry(doc_type)

@@ -26,8 +26,10 @@ import logging
 from collections.abc import Iterable
 from pathlib import Path
 
+from common.config import lobs_in_family
 from common.constants import ACORD_FORMS, ACTIVE_DOC_TYPES
 from common.prompts import PROMPT_TEMPLATE_VERSION, render_system_prompt
+from common.schemas import CANONICAL_FAMILY
 
 log = logging.getLogger(__name__)
 
@@ -38,24 +40,34 @@ PROMPTS_DIR = Path(__file__).resolve().parent / "prompts"
 #: so one file covers both; the image-only variant differs and is emitted too.
 REFERENCE_MODES: tuple[str, ...] = ("ocr_plus_image", "image_only")
 
-def reference_targets() -> list[tuple[str, str | None]]:
-    """Every ``(doc_type, acord_form)`` pair that renders a distinct prompt.
+def reference_targets() -> list[tuple[str, str | None, str | None]]:
+    """Every ``(doc_type, acord_form, lob)`` triple that renders a distinct prompt.
 
     ACORD gets one file **per form**, not one for the type: 25, 125 and 140 have
     different schemas, so a single acord file pinned to one of them would be a
     reference that misrepresents the other two.
+
+    Policies get one **per registered line of business**, for the same reason and
+    with more at stake: a homeowners prompt and an ocean marine prompt carry
+    different canonical schemas, and the generic `policy` file proves nothing
+    about either. The bare `policy` entry stays — it is what a package policy and
+    an unclassified line still render.
     """
-    targets: list[tuple[str, str | None]] = []
+    targets: list[tuple[str, str | None, str | None]] = []
     for doc_type in ACTIVE_DOC_TYPES:
         if doc_type == "acord":
-            targets += [(doc_type, form) for form in sorted(ACORD_FORMS, key=int)]
-        else:
-            targets.append((doc_type, None))
+            targets += [(doc_type, form, None) for form in sorted(ACORD_FORMS, key=int)]
+            continue
+        targets.append((doc_type, None, None))
+        if doc_type == "policy":
+            targets += [(doc_type, None, lob) for lob in lobs_in_family(CANONICAL_FAMILY)]
     return targets
 
 
-def stem(doc_type: str, acord_form: str | None) -> str:
-    return f"{doc_type}_{acord_form}" if acord_form else doc_type
+def stem(doc_type: str, acord_form: str | None, lob: str | None = None) -> str:
+    if acord_form:
+        return f"{doc_type}_{acord_form}"
+    return f"{doc_type}_{lob}" if lob else doc_type
 
 
 def header(doc_type: str, modality_mode: str) -> str:
@@ -77,21 +89,26 @@ def prompt_path(
     modality_mode: str,
     acord_form: str | None = None,
     root: Path = PROMPTS_DIR,
+    lob: str | None = None,
 ) -> Path:
     suffix = "" if modality_mode == "ocr_plus_image" else f".{modality_mode}"
-    return root / f"{stem(doc_type, acord_form)}{suffix}.prompt.txt"
+    return root / f"{stem(doc_type, acord_form, lob)}{suffix}.prompt.txt"
 
 
-def render(doc_type: str, modality_mode: str, acord_form: str | None = None) -> str:
+def render(
+    doc_type: str, modality_mode: str, acord_form: str | None = None, lob: str | None = None
+) -> str:
     """The prompt body exactly as ``common.prompts`` renders it."""
-    return render_system_prompt(doc_type, modality_mode, acord_form=acord_form)
+    return render_system_prompt(doc_type, modality_mode, acord_form=acord_form, lob=lob)
 
 
-def file_contents(doc_type: str, modality_mode: str, acord_form: str | None = None) -> str:
+def file_contents(
+    doc_type: str, modality_mode: str, acord_form: str | None = None, lob: str | None = None
+) -> str:
     return (
-        header(stem(doc_type, acord_form), modality_mode)
+        header(stem(doc_type, acord_form, lob), modality_mode)
         + "\n"
-        + render(doc_type, modality_mode, acord_form)
+        + render(doc_type, modality_mode, acord_form, lob)
     )
 
 
@@ -109,10 +126,10 @@ def write_all(root: Path = PROMPTS_DIR) -> list[Path]:
     """Regenerate every reference prompt file."""
     root.mkdir(parents=True, exist_ok=True)
     written = []
-    for doc_type, form in reference_targets():
+    for doc_type, form, lob in reference_targets():
         for mode in REFERENCE_MODES:
-            path = prompt_path(doc_type, mode, form, root)
-            path.write_text(file_contents(doc_type, mode, form), encoding="utf-8")
+            path = prompt_path(doc_type, mode, form, root, lob)
+            path.write_text(file_contents(doc_type, mode, form, lob), encoding="utf-8")
             written.append(path)
 
     # A file left over from a renamed target is a reference nothing regenerates,
@@ -135,14 +152,14 @@ def drifted(root: Path = PROMPTS_DIR) -> list[str]:
     """
     problems = []
     expected: set[str] = set()
-    for doc_type, form in reference_targets():
+    for doc_type, form, lob in reference_targets():
         for mode in REFERENCE_MODES:
-            path = prompt_path(doc_type, mode, form, root)
+            path = prompt_path(doc_type, mode, form, root, lob)
             expected.add(path.name)
             if not path.exists():
                 problems.append(f"{path.name}: missing")
                 continue
-            if body_of(path.read_text(encoding="utf-8")) != render(doc_type, mode, form):
+            if body_of(path.read_text(encoding="utf-8")) != render(doc_type, mode, form, lob):
                 problems.append(f"{path.name}: differs from common.prompts")
 
     problems += [

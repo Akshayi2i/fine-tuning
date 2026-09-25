@@ -25,14 +25,15 @@ from typing import Any
 from jinja2 import Environment, FileSystemLoader, StrictUndefined
 
 from common.constants import MODALITY_MODES, PROMPT_MODE_ALIASES
-from common.schemas import resolved_schema, schema_version
+from common.normalize import OUTPUT_DATE_LABEL
+from common.schemas import is_canonical, required_fields, resolved_schema, schema_version
 
 PROMPT_DIR = Path(__file__).resolve().parent.parent / "prompts"
 
 #: Bumped whenever the template's rendered output changes in any way.
 #: Recorded in the corpus manifest; a change forces a corpus rebuild and a new
 #: training cycle, exactly like a schema change (arch §7).
-PROMPT_TEMPLATE_VERSION = "5.0.0"
+PROMPT_TEMPLATE_VERSION = "6.0.0"
 
 _SYSTEM_TEMPLATE = "system_prompt_template.jinja"
 _CLASSIFIER_TEMPLATE = "doc_type_classifier_prompt.jinja"
@@ -85,15 +86,20 @@ def doc_type_label(doc_type: str, acord_form: str | None = None) -> str:
     return label
 
 
-def schema_json_for_prompt(doc_type: str, acord_form: str | None = None) -> str:
+def schema_json_for_prompt(
+    doc_type: str, acord_form: str | None = None, lob: str | list[str] | None = None
+) -> str:
     """The schema as it is injected into the prompt.
 
-    Fully ``$ref``-resolved, because the model cannot follow a pointer to another
-    file — it needs the actual field definitions and their descriptions inline.
+    ``$ref``-resolved where the refs point at other files the model was never
+    shown, left alone where they point inside the schema itself — the decision
+    lives in :func:`common.schemas.resolved_schema`, which owns it for validation
+    and rendering alike.
+
     Serialised with sorted keys and a fixed separator so rendering is
     deterministic; an unstable key order would break prompt parity for no reason.
     """
-    schema = resolved_schema(doc_type, acord_form)
+    schema = resolved_schema(doc_type, acord_form, lob)
     stripped = _strip_authoring_keys(schema)
     return json.dumps(stripped, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
 
@@ -121,7 +127,9 @@ def _is_array(node: dict[str, Any]) -> bool:
     return declared == "array" or (isinstance(declared, list) and "array" in declared)
 
 
-def output_shape_for_prompt(doc_type: str, acord_form: str | None = None) -> str:
+def output_shape_for_prompt(
+    doc_type: str, acord_form: str | None = None, lob: str | list[str] | None = None
+) -> str:
     """A compact skeleton of the JSON this document type must return.
 
     **Derived from the schema, never hand-written.** A hand-kept copy of the key
@@ -129,11 +137,16 @@ def output_shape_for_prompt(doc_type: str, acord_form: str | None = None) -> str
     silent: the model is shown one shape and validated against another. Rendering
     it from :func:`resolved_schema` means the two cannot disagree.
 
+    Takes ``lob`` for the same reason :func:`schema_json_for_prompt` does, and
+    must be called with the same value: one renders the outline and the other the
+    detail, into the same prompt. Given different lines they would describe
+    different field sets a few lines apart.
+
     Deliberately shape-only — no descriptions, no types. The schema follows
     immediately after and is the authority on both; this exists so the model sees
     the outline before the detail.
     """
-    schema = resolved_schema(doc_type, acord_form)
+    schema = resolved_schema(doc_type, acord_form, lob)
     properties: dict[str, Any] = schema.get("properties", {})
 
     scalars = [name for name, node in properties.items() if not _is_array(node)]
@@ -151,6 +164,7 @@ def render_system_prompt(
     doc_type: str,
     modality_mode: str,
     acord_form: str | None = None,
+    lob: str | list[str] | None = None,
 ) -> str:
     """Render the system prompt. **The** entrypoint — never bypass it.
 
@@ -158,6 +172,12 @@ def render_system_prompt(
         doc_type: ``acord`` | ``policy`` | ``lossrun``.
         modality_mode: one of :data:`common.constants.MODALITY_MODES`.
         acord_form: required when ``doc_type == "acord"``, selects the schema.
+        lob: a policy's line of business. Selects the per-LOB canonical schema
+            when exactly one line is named and a schema is registered for it,
+            per :func:`common.schemas.schema_key`. A homeowners policy and a
+            personal auto policy share a header and little else, so showing the
+            model the generic schema for both would train it on a field set that
+            matches neither document.
 
     Returns:
         The system message, identical for the same inputs in every context.
@@ -165,17 +185,37 @@ def render_system_prompt(
     mode = effective_prompt_mode(modality_mode)
     template = _env().get_template(_SYSTEM_TEMPLATE)
     return template.render(
-        # `doc_type` selects the per-type rules block, and `acord_form` selects
-        # the form paragraph inside it — the same two values that select the
-        # schema, so a prompt can never describe one form while carrying
-        # another's schema.
+        # `doc_type` selects the per-type rules block, `acord_form` the form
+        # paragraph inside it, and `lob` the canonical schema — the same values
+        # that select the schema, so a prompt can never describe one form or
+        # line while carrying another's schema.
         doc_type=doc_type.lower(),
         acord_form=acord_form,
-        output_shape=output_shape_for_prompt(doc_type, acord_form),
+        # The client's canonical FieldValue shape (sparse envelopes) or the flat
+        # one (every key, null for absence). Decided by the schema registry, so
+        # the prompt can never describe one shape while carrying the other's
+        # schema.
+        canonical=is_canonical(doc_type, acord_form, lob),
+        required_keys=_prose_list(required_fields(doc_type, acord_form, lob)),
+        output_shape=output_shape_for_prompt(doc_type, acord_form, lob),
         doc_type_label=doc_type_label(doc_type, acord_form),
         modality_mode=mode,
-        schema_json=schema_json_for_prompt(doc_type, acord_form),
+        # Rendered from the constant the post-process formats with, not written
+        # into the template. A literal here is a second source of truth for the
+        # output date format, and the failure is silent in both directions: the
+        # model is asked for one format and its answer rewritten into another,
+        # which reads as the model getting dates wrong.
+        date_format=OUTPUT_DATE_LABEL,
+        schema_json=schema_json_for_prompt(doc_type, acord_form, lob),
     ).strip()
+
+
+def _prose_list(names: list[str]) -> str:
+    """``carrier``, ``named_insured`` and ``policy`` — for a sentence, not a list."""
+    quoted = [f"`{n}`" for n in names]
+    if len(quoted) <= 1:
+        return "".join(quoted)
+    return f"{', '.join(quoted[:-1])} and {quoted[-1]}"
 
 
 def render_classifier_prompt() -> str:
@@ -183,24 +223,34 @@ def render_classifier_prompt() -> str:
     return _env().get_template(_CLASSIFIER_TEMPLATE).render().strip()
 
 
-def prompt_fingerprint(doc_type: str, modality_mode: str, acord_form: str | None = None) -> str:
+def prompt_fingerprint(
+    doc_type: str,
+    modality_mode: str,
+    acord_form: str | None = None,
+    lob: str | list[str] | None = None,
+) -> str:
     """A short hash of the rendered prompt.
 
     Cheap way for a caller to assert the prompt it is about to send matches the
-    one the corpus was built with, without diffing the whole string.
+    one the corpus was built with, without diffing the whole string. Takes the
+    same selectors as the render it hashes — a fingerprint blind to ``lob`` would
+    report two different prompts as the same one, which is precisely the drift it
+    exists to catch.
     """
     import hashlib
 
-    rendered = render_system_prompt(doc_type, modality_mode, acord_form)
+    rendered = render_system_prompt(doc_type, modality_mode, acord_form, lob)
     return hashlib.sha256(rendered.encode("utf-8")).hexdigest()[:16]
 
 
-def prompt_versions(doc_type: str, acord_form: str | None = None) -> dict[str, str]:
+def prompt_versions(
+    doc_type: str, acord_form: str | None = None, lob: str | list[str] | None = None
+) -> dict[str, str]:
     """Versions to record in the corpus manifest (arch §7).
 
     A change to either forces a corpus rebuild and a new training cycle.
     """
     return {
         "prompt_template_version": PROMPT_TEMPLATE_VERSION,
-        "schema_version": schema_version(doc_type, acord_form),
+        "schema_version": schema_version(doc_type, acord_form, lob),
     }

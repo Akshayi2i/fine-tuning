@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://fideon.local/schemas/acord125.schema.json",
   "title": "ACORD 125 - Commercial Insurance Application",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Canonical extraction target for ACORD form 125 (doc_type 'acord', acord_form '125'). A commercial insurance application: the party seeking coverage, the business it operates, the premises to be covered, and the coverages requested.",
   "type": "object",
   "additionalProperties": false,

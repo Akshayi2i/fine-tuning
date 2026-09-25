@@ -609,8 +609,14 @@ def test_the_prompt_files_carry_no_alias_strings():
 
     # Whatever the schemas themselves say reaches the prompts by construction;
     # same rule as tests/test_schema_contract.py.
+    #
+    # Built from `schema_selectors`, not `all_schema_keys`: the latter returns
+    # two-tuples and so cannot express a line of business, and it puts the LOB in
+    # the acord_form slot where `schema_key` ignores it. Every per-LOB schema
+    # would resolve back to the generic policy one, and every canonical schema's
+    # own `title` — "Classic Auto policy" — would be reported as a leaked alias.
     embedded = "".join(
-        schemas.schema_text(dt, form) for dt, form in schemas.all_schema_keys()
+        schemas.schema_text(dt, form, lob) for dt, form, lob in schemas.schema_selectors()
     )
 
     for path in sorted(PROMPTS_DIR.glob("*.prompt.txt")):

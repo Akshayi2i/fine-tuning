@@ -72,6 +72,7 @@ class BuiltMessages:
     prompt_fingerprint: str
     resolution_cap_px: int
     page_count: int
+    lob: str | list[str] | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
 
     def system_prompt(self) -> str:
@@ -83,9 +84,28 @@ class BuiltMessages:
         Prompt drift between training and inference degrades a fine-tuned model
         and is invisible in training metrics, because training never sees the
         serving prompt. This is the cheap runtime check for it.
+
+        The schema half reads ``schema_versions`` — the per-selector dict the
+        manifest actually writes. It previously read ``schema_version``, singular,
+        which no manifest has ever contained: the lookup returned ``None``, the
+        guard fell through, and the check reported agreement on every request
+        including the ones that disagreed.
         """
+        from common.schemas import schema_key
+
         pinned_prompt = corpus_manifest.get("prompt_template_version")
-        pinned_schema = corpus_manifest.get("schema_version")
+        pinned_versions = corpus_manifest.get("schema_versions")
+        if isinstance(pinned_versions, dict):
+            # Keyed exactly as `_schema_pins` writes it: `policy`, `acord:25`,
+            # `policy:homeowners`. A row whose selector the corpus never saw has
+            # no pin to compare against, which is a coverage question, not drift.
+            pinned_schema = pinned_versions.get(
+                schema_key(self.doc_type, self.acord_form, self.lob)
+            )
+        else:
+            # A manifest predating the per-selector dict.
+            pinned_schema = corpus_manifest.get("schema_version")
+
         problems = []
         if pinned_prompt and pinned_prompt != self.prompt_template_version:
             problems.append(
@@ -116,6 +136,7 @@ def build_messages(
     modality_mode: str,
     *,
     acord_form: str | None = None,
+    lob: str | list[str] | None = None,
     assistant_content: str | None = None,
     check_resolution_parity: bool = True,
     page_numbers: Sequence[int] | None = None,
@@ -138,6 +159,7 @@ def build_messages(
             table that crossed a page boundary.
         modality_mode: one of :data:`common.constants.MODALITY_MODES`.
         acord_form: required for ACORD — selects the schema (arch §4b).
+        lob: a policy's line of business — selects the per-LOB canonical schema.
         assistant_content: the golden JSON, when building a *training* row.
             Omitted at inference, where the assistant turn is what gets generated.
         check_resolution_parity: assert the training and serving caps agree.
@@ -194,7 +216,7 @@ def build_messages(
         assert_resolution_parity()
     cap = resolution_cap_px()
 
-    system = render_system_prompt(doc_type, modality_mode, acord_form)
+    system = render_system_prompt(doc_type, modality_mode, acord_form, lob)
 
     # Each page's image, then that page's own text. The image comes first
     # because the page is the primary evidence; the text follows immediately so
@@ -226,10 +248,11 @@ def build_messages(
         acord_form=acord_form,
         modality_mode=modality_mode,
         prompt_template_version=PROMPT_TEMPLATE_VERSION,
-        schema_version=schema_version(doc_type, acord_form),
-        prompt_fingerprint=prompt_fingerprint(doc_type, modality_mode, acord_form),
+        schema_version=schema_version(doc_type, acord_form, lob),
+        prompt_fingerprint=prompt_fingerprint(doc_type, modality_mode, acord_form, lob),
         resolution_cap_px=cap,
         page_count=len(image_paths),
+        lob=lob,
     )
 
 
@@ -242,23 +265,35 @@ def build_training_row(
     golden_json: str,
     *,
     acord_form: str | None = None,
+    lob: str | list[str] | None = None,
     tenant_id: str | None = None,
     split: str | None = None,
     deidentified: bool = False,
+    page_numbers: Sequence[int] | None = None,
+    total_pages: int | None = None,
 ) -> dict[str, Any]:
     """One JSONL corpus row (master §9).
 
     Uses the same :func:`build_messages` the serving path uses — which is what
     makes the training prompt and the inference prompt provably identical rather
     than identical by convention.
+
+    ``page_numbers`` and ``total_pages`` are forwarded, not defaulted. A windowed
+    row holds a *subset* of its document's pages, and the markers are how the
+    model is told which subset: without them every window claims to be pages
+    ``1..n`` of an ``n``-page document, while the template tells the model that
+    skipped numbers mean it is seeing selected pages. The model would be trained
+    on a page map that contradicts the instruction describing it.
     """
     built = build_messages(
         doc_type, image_paths, ocr_pages, modality_mode,
-        acord_form=acord_form, assistant_content=golden_json,
+        acord_form=acord_form, lob=lob, assistant_content=golden_json,
+        page_numbers=page_numbers, total_pages=total_pages,
     )
     return {
         "doc_type": doc_type,
         "acord_form": acord_form,
+        "lob": lob,
         "modality_mode": modality_mode,
         "source_id": source_id,
         "tenant_id": tenant_id,

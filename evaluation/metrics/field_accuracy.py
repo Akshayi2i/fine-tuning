@@ -78,14 +78,27 @@ def flatten_scalars(obj: dict[str, Any], prefix: str = "") -> dict[str, Any]:
     ``score_fields`` skips any path containing ``[``, it also made the field
     disappear from scoring entirely the moment it stopped being a scalar. Kept
     whole, ``values_match`` compares it as the set it is.
+
+    **A canonical ``FieldValue`` envelope is one field, scored on its value.**
+    Flattened as an object it would score ``raw``, ``page_ref`` and the
+    pipeline's own ``confidence`` as though they were extracted fields; collapsed
+    through :func:`common.canonical.values_view`, a canonical label and a
+    canonical extraction compare exactly as two flat documents do.
     """
+    from common.canonical import is_field_value, values_view
+
     out: dict[str, Any] = {}
     for key, value in obj.items():
         path = f"{prefix}{key}"
-        if isinstance(value, dict):
+        if is_field_value(value):
+            out[path] = values_view(value)
+        elif isinstance(value, dict):
             out.update(flatten_scalars(value, f"{path}."))
         elif isinstance(value, list):
-            if any(isinstance(item, dict) for item in value):
+            if value and all(is_field_value(item) for item in value):
+                # A list of envelopes is a list of scalars: one field, a set.
+                out[path] = values_view(value)
+            elif any(isinstance(item, dict) for item in value):
                 # A table: rows are addressable, and an empty one contributes
                 # nothing rather than a phantom field.
                 for index, item in enumerate(value):

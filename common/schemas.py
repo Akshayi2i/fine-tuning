@@ -40,8 +40,27 @@ SCHEMA_DIR = Path(__file__).resolve().parent.parent / "schemas"
 #: **theirs**: read-only here, never written, never edited. Everything this repo
 #: adds to them — field descriptions, section maps — lives in a separate file.
 CANONICAL_DIR = (
-    Path(__file__).resolve().parent.parent / "configs" / "canonical schema" / "policy_check"
+    Path(__file__).resolve().parent.parent / "configs" / "canonical schema" / "LOB Schema"
 )
+
+#: The canonical file a policy uses when no single line selects one: the line is
+#: unknown, the policy covers several lines, or the line has no file of its own.
+#: The client's own note on it says exactly that ("used when the line is unknown
+#: or no line-specific schema exists"), so this is their rule, not ours.
+CANONICAL_FALLBACK = "_fallback"
+
+#: Merged into every line file by the client's registry and never loaded for
+#: extraction on its own (SPEC_00 §5.2). Every line file already carries it.
+_CANONICAL_NOT_REGISTERED = ("_common",)
+
+#: LOB enum values whose canonical file is named differently. The enum is ours
+#: (``schemas/lob.enum.json``); the file names are the client's. Without this a
+#: Workers' Comp policy would find no ``workers_comp.json`` and fall back.
+LOB_SCHEMA_ALIASES: dict[str, str] = {
+    "workers_comp": "wc",
+    "general_liability": "gl",
+    "commercial_auto": "auto",
+}
 
 #: Shared definition files, loaded into the registry so ``$ref`` can reach them.
 _SHARED = ("common_fields.json", "lob.enum.json")
@@ -57,7 +76,9 @@ _SCHEMA_FILES: dict[str, str] = {
     "acord:140": "acord140.schema.json",
 }
 
-#: The layout family whose canonical schemas are registered. Read from
+#: The layout family whose rendered prompts are pinned as reference snapshots
+#: (``testing/prompts``). Every canonical file is registered; this only names the
+#: family whose prompts are kept under review. Read from
 #: ``configs/layout_families.yaml`` so the 8-LOB list has one definition.
 CANONICAL_FAMILY = "personal_lines"
 
@@ -113,8 +134,6 @@ def _sources() -> dict[str, SchemaSource]:
     that order, so a caller that scans until it finds what it needs scans the
     small generic schemas before the large canonical ones.
     """
-    from common.config import lobs_in_family
-
     sources: dict[str, SchemaSource] = {
         key: SchemaSource(
             path=SCHEMA_DIR / filename,
@@ -124,20 +143,50 @@ def _sources() -> dict[str, SchemaSource]:
         )
         for key, filename in _SCHEMA_FILES.items()
     }
-    for lob in lobs_in_family(CANONICAL_FAMILY):
-        path = CANONICAL_DIR / f"{lob}.json"
-        if not path.exists():
-            # Declared in the family but not yet supplied. Skipping keeps
-            # `schema_key` falling back to the generic policy schema, which is
-            # what an unregistered LOB has always done.
-            continue
-        sources[f"policy:{lob}"] = SchemaSource(
-            path=path,
-            inline_refs=False,
-            version_at=("fideon:source", "version"),
-            strip_prefixes=("fideon:",),
+
+    # Refused rather than skipped. This directory was renamed once and the
+    # registry skipped every missing file, so each policy quietly rendered the
+    # generic schema and nothing reported it.
+    fallback = CANONICAL_DIR / f"{CANONICAL_FALLBACK}.json"
+    if not fallback.exists():
+        raise SchemaError(
+            f"the canonical policy schemas are missing: expected {fallback}. Every policy is "
+            "extracted into the client's canonical JSON, so without them there is no policy "
+            "output contract at all."
         )
+
+    # A policy with no single line of business is extracted into the client's
+    # canonical fallback, not the generic flat schema: a policy's output contract
+    # is the canonical JSON whatever its line. The key stays `policy`, so corpus
+    # manifests and schema pins keep addressing it by the same name.
+    sources["policy"] = _canonical_source(fallback)
+    for path in sorted(CANONICAL_DIR.glob("*.json")):
+        if path.stem in (CANONICAL_FALLBACK, *_CANONICAL_NOT_REGISTERED):
+            continue
+        sources[f"policy:{path.stem}"] = _canonical_source(path)
     return sources
+
+
+def _canonical_source(path: Path) -> SchemaSource:
+    return SchemaSource(
+        path=path,
+        inline_refs=False,
+        version_at=("fideon:source", "version"),
+        strip_prefixes=("fideon:",),
+    )
+
+
+def is_canonical(
+    doc_type: str, acord_form: str | None = None, lob: str | list[str] | None = None
+) -> bool:
+    """Whether this selection's output is the client's canonical ``FieldValue`` JSON.
+
+    True for every policy. The two output shapes differ in how absence is written
+    (omitted, not ``null``) and in what a leaf is (an envelope, not a value), so
+    the prompt, the training target and the serving post-process all branch on
+    this one answer rather than each deciding for itself.
+    """
+    return not _sources()[schema_key(doc_type, acord_form, lob)].inline_refs
 
 
 def _load_json(path: Path) -> dict[str, Any]:
@@ -178,12 +227,14 @@ def schema_key(
     Two rules, both here rather than at the call sites that would otherwise each
     decide for themselves:
 
-    * **Fall back when no per-LOB schema is registered.** Adding one later is a
-      single ``_SCHEMA_FILES`` entry and no call-site change.
+    * **Fall back when no per-LOB schema is registered.** For a policy the
+      fallback is the client's canonical ``_fallback.json``, so the output is
+      canonical JSON either way. Adding a line is dropping its file into
+      ``CANONICAL_DIR``, with no call-site change.
     * **An LOB selects a schema only when exactly one is named.** A package
       policy covering GL, Property and Auto is one document with a section per
-      line, so it uses the generic policy schema — picking one of its lines would
-      validate the whole document against a third of itself.
+      line, so it uses the fallback — picking one of its lines would validate the
+      whole document against a third of itself.
     """
     doc_type = doc_type.lower()
     if doc_type == "acord":
@@ -201,7 +252,8 @@ def schema_key(
 
     lines = [lob] if isinstance(lob, str) else list(lob or [])
     if len(lines) == 1:
-        scoped = f"{doc_type}:{str(lines[0]).strip().lower()}"
+        line = str(lines[0]).strip().lower()
+        scoped = f"{doc_type}:{LOB_SCHEMA_ALIASES.get(line, line)}"
         if scoped in _sources():
             return scoped
     return doc_type
@@ -335,7 +387,9 @@ def resolved_schema(
     key = schema_key(doc_type, acord_form, lob)
     source = _sources()[key]
     if not source.inline_refs:
-        return _strip_prefixed(_schema_for_key(key), source.strip_prefixes)
+        return _model_facing_canonical(
+            _strip_prefixed(_schema_for_key(key), source.strip_prefixes)
+        )
 
     registry = _registry()
     resolver = registry.resolver()
@@ -356,6 +410,37 @@ def resolved_schema(
         return {k: _resolve(v, depth + 1) for k, v in node.items()}
 
     return _strip_prefixed(_resolve(_schema_for_key(key)), source.strip_prefixes)
+
+
+#: What the model writes for one canonical leaf. The client's ``FieldValue`` also
+#: carries ``confidence`` and ``flagged``; those are the PIPELINE's to fill, from
+#: the calibrated logprobs and the review thresholds, and never the model's — a
+#: model asked for its own confidence produces a number that looks calibrated and
+#: is not (arch §5). :mod:`common.canonical` adds them after generation.
+MODEL_FIELD_VALUE: dict[str, Any] = {
+    "type": "object",
+    "required": ["raw", "parsed", "page_ref"],
+    "additionalProperties": False,
+    "properties": {
+        "raw": {"type": ["string", "null"]},
+        "parsed": {"type": ["string", "number", "null"]},
+        "page_ref": {"type": "array", "items": {"type": "integer"}},
+    },
+}
+
+
+def _model_facing_canonical(schema: dict[str, Any]) -> dict[str, Any]:
+    """The canonical schema with its ``FieldValue`` narrowed to what the model writes.
+
+    Rendered into the prompt and handed to structured decoding, so the model is
+    both told and constrained to write ``raw``/``parsed``/``page_ref`` and nothing
+    else. Validation still judges the enveloped result against the client's full
+    file (:func:`validator_for`).
+    """
+    defs = dict(schema.get("$defs") or {})
+    if "FieldValue" in defs:
+        defs["FieldValue"] = MODEL_FIELD_VALUE
+    return {**schema, "$defs": defs}
 
 
 def _strip_prefixed(node: Any, prefixes: tuple[str, ...]) -> Any:

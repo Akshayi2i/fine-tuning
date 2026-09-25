@@ -30,6 +30,15 @@
   below corresponds to a failure mode observed or anticipated in the
   architecture; do not add prose that does not change an output.
 
+  Two output shapes share this template, switched by `canonical`. Every policy
+  is extracted into the client's canonical schema, where each field is a
+  {raw, parsed, page_ref} envelope and a field the document does not state is
+  OMITTED - writing an envelope for each of several hundred leaves would spend
+  the whole output budget on nulls. ACORD forms and Loss Runs keep the flat
+  shape, where every key is emitted and absence is null. The rules are written
+  once in terms of "null"; the canonical Output section says once what null
+  means there, rather than every rule saying it twice.
+
   PROMPT_TEMPLATE_VERSION is recorded in the corpus manifest. Changing anything
   below forces a corpus rebuild and a new training cycle.
 -#}
@@ -57,7 +66,17 @@ A value that appears on more than one page is one value, not several.
 
 # Output
 - Return the JSON object and nothing else: no prose, no explanation, no markdown code fences, no comments.
+{% if canonical -%}
+- Every field is an object with exactly three keys:
+  - `raw`: the value exactly as printed on the document, character for character.
+  - `parsed`: the same value in the format set out under Value formats below.
+  - `page_ref`: the page numbers, from the `<page N of M>` markers, that the value was read from.
+- Emit only the fields the document states, and omit every other field. An omitted field is null. Wherever these instructions say to output null, omit the field instead.
+- Always emit the top-level objects the schema lists as required, as `{}` when nothing in them is stated.
+- Do not add keys the schema does not define.
+{%- else -%}
 - Emit every key defined in the schema exactly once, including keys whose value is null. Do not add keys the schema does not define.
+{%- endif %}
 - Do not emit confidence scores, probabilities, notes, or source references. Values only.
 
 # Resolving fields
@@ -75,7 +94,10 @@ A document typically names several different parties, several different dates, a
 - If you cannot determine which party, date or amount fills a role, output null for that field. Assigning the nearest candidate is worse than leaving it empty, because a confident wrong answer is not detectable downstream.
 
 # Value formats
-- Dates: `YYYY-MM-DD`. Resolve an ambiguous order from other dates on the same document. If the order cannot be resolved, or a component is missing, output null. Never invent a day or a month.
+{% if canonical -%}
+These formats apply to `parsed`. `raw` is always the text as printed, never reformatted.
+{% endif -%}
+- Dates: `{{ date_format }}`, with a zero-padded month and day. Resolve an ambiguous order from other dates on the same document. If the order cannot be resolved, or a component is missing, output null. Never invent a day or a month.
 - Numbers: digits only, with an optional leading minus and an optional decimal point. No currency symbols, no thousands separators, no units, no trailing text. A figure shown in parentheses is negative.
 - `0` is a value, not an absence. Output `0` where the document states zero, and null where it states nothing.
 - Enumerated fields: output exactly one of the listed values, spelled exactly as listed. Map the document's wording onto the list by meaning. If the document supports none of them, output null. Never output a value outside the list.
@@ -93,7 +115,11 @@ A document typically names several different parties, several different dates, a
 - A table continuing across a page break is one table. Continue it; do not restart it and do not drop the continuation.
 - Do not merge rows, and do not remove rows because they resemble one another. Two rows sharing an identifier can be genuinely distinct entries.
 - Do not emit a total, subtotal or summary line as a row. Those describe the rows; they are not one of them.
+{% if canonical -%}
+- Where a row's cell is empty, omit that field from the row. The row itself stays.
+{%- else -%}
 - Every row carries the same keys. Where a row's cell is empty, that key is null - not omitted.
+{%- endif %}
 
 {% include 'doc_types/' ~ doc_type ~ '.jinja' %}
 Schema:

@@ -447,6 +447,10 @@ def load_labeled_documents(ctx: StageContext) -> list[Any]:
                     for page in range(1, page_count + 1)
                 ],
                 acord_form=metadata.get("acord_form"),
+                # Written by both importers. Selects the canonical schema the
+                # prompt and the target use; without it a homeowners policy
+                # trains against the fallback's field set.
+                lob=metadata.get("lob"),
                 tenant_id=ctx.tenant_id,
                 field_provenance=metadata.get("field_provenance", {}),
                 is_scanned=bool(ocr_meta.get("failed_pages")),
@@ -459,8 +463,14 @@ def load_labeled_documents(ctx: StageContext) -> list[Any]:
 
 def _declared_carrier(label: dict[str, Any]) -> str | None:
     """The carrier the label names. ACORD 25 lists insurers instead; its first
-    one is the carrier the certificate is primarily about."""
+    one is the carrier the certificate is primarily about. A canonical policy
+    label holds it as ``carrier.company_name``, inside an envelope."""
+    from common.canonical import values_view
+
+    label = values_view(label)
     carrier = label.get("carrier")
+    if isinstance(carrier, dict):
+        carrier = carrier.get("company_name")
     if isinstance(carrier, str) and carrier.strip():
         return carrier
     insurers = label.get("insurers")
@@ -469,6 +479,18 @@ def _declared_carrier(label: dict[str, Any]) -> str | None:
         if isinstance(name, str) and name.strip():
             return name
     return None
+
+
+def _declared_account(label: dict[str, Any]) -> str | None:
+    """The insured the label names: ``insured_name`` on a flat label,
+    ``named_insured.primary_name`` on a canonical one. Renewals of one account
+    group through it, so missing it on canonical labels would let them split."""
+    from common.canonical import values_view
+
+    label = values_view(label)
+    named = label.get("named_insured")
+    account = named.get("primary_name") if isinstance(named, dict) else label.get("insured_name")
+    return account if isinstance(account, str) and account.strip() else None
 
 
 def assign_document_groups(ctx: StageContext, documents: list[Any]) -> dict[str, Any]:
@@ -516,7 +538,7 @@ def assign_document_groups(ctx: StageContext, documents: list[Any]) -> dict[str,
                 minhash=minhash(text),
                 carrier=document.carrier,
                 template_id=metadata.get("template_id"),
-                account=document.golden_label.get("insured_name"),
+                account=_declared_account(document.golden_label),
             ))
         report = assign_groups(fingerprints)
         for document in members:

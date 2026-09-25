@@ -135,17 +135,30 @@ class SchemaValidityReport:
 
 
 def score_schema_validity(
-    outputs: list[tuple[str, dict[str, Any], str, str | None]],
+    outputs: list[tuple[Any, ...]],
 ) -> SchemaValidityReport:
     """Validate each output against its document type's schema.
 
+    Each entry is ``(source_id, output, doc_type, acord_form[, lob])``; the line
+    selects a policy's canonical schema.
+
     Mirrors the audit gate that runs on every production call, so a validity
-    regression is caught before promotion rather than in production.
+    regression is caught before promotion rather than in production. A canonical
+    output may arrive in the model's form — no ``confidence``, no ``flagged`` —
+    and is enveloped first, exactly as serving does before its own audit: the
+    question is whether the model produced the client's tree, not whether it
+    wrote fields the pipeline adds.
     """
+    from common.canonical import envelope
+    from common.schemas import is_canonical
+
     report = SchemaValidityReport()
-    for source_id, output, doc_type, acord_form in outputs:
+    for source_id, output, doc_type, acord_form, *rest in outputs:
+        lob = rest[0] if rest else None
         report.total += 1
-        if is_valid(output, doc_type, acord_form):
+        if is_canonical(doc_type, acord_form, lob):
+            output = envelope(output, {})
+        if is_valid(output, doc_type, acord_form, lob):
             report.valid += 1
         else:
             report.invalid_source_ids.append(source_id)

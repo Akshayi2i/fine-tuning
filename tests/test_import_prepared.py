@@ -12,6 +12,7 @@ serving OCR-pin check unverifiable, and a golden label that reaches
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 
@@ -24,12 +25,13 @@ from data_pipeline.ingestion.import_prepared import (
     read_prepared,
 )
 
-GOLDEN = {
-    "insured_name": "Rivera Fabrication LLC",
-    "policy_number": "WC-8842317-01",
-    "effective_date": "2026-04-01",
-    "line_of_business": ["workers_comp"],
-}
+#: A canonical policy label — every policy is written in the client's canonical
+#: schema. Its line travels in metadata (`lob`), since that schema has no
+#: top-level home for one.
+GOLDEN = json.loads(
+    (Path(__file__).resolve().parent / "fixtures/golden/policy_0001.golden.json")
+    .read_text(encoding="utf-8")
+)
 
 
 @pytest.fixture
@@ -127,7 +129,7 @@ def test_a_schema_invalid_golden_never_reaches_the_label_store(tmp_path, client)
 def test_an_imported_document_lands_where_the_pipeline_already_reads(tmp_path, client):
     """A second layout would mean a second set of readers, and one of them would
     eventually be missed."""
-    doc = read_prepared(prepared(tmp_path, metadata={"field_provenance": {"insured_name": 1}}))
+    doc = read_prepared(prepared(tmp_path, metadata={"field_provenance": {"named_insured.primary_name": 1}, "lob": ["workers_comp"]}))
     source_id = import_document(doc, "policy", client, mineru_version="2.0.0")
 
     assert source_id == "policy_0001"
@@ -141,7 +143,7 @@ def test_an_imported_document_lands_where_the_pipeline_already_reads(tmp_path, c
     assert meta["render_only"] is False
 
     label_meta = client.read_json(paths.label_metadata("policy", source_id))
-    assert label_meta["field_provenance"] == {"insured_name": 1}
+    assert label_meta["field_provenance"] == {"named_insured.primary_name": 1}
     assert label_meta["lob"] == ["workers_comp"]
 
 

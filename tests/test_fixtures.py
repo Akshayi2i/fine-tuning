@@ -15,6 +15,7 @@ from pathlib import Path
 import pytest
 
 from common import aliases, ids, schemas
+from common.canonical import field_paths
 from common.lob import compute_coverage, validate_lob
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
@@ -37,6 +38,16 @@ def _load(golden: Path) -> tuple[dict, dict, str, str | None]:
     return label, meta, meta["doc_type"], meta.get("acord_form")
 
 
+def _lines_of(golden: Path) -> list[str]:
+    """The document's lines: on a flat label its own field, on a canonical policy
+    the metadata's `lob` — the client's schema has no top-level home for it."""
+    label, meta, doc_type, form = _load(golden)
+    if schemas.is_canonical(doc_type, form, meta.get("lob")):
+        lob = meta.get("lob")
+        return [lob] if isinstance(lob, str) else list(lob or [])
+    return list(label["line_of_business"])
+
+
 ALL_GOLDEN = _golden_files()
 
 
@@ -47,16 +58,20 @@ def test_fixtures_exist():
 @pytest.mark.parametrize("golden", ALL_GOLDEN, ids=lambda p: p.stem)
 def test_golden_label_validates_against_its_schema(golden):
     """SPEC_04 rejects a label that does not validate; fixtures must pass that bar."""
-    label, _meta, doc_type, acord_form = _load(golden)
-    schemas.validate(label, doc_type, acord_form)
+    label, meta, doc_type, acord_form = _load(golden)
+    schemas.validate(label, doc_type, acord_form, meta.get("lob"))
 
 
 @pytest.mark.parametrize("golden", ALL_GOLDEN, ids=lambda p: p.stem)
 def test_golden_label_carries_line_of_business(golden):
-    """Present in every golden label, for every type, even when null (arch §0b)."""
-    label, *_ = _load(golden)
-    assert "line_of_business" in label
-    validate_lob(label["line_of_business"])
+    """Every document records its line, even when empty (arch §0b): a flat label
+    in its own field, a canonical policy in its metadata."""
+    label, meta, doc_type, form = _load(golden)
+    if schemas.is_canonical(doc_type, form, meta.get("lob")):
+        assert "lob" in meta, f"{golden.stem}: a canonical policy records its line in metadata"
+    else:
+        assert "line_of_business" in label
+    validate_lob(_lines_of(golden))
 
 
 @pytest.mark.parametrize("golden", ALL_GOLDEN, ids=lambda p: p.stem)
@@ -77,7 +92,10 @@ def test_field_provenance_never_names_a_confusable(golden):
     """
     _label, meta, doc_type, _form = _load(golden)
     for field, surface_label in (meta.get("field_provenance") or {}).items():
-        assert not aliases.is_confusable(doc_type, field, surface_label), (
+        # By leaf: the registry is keyed by canonical field name, and a
+        # canonical provenance names a path (`named_insured.primary_name`).
+        leaf = field.rsplit(".", 1)[-1]
+        assert not aliases.is_confusable(doc_type, leaf, surface_label), (
             f"{golden.stem}: {field!r} is recorded as found under {surface_label!r}, "
             f"which is a registered CONFUSABLE for that field"
         )
@@ -86,8 +104,9 @@ def test_field_provenance_never_names_a_confusable(golden):
 @pytest.mark.parametrize("golden", ALL_GOLDEN, ids=lambda p: p.stem)
 def test_every_provenance_field_exists_in_the_label(golden):
     label, meta, *_ = _load(golden)
+    present = field_paths(label)
     for field in (meta.get("field_provenance") or {}):
-        assert field in label, f"{golden.stem}: provenance names {field!r}, absent from the label"
+        assert field in present, f"{golden.stem}: provenance names {field!r}, absent from the label"
 
 
 # --------------------------------------------------------------------------
@@ -114,8 +133,9 @@ def test_same_canonical_field_appears_under_two_surface_labels():
 
     multi = {k: v for k, v in by_field.items() if len(v) > 1}
     assert multi, "no canonical field appears under two different surface labels"
-    assert ("policy", "insured_name") in multi, (
-        "insured_name is the worked example throughout the specs — it must carry alias variety"
+    assert ("policy", "named_insured.primary_name") in multi, (
+        "the named insured is the worked example throughout the specs — it must carry alias "
+        "variety (on a canonical policy it is named_insured.primary_name)"
     )
 
 
@@ -159,7 +179,7 @@ def test_fixtures_include_a_variable_length_list_field():
 
 
 def test_fixtures_cover_more_than_one_lob_value():
-    values = [json.loads(g.read_text(encoding="utf-8"))["line_of_business"] for g in ALL_GOLDEN]
+    values = [_lines_of(g) for g in ALL_GOLDEN]
     coverage = compute_coverage(values)
     assert len([v for v, c in coverage.counts.items() if c]) >= 2, (
         "a single LoB value across all fixtures makes per-value LoB accuracy untestable"
