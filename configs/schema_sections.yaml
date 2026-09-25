@@ -1,0 +1,123 @@
+# Which canonical sections one extraction call asks for, and over which pages.
+#
+# WHY THIS EXISTS. A canonical policy schema is 27,000-42,000 characters, and the
+# whole of it goes into the prompt. That leaves room for four to six pages of a
+# document, so a 200-page policy cannot be read in one call - and a call that
+# carries the whole schema is asking for the whole document shape from pages that
+# hold a fraction of it.
+#
+# Slicing pays for itself. Measured, against the same budget:
+#
+#     whole schema     4-6 pages per call
+#     decl             7 pages    (3,246 tokens - IDENTICAL for all 33 lines)
+#     arrays           8 pages    (1,438 tokens - IDENTICAL for all 33 lines)
+#     lineblk          7-8 pages  (752-3,887)
+#     dtd              7 pages    (4,931, and only three lines carry it)
+#
+# THE CROSS PRODUCT, AND WHY IT IS NOT CHEAPER TO GUESS. A window is a (group,
+# page window) pair, and every group is asked over every page that could carry
+# it. The tempting alternative - work out which section each page holds, and ask
+# only for that - needs a page->section map, which comes either from gold
+# (training only) or from a classifier (serving). Either way a mislabelled page
+# means a section that is never asked for on the page that had it, and the field
+# comes back null with nothing to say why. That is the same silent miss that
+# `select_policy_pages` used to have when it truncated the routed set. Because
+# slicing nearly doubles the pages per call, the safe version costs about what
+# the guess would have: 7-8 calls for a 200-page policy either way.
+#
+# ONE MAP, EVERY LINE. Sixteen top-level sections appear in all 33 canonical
+# schemas, byte-identical, and they are over half of every prompt. So `decl` and
+# `arrays` are written once here rather than 33 times, and `lineblk` is defined
+# as the remainder - which is what makes a line this repo has never seen still
+# get every one of its sections asked for.
+
+groups:
+
+  decl:
+    title: Declarations
+    task: policy_declarations
+    pages: declarations
+    # The policy-level objects. These are the fields whose value is the
+    # document's, not a row's, and `policy.jinja` tells the model that where a
+    # schedule or an endorsement repeats one of them differently, the
+    # declarations value wins. That rule only holds if this group is the one
+    # reading the page the declarations are printed on.
+    sections:
+      - document
+      - carrier
+      - producer
+      - policy
+      - named_insured
+      - premium
+      - terrorism
+      - billing
+      - claim_reporting
+      - signature
+
+  arrays:
+    title: Schedules
+    task: policy_schedule
+    pages: routed
+    # The repeating tables shared by every line. Asked over every routed page,
+    # because a location schedule can be printed anywhere in a 200-page policy
+    # and guessing where costs a whole table.
+    sections:
+      - locations
+      - interested_parties
+      - forms_and_endorsements
+      - deductibles
+      - loss_history
+      - state_notices
+
+  lineblk:
+    title: Line-specific coverages
+    task: policy_schedule
+    pages: routed
+    # Defined as "every top-level section no other group claims", so a line with
+    # sections this file has never heard of - `covered_classes`,
+    # `business_liability_coverage_part` - still has them asked for. Naming them
+    # instead would mean the first unlisted section was silently dropped.
+    sections: remainder
+
+  dtd:
+    title: Document type detail
+    task: policy_endorsements
+    pages: declarations
+    # What KIND of policy document this is - declarations, renewal offer,
+    # cancellation, endorsement. That is stated near the front, with the
+    # declarations, which is why it shares their page rule rather than the
+    # routed set. Only ocean_marine, classic_auto and personal_umbrella carry it.
+    sections:
+      - document_type_detail
+
+# --------------------------------------------------------------------------
+# Page rules
+# --------------------------------------------------------------------------
+#
+# `routed`       every page the selector returned.
+# `declarations` pages 1-N, PLUS the page the declarations were detected on when
+#                it falls outside them.
+#
+# That second clause is not defensive padding. Scanned intake routinely opens
+# with a fax cover sheet, a billing notice or a broker letter, which puts the
+# real declarations on page 4 or 5. Pinning this group to pages 1-3 would mean
+# nothing asks for the policy-level fields on exactly the documents most likely
+# to be messy, and every one of them would come back null.
+pages:
+  declarations_leading: 3
+
+# --------------------------------------------------------------------------
+# Identifying keys, for de-duplicating a row that two windows both returned
+# --------------------------------------------------------------------------
+#
+# An array is asked over several page windows, so a table spanning a window
+# boundary legitimately comes back twice. De-duplication is load-bearing here,
+# not tidying. Keys are compared on NORMALISED values, so "LOC 1" and "1" are one
+# location.
+array_keys:
+  locations: [location_number, address]
+  interested_parties: [name, party_type]
+  forms_and_endorsements: [form_number, edition_date]
+  deductibles: [applies_to, deductible_type]
+  loss_history: [claim_number, loss_date]
+  state_notices: [state, notice_title]

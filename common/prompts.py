@@ -87,7 +87,10 @@ def doc_type_label(doc_type: str, acord_form: str | None = None) -> str:
 
 
 def schema_json_for_prompt(
-    doc_type: str, acord_form: str | None = None, lob: str | list[str] | None = None
+    doc_type: str,
+    acord_form: str | None = None,
+    lob: str | list[str] | None = None,
+    sections: str | None = None,
 ) -> str:
     """The schema as it is injected into the prompt.
 
@@ -99,7 +102,7 @@ def schema_json_for_prompt(
     Serialised with sorted keys and a fixed separator so rendering is
     deterministic; an unstable key order would break prompt parity for no reason.
     """
-    schema = resolved_schema(doc_type, acord_form, lob)
+    schema = resolved_schema(doc_type, acord_form, lob, sections)
     stripped = _strip_authoring_keys(schema)
     return json.dumps(stripped, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
 
@@ -128,7 +131,10 @@ def _is_array(node: dict[str, Any]) -> bool:
 
 
 def output_shape_for_prompt(
-    doc_type: str, acord_form: str | None = None, lob: str | list[str] | None = None
+    doc_type: str,
+    acord_form: str | None = None,
+    lob: str | list[str] | None = None,
+    sections: str | None = None,
 ) -> str:
     """A compact skeleton of the JSON this document type must return.
 
@@ -146,7 +152,7 @@ def output_shape_for_prompt(
     immediately after and is the authority on both; this exists so the model sees
     the outline before the detail.
     """
-    schema = resolved_schema(doc_type, acord_form, lob)
+    schema = resolved_schema(doc_type, acord_form, lob, sections)
     properties: dict[str, Any] = schema.get("properties", {})
 
     scalars = [name for name, node in properties.items() if not _is_array(node)]
@@ -165,6 +171,7 @@ def render_system_prompt(
     modality_mode: str,
     acord_form: str | None = None,
     lob: str | list[str] | None = None,
+    sections: str | None = None,
 ) -> str:
     """Render the system prompt. **The** entrypoint — never bypass it.
 
@@ -196,8 +203,8 @@ def render_system_prompt(
         # the prompt can never describe one shape while carrying the other's
         # schema.
         canonical=is_canonical(doc_type, acord_form, lob),
-        required_keys=_prose_list(required_fields(doc_type, acord_form, lob)),
-        output_shape=output_shape_for_prompt(doc_type, acord_form, lob),
+        required_keys=_prose_list(required_fields(doc_type, acord_form, lob, sections)),
+        output_shape=output_shape_for_prompt(doc_type, acord_form, lob, sections),
         doc_type_label=doc_type_label(doc_type, acord_form),
         modality_mode=mode,
         # Rendered from the constant the post-process formats with, not written
@@ -206,7 +213,7 @@ def render_system_prompt(
         # model is asked for one format and its answer rewritten into another,
         # which reads as the model getting dates wrong.
         date_format=OUTPUT_DATE_LABEL,
-        schema_json=schema_json_for_prompt(doc_type, acord_form, lob),
+        schema_json=schema_json_for_prompt(doc_type, acord_form, lob, sections),
     ).strip()
 
 
@@ -228,6 +235,7 @@ def prompt_fingerprint(
     modality_mode: str,
     acord_form: str | None = None,
     lob: str | list[str] | None = None,
+    sections: str | None = None,
 ) -> str:
     """A short hash of the rendered prompt.
 
@@ -239,7 +247,7 @@ def prompt_fingerprint(
     """
     import hashlib
 
-    rendered = render_system_prompt(doc_type, modality_mode, acord_form, lob)
+    rendered = render_system_prompt(doc_type, modality_mode, acord_form, lob, sections)
     return hashlib.sha256(rendered.encode("utf-8")).hexdigest()[:16]
 
 

@@ -76,6 +76,13 @@ _SCHEMA_FILES: dict[str, str] = {
     "acord:140": "acord140.schema.json",
 }
 
+#: Separates a schema key from the name of the slice of it a window asks for:
+#: ``policy:homeowners#arrays``. Safe as a separator because ``doc_type`` is
+#: constrained to ``ACTIVE_DOC_TYPES``, an LOB is normalised to the client's file
+#: stem, and an ACORD form never reaches that branch — so it cannot occur in a
+#: base key by accident.
+SLICE_SEPARATOR = "#"
+
 #: The layout family whose rendered prompts are pinned as reference snapshots
 #: (``testing/prompts``). Every canonical file is registered; this only names the
 #: family whose prompts are kept under review. Read from
@@ -186,7 +193,7 @@ def is_canonical(
     the prompt, the training target and the serving post-process all branch on
     this one answer rather than each deciding for itself.
     """
-    return not _sources()[schema_key(doc_type, acord_form, lob)].inline_refs
+    return not _sources()[base_key(schema_key(doc_type, acord_form, lob))].inline_refs
 
 
 def _load_json(path: Path) -> dict[str, Any]:
@@ -213,7 +220,10 @@ def _registry() -> Registry:
 
 
 def schema_key(
-    doc_type: str, acord_form: str | None = None, lob: str | list[str] | None = None
+    doc_type: str,
+    acord_form: str | None = None,
+    lob: str | list[str] | None = None,
+    sections: str | None = None,
 ) -> str:
     """Build the registry key for a document type, form and line of business.
 
@@ -251,26 +261,50 @@ def schema_key(
         raise SchemaError(f"unknown doc_type {doc_type!r}; active types: {ACTIVE_DOC_TYPES}")
 
     lines = [lob] if isinstance(lob, str) else list(lob or [])
+    base = doc_type
     if len(lines) == 1:
         line = str(lines[0]).strip().lower()
         scoped = f"{doc_type}:{LOB_SCHEMA_ALIASES.get(line, line)}"
         if scoped in _sources():
-            return scoped
-    return doc_type
+            base = scoped
+    return f"{base}{SLICE_SEPARATOR}{sections}" if sections else base
+
+
+def base_key(key: str) -> str:
+    """``policy:homeowners#arrays`` -> ``policy:homeowners``.
+
+    A slice is a view of a schema, not a schema. Everything that addresses the
+    FILE — where it lives, which version it declares, whether it is canonical —
+    resolves on the base, because two slices of homeowners are two views of one
+    file at one version.
+    """
+    return key.split(SLICE_SEPARATOR, 1)[0]
+
+
+def slice_of(key: str) -> str | None:
+    """The slice name in a key, or ``None`` for a whole schema."""
+    _, separator, name = key.partition(SLICE_SEPARATOR)
+    return name if separator else None
 
 
 def load_schema(
-    doc_type: str, acord_form: str | None = None, lob: str | list[str] | None = None
+    doc_type: str,
+    acord_form: str | None = None,
+    lob: str | list[str] | None = None,
+    sections: str | None = None,
 ) -> dict[str, Any]:
     """Return the raw (unresolved) schema for a document type."""
-    return _schema_for_key(schema_key(doc_type, acord_form, lob))
+    return _schema_for_key(schema_key(doc_type, acord_form, lob, sections))
 
 
 def validator_for(
-    doc_type: str, acord_form: str | None = None, lob: str | list[str] | None = None
+    doc_type: str,
+    acord_form: str | None = None,
+    lob: str | list[str] | None = None,
+    sections: str | None = None,
 ) -> Draft202012Validator:
     """A ref-resolving validator for this document type."""
-    return _validator_for_key(schema_key(doc_type, acord_form, lob))
+    return _validator_for_key(schema_key(doc_type, acord_form, lob, sections))
 
 
 # Cached on the resolved KEY rather than on the arguments: `lob` arrives as a
@@ -280,11 +314,46 @@ def validator_for(
 # should share one parsed copy.
 @cache
 def _schema_for_key(key: str) -> dict[str, Any]:
+    base = base_key(key)
     try:
-        source = _sources()[key]
+        source = _sources()[base]
     except KeyError:
-        raise SchemaError(f"no schema registered for key {key!r}") from None
-    return _load_json(source.path)
+        raise SchemaError(f"no schema registered for key {base!r}") from None
+    schema = _load_json(source.path)
+
+    name = slice_of(key)
+    return _slice_sections(schema, name, key) if name else schema
+
+
+def _slice_sections(schema: dict[str, Any], group: str, key: str) -> dict[str, Any]:
+    """One group's view of a schema: its sections, and nothing else's.
+
+    ``required`` is narrowed to the sections that survive, never left whole. A
+    slice that kept the full ``required`` would have structured decoding force
+    an ``arrays`` window to emit ``carrier``, ``named_insured`` and ``policy`` as
+    ``{}`` — and then two windows would both claim to own ``carrier``, giving the
+    merge a conflict that should not exist. On the training side the same list
+    reaches :func:`common.canonical.to_model_target`, so the wrong one there
+    teaches every schedule target to emit an empty ``carrier``.
+
+    ``$defs`` travels with every slice: each leaf still ``$ref``s the envelope,
+    and a slice whose refs do not resolve is not a schema.
+    """
+    from common.schema_sections import SectionMapError, sections_for
+
+    lob = key.split(":", 1)[1].split(SLICE_SEPARATOR)[0] if ":" in base_key(key) else None
+    try:
+        wanted = set(sections_for(group, lob))
+    except SectionMapError as exc:
+        raise SchemaError(f"cannot slice {key!r}: {exc}") from exc
+
+    properties = {k: v for k, v in (schema.get("properties") or {}).items() if k in wanted}
+    sliced = {k: v for k, v in schema.items() if k not in ("properties", "required")}
+    sliced["properties"] = properties
+    required = [name for name in (schema.get("required") or []) if name in properties]
+    if required:
+        sliced["required"] = required
+    return sliced
 
 
 @cache
@@ -337,14 +406,20 @@ def iter_validation_errors(
 
 
 def required_fields(
-    doc_type: str, acord_form: str | None = None, lob: str | list[str] | None = None
+    doc_type: str,
+    acord_form: str | None = None,
+    lob: str | list[str] | None = None,
+    sections: str | None = None,
 ) -> list[str]:
     """Top-level required field names for this document type."""
-    return list(load_schema(doc_type, acord_form, lob).get("required", []))
+    return list(load_schema(doc_type, acord_form, lob, sections).get("required", []))
 
 
 def schema_version(
-    doc_type: str, acord_form: str | None = None, lob: str | list[str] | None = None
+    doc_type: str,
+    acord_form: str | None = None,
+    lob: str | list[str] | None = None,
+    sections: str | None = None,
 ) -> str:
     """The schema's declared version, recorded in the corpus manifest (arch §7).
 
@@ -356,18 +431,21 @@ def schema_version(
     called for every registered schema when a corpus manifest is written — so a
     schema whose version cannot be found fails the whole build, not one lookup.
     """
-    key = schema_key(doc_type, acord_form, lob)
+    key = schema_key(doc_type, acord_form, lob, sections)
     node: Any = _schema_for_key(key)
-    for step in _sources()[key].version_at:
+    for step in _sources()[base_key(key)].version_at:
         node = node.get(step) if isinstance(node, dict) else None
     if not node:
-        where = ".".join(_sources()[key].version_at)
+        where = ".".join(_sources()[base_key(key)].version_at)
         raise SchemaError(f"schema {key!r} declares no version at {where!r}")
     return str(node)
 
 
 def resolved_schema(
-    doc_type: str, acord_form: str | None = None, lob: str | list[str] | None = None
+    doc_type: str,
+    acord_form: str | None = None,
+    lob: str | list[str] | None = None,
+    sections: str | None = None,
 ) -> dict[str, Any]:
     """The schema as the model sees it: refs inlined where that helps, never where it hurts.
 
@@ -384,8 +462,8 @@ def resolved_schema(
     Either way the result is stripped of keys the model cannot act on, including
     the ``fideon:aliases`` blocks the canonical files carry (master §1.4).
     """
-    key = schema_key(doc_type, acord_form, lob)
-    source = _sources()[key]
+    key = schema_key(doc_type, acord_form, lob, sections)
+    source = _sources()[base_key(key)]
     if not source.inline_refs:
         return _model_facing_canonical(
             _strip_prefixed(_schema_for_key(key), source.strip_prefixes)
@@ -535,7 +613,10 @@ def schema_selectors() -> list[tuple[str, str | None, str | None]]:
 
 
 def schema_text(
-    doc_type: str, acord_form: str | None = None, lob: str | list[str] | None = None
+    doc_type: str,
+    acord_form: str | None = None,
+    lob: str | list[str] | None = None,
+    sections: str | None = None,
 ) -> str:
     """The schema as the prompt embeds it — titles, descriptions, enum values.
 
@@ -545,7 +626,7 @@ def schema_text(
     to catch. A phrase in neither ("Pol. No.", "Underwritten By") appearing in a
     prompt means someone pasted the registry in.
     """
-    return json.dumps(resolved_schema(doc_type, acord_form, lob), ensure_ascii=False)
+    return json.dumps(resolved_schema(doc_type, acord_form, lob, sections), ensure_ascii=False)
 
 
 def all_schema_keys() -> list[tuple[str, str | None]]:
