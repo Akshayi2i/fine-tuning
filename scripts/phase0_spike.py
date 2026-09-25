@@ -265,6 +265,59 @@ def check_swift_row_format(r: Result) -> None:
         r.data["rendered"] = collapse(rendered)[:600]
 
 
+def check_swift_image_budget(r: Result) -> None:
+    """Does ms-swift resize pages to the budget training passes it?
+
+    training.train passes the budget in BOTH forms — MAX_PIXELS/MIN_PIXELS for
+    Qwen2/2.5-VL, IMAGE_MAX_TOKEN_NUM/IMAGE_MIN_TOKEN_NUM for Qwen3-VL — because
+    which one this ms-swift reads for this model is not known until here. If the
+    processor honours neither, it resizes to its own default, and the model trains
+    on pages a different size from the ones it is served.
+
+    Encodes one letter-size page through ms-swift's template with the env set
+    exactly as a training run sets it, and compares the image tokens it produced
+    with training.length_check's prediction — the same arithmetic the pre-launch
+    length check relies on, so a mismatch here invalidates that check too.
+    """
+    import os
+    import tempfile
+
+    from PIL import Image
+    from swift.llm import get_model_tokenizer, get_template
+
+    from common.scopes import default_scope
+    from training.length_check import image_tokens
+    from training.train import _pixel_budget
+
+    env = _pixel_budget(default_scope())
+    os.environ.update(env)
+    page = Path(tempfile.mkdtemp()) / "page.png"
+    Image.new("RGB", (1700, 2200), "white").save(page)   # US Letter at 200 dpi
+
+    _model, processor = get_model_tokenizer(MODEL_ID, load_model=False)
+    template = get_template(processor.model_meta.template, processor)
+    encoded = template.encode({
+        "messages": [{"role": "user", "content": "<image>page"},
+                     {"role": "assistant", "content": "{}"}],
+        "images": [str(page)],
+    })
+    pad_id = processor.tokenizer.convert_tokens_to_ids("<|image_pad|>")
+    measured = sum(1 for token in encoded["input_ids"] if token == pad_id)
+    predicted = image_tokens(
+        1700, 2200, min_pixels=int(env["MIN_PIXELS"]), max_pixels=int(env["MAX_PIXELS"])
+    )
+
+    r.data.update({"env": env, "measured_image_tokens": measured, "predicted": predicted})
+    r.ok = measured == predicted
+    r.detail = (
+        f"a letter page is {measured} image tokens, as the length check predicts"
+        if r.ok else
+        f"ms-swift produced {measured} image tokens where {predicted} were predicted: the "
+        "pixel budget is not being honoured (or the resize factor differs) — training would "
+        "see a different resolution from serving, and the pre-launch length check is off"
+    )
+
+
 def check_vllm_multi_lora(r: Result) -> None:
     """Does vLLM support multi-LoRA for this architecture?
 
@@ -663,6 +716,9 @@ def main(argv: list[str] | None = None) -> int:
             check_interleaved_content),
         run("swift_row_format", "that a staged training row renders exactly as serving renders it",
             check_swift_row_format),
+        run("swift_image_budget", "that training resizes pages to the budget serving uses, and "
+            "that the pre-launch length check counts image tokens right",
+            check_swift_image_budget),
         run("vllm_multi_lora", "SPEC_11 serving; merged per-type models are the fallback",
             check_vllm_multi_lora),
         run("llama_cpp_mmproj", "whether GGUF export can produce a model that can see",

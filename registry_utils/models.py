@@ -126,6 +126,10 @@ class TrainingConfig(_Base):
     vit_method: Literal["frozen", "lora"] = "frozen"
 
     resolution_cap_px: int
+    #: The image resize budget the trainer was actually given, as passed in its
+    #: environment (``MAX_PIXELS`` / ``IMAGE_MAX_TOKEN_NUM`` ...). Recorded because
+    #: ``resolution_cap_px`` is the render cap, not what the processor resized to.
+    pixel_budget: dict[str, int] | None = None
     max_seq_len: int
     seed: int
 

@@ -31,6 +31,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import uuid
 from collections.abc import Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
@@ -128,53 +129,56 @@ def stage_training_data(
     *,
     images_root: str | Path | None = None,
     workers: int = DOWNLOAD_WORKERS,
+    max_pixels: int | None = None,
 ) -> StagedData:
     """Copy and convert a run's data onto local disk. Returns the local paths.
 
-    Every row is read first, so the page images can be fetched concurrently and
-    each exactly once. ``images_root`` is the per-corpus-version cache every run
-    on that version shares (``paths.staging_train_images_dir``); without one the
-    images go under ``local_root``.
+    **Every row is converted and checked before a single image is fetched.** A
+    row carrying a trainer tag, an unknown content block, or a task whose pixel
+    budget is not the run's (``max_pixels``) refuses the run at once — not after
+    twenty thousand page images have been copied onto a paid pod.
 
-    An image already in the cache is not fetched again. That is only safe
-    because a download is written to a temporary file and renamed into place: a
-    pod preempted mid-download leaves a ``.part`` file, never a truncated image
-    under the real name that a later run would trust.
+    ``images_root`` is the per-corpus-version cache every run on that version
+    shares (``paths.staging_train_images_dir``); without one the images go under
+    ``local_root``. An image already in the cache is not fetched again, which is
+    only safe because each download goes to its own temporary file and is renamed
+    into place: a pod preempted mid-download leaves a ``.part`` file, never a
+    truncated image under the real name, and two runs fetching one page at once
+    cannot interleave their writes.
     """
     root = Path(local_root)
     cache = Path(images_root) if images_root is not None else root / "images"
     staged = StagedData()
 
-    files: list[tuple[str, list[dict[str, Any]]]] = []
-    for index, key in enumerate(epoch_files, start=1):
-        files.append((f"train/epoch_{index}.jsonl", _read_rows(client, key)))
+    sources: list[tuple[str, str]] = [
+        (f"train/epoch_{index}.jsonl", key) for index, key in enumerate(epoch_files, start=1)
+    ]
     if val_path:
-        files.append(("val/val.jsonl", _read_rows(client, val_path)))
+        sources.append(("val/val.jsonl", val_path))
 
-    keys = sorted({
-        block["image"]
-        for _name, rows in files
-        for row in rows
-        for message in row.get("messages") or []
-        if isinstance(message.get("content"), list)
-        for block in message["content"]
-        if block.get("type") == "image" and isinstance(block.get("image"), str)
-    })
-    local_of = {key: (cache / key).resolve() for key in keys}
-    missing = [key for key in keys if not local_of[key].exists()]
-    if missing:
-        with ThreadPoolExecutor(max_workers=max(1, workers)) as pool:
-            list(pool.map(lambda key: _download(client, key, local_of[key]), missing))
+    # Convert first. The local path of every image is known before it exists, so
+    # the conversion — and every refusal in it — runs before any download.
+    converted: list[tuple[str, list[dict[str, Any]]]] = []
+    keys: set[str] = set()
 
-    for name, rows in files:
+    def local_image(key: str) -> str:
+        keys.add(key)
+        return str((cache / key).resolve())
+
+    for name, key in sources:
+        rows = _read_rows(client, key)
+        if max_pixels is not None:
+            _refuse_other_budgets(rows, max_pixels)
+        converted.append((name, [to_swift_row(row, local_image) for row in rows]))
+
+    missing = sorted(key for key in keys if not (cache / key).exists())
+    _download_all(client, missing, cache, workers)
+
+    for name, rows in converted:
         target = root / name
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(
-            "".join(
-                json.dumps(to_swift_row(row, lambda key: str(local_of[key])), ensure_ascii=False)
-                + "\n"
-                for row in rows
-            ),
+            "".join(json.dumps(row, ensure_ascii=False) + "\n" for row in rows),
             encoding="utf-8",
         )
         staged.rows += len(rows)
@@ -192,14 +196,52 @@ def stage_training_data(
     return staged
 
 
+def _refuse_other_budgets(rows: list[dict[str, Any]], max_pixels: int) -> None:
+    """The trainer resizes every image in a run to ONE budget. A row whose task
+    is budgeted differently — a thumbnail task, at a tenth of the pixels — would
+    be trained at the wrong resolution, so it is refused rather than resized."""
+    from common.config import vision_for_task
+
+    for row in rows:
+        task = row.get("task") or "extract"
+        budget = int(vision_for_task(task)["max_pixels"])
+        if budget != max_pixels:
+            raise StagingError(
+                f"{row.get('source_id')}: task {task!r} is budgeted at {budget:,} px but this "
+                f"run resizes every page to {max_pixels:,}. The trainer takes one budget per "
+                "run; train tasks with different budgets in separate runs."
+            )
+
+
+def _download_all(client: BlobClient, keys: list[str], cache: Path, workers: int) -> None:
+    """Fetch ``keys`` concurrently. The first failure cancels what has not started."""
+    if not keys:
+        return
+    with ThreadPoolExecutor(max_workers=max(1, workers)) as pool:
+        futures = [pool.submit(_download, client, key, cache / key) for key in keys]
+        try:
+            for future in futures:
+                future.result()
+        except BaseException:
+            for future in futures:
+                future.cancel()
+            raise
+
+
 def _read_rows(client: BlobClient, key: str) -> list[dict[str, Any]]:
     return [json.loads(line) for line in client.read_text(key).splitlines() if line.strip()]
 
 
 def _download(client: BlobClient, key: str, target: Path) -> None:
-    """Fetch one image atomically: to ``<name>.part``, then renamed into place."""
+    """Fetch one image atomically, to a temporary file unique to this download.
+
+    Unique because the cache is shared: two runs on one corpus version can fetch
+    the same page at the same moment, and a shared ``.part`` name would let one
+    rename the other's half-written file into place. Losing the race is success
+    — the page is there, whole, whoever wrote it.
+    """
     target.parent.mkdir(parents=True, exist_ok=True)
-    partial = target.with_name(target.name + ".part")
+    partial = target.with_name(f"{target.name}.{os.getpid()}.{uuid.uuid4().hex}.part")
     try:
         client.download_file(key, partial)
     except Exception as exc:  # noqa: BLE001 - reported with the one question that matters
@@ -211,4 +253,9 @@ def _download(client: BlobClient, key: str, target: Path) -> None:
                 "from text it was told came with an image."
             ) from exc
         raise StagingError(f"could not fetch page image {key}: {exc}") from exc
-    os.replace(partial, target)
+    try:
+        os.replace(partial, target)
+    except OSError as exc:
+        partial.unlink(missing_ok=True)
+        if not target.exists():
+            raise StagingError(f"could not place page image {key}: {exc}") from exc

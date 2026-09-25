@@ -25,7 +25,23 @@ from data_pipeline.dataset_builder.split_groups import GroupRecord, assign_group
 from training.stage_data import SWIFT_IMAGE_TAG, StagingError, stage_training_data, to_swift_row
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
-PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 16
+def _png(width: int, height: int) -> bytes:
+    """A PNG header with real dimensions: all the length check reads."""
+    import struct
+
+    return (
+        b"\x89PNG\r\n\x1a\n" + b"\x00\x00\x00\rIHDR"
+        + struct.pack(">II", width, height) + b"\x00" * 8
+    )
+
+
+#: A US-Letter page rendered inside the extraction budget.
+PNG = _png(1275, 1650)
+
+
+def _stub_tokens(texts):
+    """A stand-in for the model tokenizer: roughly four characters a token."""
+    return [len(t) // 4 + 1 for t in texts]
 
 
 @pytest.fixture
@@ -192,6 +208,7 @@ def test_a_real_run_points_ms_swift_at_local_staged_files(client, tmp_path, monk
     _seed(client)
     monkeypatch.setenv("RUNPOD_VOLUME_MOUNT", str(tmp_path))
     monkeypatch.setattr(T, "validate_all", lambda **_kw: None)
+    monkeypatch.setattr(T, "_token_counter", lambda: _stub_tokens)
     launched = []
     monkeypatch.setattr(T, "launch", lambda config: launched.append(config))
 
@@ -244,6 +261,7 @@ def _train(client, monkeypatch, tmp_path, **kwargs):
 
     monkeypatch.setenv("RUNPOD_VOLUME_MOUNT", str(tmp_path))
     monkeypatch.setattr(T, "validate_all", lambda **_kw: None)
+    monkeypatch.setattr(T, "_token_counter", lambda: _stub_tokens)
     launched = []
     monkeypatch.setattr(T, "launch", lambda config: launched.append(config))
     _swift, manifest = T.train(
@@ -382,3 +400,109 @@ def test_encoding_is_strict_and_the_pixel_budget_is_explicit():
     )
     assert swift.args["strict"] is True
     assert swift.env["MAX_PIXELS"] == str(vision_for_task("extract")["max_pixels"])
+
+
+# --------------------------------------------------------------------------
+# Review 3: real lengths before launch, the pixel budget, safe shared staging
+# --------------------------------------------------------------------------
+
+def test_image_tokens_follow_the_resize_rule():
+    """Qwen's smart_resize: sides rounded to 32, area scaled to the budget."""
+    from training.length_check import image_tokens
+
+    # Inside the budget: rounded, not scaled. 1280x1664 / (32*32) = 2080.
+    assert image_tokens(1275, 1650, min_pixels=200_704, max_pixels=2_483_712) == 2080
+    # Over the budget: scaled down, never past it.
+    big = image_tokens(4000, 6000, min_pixels=200_704, max_pixels=2_483_712)
+    assert big * 32 * 32 <= 2_483_712
+    # Under the floor: scaled up to it.
+    assert image_tokens(100, 100, min_pixels=200_704, max_pixels=2_483_712) * 1024 >= 200_704
+
+
+def test_a_row_over_max_length_by_the_real_count_refuses_the_run(client, tmp_path, monkeypatch):
+    """The corpus estimate passed it; the real tokenizer does not. Refused before
+    launch, not hours in when strict encoding would stop the run."""
+    from training import train as T
+    from training.train import TrainingError
+
+    _seed(client)
+    monkeypatch.setattr(T, "_token_counter", lambda: (lambda texts: [10**6 for _ in texts]))
+    monkeypatch.setenv("RUNPOD_VOLUME_MOUNT", str(tmp_path))
+    monkeypatch.setattr(T, "validate_all", lambda **_kw: None)
+    launched = []
+    monkeypatch.setattr(T, "launch", lambda config: launched.append(config))
+    from registry_utils.models import DataStats
+
+    with pytest.raises(TrainingError, match="exceed max_length"):
+        T.train(corpus_version="v1", out_version="v9", client=client, corpus_manifest={},
+                data_stats=DataStats(train_examples=0, val_examples=0, test_examples=0),
+                dry_run=False)
+    assert not launched
+
+
+def test_the_budget_is_passed_in_both_forms_and_recorded():
+    from training.train import build_training_config
+
+    swift, recorded = build_training_config(
+        corpus_paths=["e1", "e2", "e3", "e4"], output_dir="/out", val_paths=["v"]
+    )
+    env = swift.env
+    assert int(env["IMAGE_MAX_TOKEN_NUM"]) == int(env["MAX_PIXELS"]) // 1024
+    assert int(env["IMAGE_MIN_TOKEN_NUM"]) == int(env["MIN_PIXELS"]) // 1024
+    assert recorded.pixel_budget == {k: int(v) for k, v in env.items()}
+
+
+def test_a_row_budgeted_differently_from_the_run_is_refused_before_any_download(client, tmp_path):
+    """A thumbnail task resized to the extraction budget trains at ten times the
+    pixels serving sends it."""
+    _seed(client)
+    rows = [json.loads(line) for line in client.read_text(EPOCHS[0]).splitlines() if line.strip()]
+    rows[0]["task"] = "page_select"
+    client.write_text(EPOCHS[0], "".join(json.dumps(r) + "\n" for r in rows))
+
+    with pytest.raises(StagingError, match="budgeted at"):
+        stage_training_data(EPOCHS, None, client, tmp_path / "run",
+                            images_root=tmp_path / "cache", max_pixels=2_483_712)
+    assert not list((tmp_path / "cache").rglob("*.png")), "images fetched for a refused run"
+
+
+def test_a_bad_row_refuses_staging_before_any_download(client, tmp_path):
+    _seed(client)
+    rows = [json.loads(line) for line in client.read_text(EPOCHS[0]).splitlines() if line.strip()]
+    rows[-1]["messages"][-1]["content"] = '{"note": "<bbox>"}'
+    client.write_text(EPOCHS[0], "".join(json.dumps(r) + "\n" for r in rows))
+
+    with pytest.raises(StagingError, match="special tag"):
+        stage_training_data(EPOCHS, None, client, tmp_path / "run", images_root=tmp_path / "cache")
+    assert not list((tmp_path / "cache").rglob("*.png"))
+
+
+def test_two_downloads_of_one_page_do_not_share_a_temporary_file(client, tmp_path):
+    """The cache is shared by runs on one version; a fixed .part name would let
+    one run rename the other's half-written page into place."""
+    from training.stage_data import _download
+
+    _seed(client)
+    key = "processed/default/lossrun/lossrun_0001/page_1.png"
+    seen: list[str] = []
+    original = client.download_file
+
+    def record(k, local):
+        seen.append(str(local))
+        original(k, local)
+
+    client.download_file = record
+    target = tmp_path / "cache" / key
+    _download(client, key, target)
+    _download(client, key, target)            # a second run, same page
+    assert len(set(seen)) == 2 and target.read_bytes() == PNG
+
+
+def test_the_build_counts_every_document_it_set_aside_by_reason():
+    docs = _documents()
+    docs[0].ocr_pages = ["<image> in the text"]
+    docs[1].ocr_pages = ["claim row " * 60_000]
+    built = _build(docs)
+    assert built.set_aside["trainer_tag"] == 1
+    assert built.set_aside["budget"] == 1
+    assert built.cap_report.rejection_rate == pytest.approx(1 / 19)

@@ -230,19 +230,17 @@ def build_training_config(
         "gradient_checkpointing": batch["gradient_checkpointing"],
         "bf16": batch["bf16"],
         "max_length": max_length,
-        # Explicit, never left to ms-swift's default. Every row was checked
-        # against its task budget at corpus build (cap_check), so a row over
-        # max_length here means that estimate was wrong — and the answer is to
-        # drop it, not to cut it: "left" would remove the system prompt, "right"
-        # the end of the target, and a clipped target trains the model to stop
-        # early. What was dropped shows in the ms-swift log.
+        # Never "left" or "right": "left" removes the system prompt, "right" the
+        # end of the target, and a clipped target trains the model to stop early.
+        # "delete" makes an over-length row fail to encode instead.
         "truncation_strategy": "delete",
-        # ms-swift tokenizes multimodal rows lazily, and a row that fails to
-        # encode is by default REPLACED with a randomly chosen other row: the
-        # document is lost, another is trained twice, and nothing records it.
-        # Strict turns that into a hard error. With every row checked against a
-        # pessimistic budget at corpus build it should never fire; if it does,
-        # the estimate is wrong and a run that says so beats one that hides it.
+        # ...and strict makes that failure a HARD ERROR. ms-swift tokenizes
+        # multimodal rows lazily, and by default a row that fails to encode is
+        # replaced with a random other row — one document lost, another trained
+        # twice, nothing recorded. A stopped run beats a silently wrong one.
+        # Neither should ever fire: every row is measured against max_length on
+        # the pod before launch (training.length_check), so an over-length row
+        # refuses the run before training starts, not hours into it.
         "strict": True,
         # The three settings that make the largest task cap affordable (§9.3).
         # Without use_logits_to_keep the LM head produces a 151k-vocabulary
@@ -316,7 +314,9 @@ def build_training_config(
         max_seq_len=max_length,
         seed=cfg["seed"],
     )
-    return SwiftConfig(args, env=_pixel_budget(scope)), recorded
+    env = _pixel_budget(scope)
+    recorded.pixel_budget = {key: int(value) for key, value in env.items()}
+    return SwiftConfig(args, env=env), recorded
 
 
 def _pixel_budget(scope: Scope) -> dict[str, str]:
@@ -330,12 +330,33 @@ def _pixel_budget(scope: Scope) -> dict[str, str]:
     """
     from common.config import vision_for_task
     from common.tasks import FULL_RESOLUTION_TASKS
+    from data_pipeline.dataset_builder.cap_check import PIXELS_PER_VISUAL_TOKEN
 
     tasks = [task for task in scope.tasks if task in FULL_RESOLUTION_TASKS] or [Task.EXTRACT]
-    budgets = [vision_for_task(str(task)) for task in tasks]
+    budgets = {
+        (int(b["min_pixels"]), int(b["max_pixels"]))
+        for b in (vision_for_task(str(task)) for task in tasks)
+    }
+    # One budget for the whole run, because the trainer takes one. Every row
+    # the corpus builds today is full resolution, so they agree; the day a
+    # corpus carries rows of a task with a different budget (the thumbnail
+    # tasks), a run-wide max would train them at the wrong resolution, and
+    # training.stage_data refuses such rows rather than let that happen.
+    if len(budgets) != 1:
+        raise TrainingError(
+            f"the full-resolution tasks in scope {scope.name!r} disagree on their pixel "
+            f"budget {sorted(budgets)}; the trainer takes one budget per run."
+        )
+    (min_pixels, max_pixels), = budgets
+    per_token = PIXELS_PER_VISUAL_TOKEN
+    # Both forms. Qwen2/2.5-VL read MAX_PIXELS/MIN_PIXELS; ms-swift's Qwen3-VL
+    # template reads a token budget. Whichever this ms-swift reads, it reads the
+    # SAME budget — and the spike (swift_image_budget) measures which one took.
     return {
-        "MAX_PIXELS": str(max(int(b["max_pixels"]) for b in budgets)),
-        "MIN_PIXELS": str(min(int(b["min_pixels"]) for b in budgets)),
+        "MAX_PIXELS": str(max_pixels),
+        "MIN_PIXELS": str(min_pixels),
+        "IMAGE_MAX_TOKEN_NUM": str(max_pixels // per_token),
+        "IMAGE_MIN_TOKEN_NUM": str(min_pixels // per_token),
     }
 
 
@@ -444,8 +465,11 @@ def train(
     # refused before that, not after thousands of images reach a paid pod.
     if continue_from:
         assert_checkpoint_path(continue_from)
-    val_rows = view.val_rows if not scope.is_unified else _count_rows(client, view.val_path)
-    if not dry_run and not val_rows:
+    # Counted only for a real run, where it decides anything; a dry run launches
+    # nothing and would read the unified validation file for no reason.
+    if not dry_run and not (
+        view.val_rows if not scope.is_unified else _count_rows(client, view.val_path)
+    ):
         # The config asks for evaluation, early stopping and
         # load_best_model_at_end, and checkpoint selection generates on
         # validation: with no rows the run fails after the GPU is paid for, or
@@ -481,9 +505,11 @@ def train(
             view.epoch_files[:epochs], view.val_path, client,
             paths.staging_train_data_dir(scope.name, out_version),
             images_root=paths.staging_train_images_dir(corpus_version, tenant_id),
+            max_pixels=int(swift.env["MAX_PIXELS"]),
         )
         swift.args["dataset"] = staged.epoch_files
         swift.args["val_dataset"] = [staged.val_path]
+        _assert_rows_fit(swift, [*staged.epoch_files, staged.val_path])
 
     # Only the epochs this run uses. Four files are always materialized because
     # the §11a sweep tests up to four passes (§6.1), and a sweep that regenerates
@@ -506,6 +532,42 @@ def train(
 
     manifest = launch_and_record(swift, manifest, client)
     return swift, manifest
+
+
+def _token_counter():
+    """The model's tokenizer as a counter. A seam, so tests need no model."""
+    from training.length_check import tokenizer_counter
+
+    model = base_model_config()["model"]
+    return tokenizer_counter(model["model_id"], model.get("revision"))
+
+
+def _assert_rows_fit(swift: SwiftConfig, files: list[str]) -> None:
+    """Refuse the run before launch if any staged row is over ``max_length``.
+
+    Under strict encoding such a row stops the run when the trainer reaches it,
+    possibly hours in. Measured here instead, with the real tokenizer and the
+    real resize rule, it stops the run before any GPU time is spent on it.
+    """
+    from training.length_check import measure
+
+    report = measure(
+        files,
+        max_length=int(swift.args["max_length"]),
+        count_tokens=_token_counter(),
+        min_pixels=int(swift.env["MIN_PIXELS"]),
+        max_pixels=int(swift.env["MAX_PIXELS"]),
+    )
+    log.info("length check: %d row(s), longest %d tokens", report.rows, report.longest)
+    if not report.ok:
+        worst = sorted(report.over, key=lambda o: -int(o["tokens"]))[:5]
+        raise TrainingError(
+            f"{len(report.over)} staged row(s) exceed max_length "
+            f"{swift.args['max_length']} by the real tokenizer and resize rule, though the "
+            f"corpus estimate passed them: {worst}. The corpus budget estimate is wrong for "
+            "these rows — fix it (cap_check) and rebuild, rather than letting the trainer "
+            "reach them."
+        )
 
 
 def _count_rows(client: BlobClient, key: str) -> int:

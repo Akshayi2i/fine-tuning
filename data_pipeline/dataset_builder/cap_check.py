@@ -112,6 +112,16 @@ class CapReport:
 
     @property
     def rejection_rate(self) -> float:
+        """The share of DOCUMENTS set aside, once documents are being counted.
+
+        The corpus build counts documents — the unit that is actually kept or
+        lost — and records one rejected entry per document. Dividing those by
+        accepted ROWS would mix the two units. Row-level use (``check_row`` on
+        its own) keeps the row rate.
+        """
+        documents = self.documents_accepted + self.documents_rejected
+        if documents:
+            return self.documents_rejected / documents
         total = self.accepted + len(self.rejected)
         return len(self.rejected) / total if total else 0.0
 
@@ -130,8 +140,8 @@ class CapReport:
 
     def as_dict(self) -> dict[str, Any]:
         return {
-            "accepted": self.accepted,
-            "rejected": len(self.rejected),
+            "rows_accepted": self.accepted,
+            "rejections_recorded": len(self.rejected),
             "documents_accepted": self.documents_accepted,
             "documents_rejected": self.documents_rejected,
             "rejection_rate": round(self.rejection_rate, 4),
@@ -145,11 +155,13 @@ class CapReport:
         by_task: dict[str, int] = {}
         for row in self.rejected:
             by_task[row["task"]] = by_task.get(row["task"], 0) + 1
+        documents = self.documents_rejected or len(self.rejected)
         return (
-            f"{self.documents_rejected} document(s) set aside ({len(self.rejected)} row(s) over "
-            f"their task cap {by_task}). These documents contribute NOTHING to training — "
-            "rejected rows are dropped, not shortened, and so is the rest of their document. If the rate is material, the caps in configs/shared/sequence.yaml or "
-            "the page routing are wrong, not the documents."
+            f"{documents} document(s) set aside for exceeding a task budget "
+            f"(first failing task: {by_task}). They contribute NOTHING to training — an "
+            "over-budget row is dropped, not shortened, and so is the rest of its document. "
+            "If the rate is material, the caps in configs/shared/sequence.yaml or the page "
+            "routing are wrong, not the documents."
         )
 
 

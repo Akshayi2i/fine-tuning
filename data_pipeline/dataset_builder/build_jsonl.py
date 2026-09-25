@@ -102,6 +102,10 @@ class BuildResult:
     #: read over several windows. The same values are unreachable at serving, so
     #: this is where a page rule that misses real content becomes visible.
     window_notes: dict[str, list[str]] = field(default_factory=dict)
+    #: Documents set aside, by reason: ``budget``, ``trainer_tag``, ``expansion``.
+    #: Every document that does not reach the corpus is counted here, so a stage
+    #: summary can say how many were lost and why rather than a log line alone.
+    set_aside: Counter = field(default_factory=Counter)
     #: Every row's estimated size against its task budget, and every document
     #: set aside because one of its rows did not fit (``cap_check``).
     cap_report: CapReport = field(default_factory=CapReport)
@@ -302,6 +306,7 @@ def build_corpus(
             rows, details = expand_document(document, split, seed=seed, modes=epoch_modes)
         except Exception as exc:  # noqa: BLE001 - one bad document must not stop a corpus
             result.skipped.append((document.source_id, f"expansion failed: {exc}"))
+            result.set_aside["expansion"] += 1
             log.warning("skipping %s: %s", document.source_id, exc)
             continue
 
@@ -312,8 +317,10 @@ def build_corpus(
         # something else, which train_rows_by_epoch refuses.
         refusal = _refusal(document.source_id, rows, result.cap_report)
         if refusal:
-            result.skipped.append((document.source_id, refusal))
-            log.warning("setting aside %s: %s", document.source_id, refusal)
+            category, reason = refusal
+            result.skipped.append((document.source_id, reason))
+            result.set_aside[category] += 1
+            log.warning("setting aside %s: %s", document.source_id, reason)
             continue
 
         # Train rows are stamped with the epoch they belong to, so the corpus can
@@ -352,8 +359,13 @@ def build_corpus(
     return result
 
 
-def _refusal(source_id: str, rows: list[dict[str, Any]], report: CapReport) -> str | None:
-    """Why this document cannot enter the corpus, or ``None``. Records the verdict.
+def _refusal(
+    source_id: str, rows: list[dict[str, Any]], report: CapReport
+) -> tuple[str, str] | None:
+    """``(category, why)`` this document cannot enter the corpus, or ``None``.
+
+    Records the budget verdict on ``report``. Each row's estimate is computed
+    once and reused for the verdict and the record.
 
     Two reasons, both judged over EVERY row before anything is recorded, because
     the document is the unit that is kept or lost:
@@ -369,20 +381,20 @@ def _refusal(source_id: str, rows: list[dict[str, Any]], report: CapReport) -> s
         for text in _texts(row):
             tag = next((t for t in TRAINER_SPECIAL_TAGS if t in text), None)
             if tag:
-                return (
+                return "trainer_tag", (
                     f"its text contains {tag!r}, which the trainer parses as a special tag — "
                     "the prompt it would train on is not the one serving sends"
                 )
 
-    verdicts = [(row, evaluate(_estimate(row))) for row in rows]
-    failed = [(row, verdict) for row, verdict in verdicts if not verdict[0]]
+    estimates = [_estimate(row) for row in rows]
+    verdicts = [evaluate(estimate) for estimate in estimates]
+    failed = [(e, v) for e, v in zip(estimates, verdicts, strict=True) if not v[0]]
     if failed:
-        row, (_fits, cap, reason) = failed[0]
-        report.reject(source_id, row.get("task") or "extract", _estimate(row), cap, reason=reason)
+        estimate, (_fits, cap, reason) = failed[0]
+        report.reject(source_id, estimate.task, estimate, cap, reason=reason)
         report.documents_rejected += 1
-        return f"{len(failed)} of {len(rows)} row(s) exceed their task budget: {reason}"
-    for row, _verdict in verdicts:
-        estimate = _estimate(row)
+        return "budget", f"{len(failed)} of {len(rows)} row(s) exceed their task budget: {reason}"
+    for estimate in estimates:
         report.record(estimate.task, estimate)
     report.documents_accepted += 1
     return None

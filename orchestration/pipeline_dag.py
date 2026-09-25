@@ -657,6 +657,11 @@ def stage_dataset_build(ctx: StageContext) -> StageResult:
             # Rows over their task budget are rejected, never truncated, and the
             # document is set aside; this is how many, and why.
             "cap_check": built.cap_report.as_dict(),
+            # Every document that did not reach the corpus, by reason, and the
+            # first few with their reasons — a count in a log line is not a report.
+            "documents_kept": len(kept),
+            "documents_set_aside": dict(built.set_aside),
+            "set_aside_examples": built.skipped[:20],
         },
     )
 

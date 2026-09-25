@@ -59,7 +59,8 @@ def test_every_failure_names_what_it_decides():
 #: silently — the spike costs a pod-hour, so an unowned check is wasted budget.
 GPU_FREE_CHECKS = (
     "check_flash_attn", "check_ms_swift", "check_model_loads",
-    "check_interleaved_content", "check_swift_row_format", "check_vllm_multi_lora",
+    "check_interleaved_content", "check_swift_row_format", "check_swift_image_budget",
+    "check_vllm_multi_lora",
     "check_llama_cpp_mmproj",
     "check_merger_module_names", "check_visual_token_geometry", "check_peak_vram_per_cap",
     "check_sequence_parallel", "check_structured_outputs", "check_raw_logprobs",
