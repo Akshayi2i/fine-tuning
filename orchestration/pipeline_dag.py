@@ -615,6 +615,7 @@ def stage_dataset_build(ctx: StageContext) -> StageResult:
             write_jsonl(built.rows_by_split.get(split, [])),
         )
 
+    kept = {row["source_id"] for row in built.all_rows}
     first = documents[0]
     ocr_environment = ctx.client.read_json(
         paths.ocr_meta(first.doc_type, first.source_id, ctx.tenant_id)
@@ -623,8 +624,13 @@ def stage_dataset_build(ctx: StageContext) -> StageResult:
         corpus_version=ctx.corpus,
         tenant_id=paths._tenant(ctx.tenant_id),
         rows_by_split=built.rows_by_split,
-        golden_labels_by_source={d.source_id: d.golden_label for d in documents},
-        provenance_by_source={d.source_id: d.field_provenance for d in documents},
+        # Only the documents the corpus kept. One set aside — over budget, or text
+        # the trainer would parse as a tag — contributes nothing to training, and
+        # counting it would show a line as covered when its documents were dropped.
+        golden_labels_by_source={d.source_id: d.golden_label for d in documents if d.source_id in kept},
+        provenance_by_source={
+            d.source_id: d.field_provenance for d in documents if d.source_id in kept
+        },
         split_assignment=assignment.as_dict(),
         ocr_environment=ocr_environment,
         doc_types=sorted(by_type),

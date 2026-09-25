@@ -104,6 +104,11 @@ class CapReport:
     accepted: int = 0
     rejected: list[dict[str, Any]] = field(default_factory=list)
     max_seen: dict[str, int] = field(default_factory=dict)
+    #: The unit that is actually lost. A document with one row over budget is
+    #: set aside whole, so counting rows alone reads one bad window in four as
+    #: 25% rejected when 100% of the document is gone.
+    documents_accepted: int = 0
+    documents_rejected: int = 0
 
     @property
     def rejection_rate(self) -> float:
@@ -114,16 +119,21 @@ class CapReport:
         self.accepted += 1
         self.max_seen[task] = max(self.max_seen.get(task, 0), estimate.total_tokens)
 
-    def reject(self, source_id: str, task: str, estimate: TokenEstimate, cap: int) -> None:
+    def reject(
+        self, source_id: str, task: str, estimate: TokenEstimate, cap: int,
+        reason: str | None = None,
+    ) -> None:
         self.rejected.append({
             "source_id": source_id, "task": task, "cap": cap,
-            "reason": estimate.explain(cap), **estimate.as_dict(),
+            "reason": reason or estimate.explain(cap), **estimate.as_dict(),
         })
 
     def as_dict(self) -> dict[str, Any]:
         return {
             "accepted": self.accepted,
             "rejected": len(self.rejected),
+            "documents_accepted": self.documents_accepted,
+            "documents_rejected": self.documents_rejected,
             "rejection_rate": round(self.rejection_rate, 4),
             "max_tokens_seen_by_task": dict(sorted(self.max_seen.items())),
             "rejections": self.rejected[:20],
@@ -136,9 +146,9 @@ class CapReport:
         for row in self.rejected:
             by_task[row["task"]] = by_task.get(row["task"], 0) + 1
         return (
-            f"{len(self.rejected)} row(s) rejected for exceeding their task cap {by_task}. "
-            "These documents contribute NOTHING to training — rejected rows are dropped, not "
-            "shortened. If the rate is material, the caps in configs/shared/sequence.yaml or "
+            f"{self.documents_rejected} document(s) set aside ({len(self.rejected)} row(s) over "
+            f"their task cap {by_task}). These documents contribute NOTHING to training — "
+            "rejected rows are dropped, not shortened, and so is the rest of their document. If the rate is material, the caps in configs/shared/sequence.yaml or "
             "the page routing are wrong, not the documents."
         )
 
@@ -188,6 +198,28 @@ def estimate_row(
     )
 
 
+def evaluate(estimate: TokenEstimate) -> tuple[bool, int, str | None]:
+    """``(fits, cap, why not)`` for one row, without recording anything.
+
+    The reason names the budget that actually failed. A row can fit the total
+    and still overrun its reserved OUTPUT — the case that clips a target — and
+    telling an operator to "raise the cap" for that would be the wrong advice.
+    """
+    budget = sequence_for_task(estimate.task, estimate.doc_type)
+    cap = int(budget["max_seq_len"])
+    output_cap = int(budget["max_output_tokens"])
+    if estimate.output_tokens > output_cap:
+        return False, cap, (
+            f"{estimate.task} target is ~{estimate.output_tokens:,} tokens against a reserved "
+            f"{output_cap:,}. The assistant span would be clipped, which trains the model to "
+            "stop early — on a Loss Run, to omit claim rows. Shrink the window (§7b) rather "
+            "than raising the reservation."
+        )
+    if estimate.total_tokens > cap:
+        return False, cap, estimate.explain(cap)
+    return True, cap, None
+
+
 def check_row(
     estimate: TokenEstimate,
     *,
@@ -205,28 +237,14 @@ def check_row(
       assistant span — and a clipped span is a wrong training target, not a
       short one.
     """
-    budget = sequence_for_task(estimate.task, estimate.doc_type)
-    cap = int(budget["max_seq_len"])
-    output_cap = int(budget["max_output_tokens"])
-
-    fits = estimate.total_tokens <= cap and estimate.output_tokens <= output_cap
+    fits, cap, detail = evaluate(estimate)
     if fits:
         if report is not None:
             report.record(estimate.task, estimate)
         return True
 
-    if estimate.output_tokens > output_cap:
-        detail = (
-            f"{estimate.task} target is ~{estimate.output_tokens:,} tokens against a reserved "
-            f"{output_cap:,}. The assistant span would be clipped, which trains the model to "
-            "stop early — on a Loss Run, to omit claim rows. Shrink the window (§7b) rather "
-            "than raising the reservation."
-        )
-    else:
-        detail = estimate.explain(cap)
-
     if report is not None:
-        report.reject(source_id, estimate.task, estimate, cap)
+        report.reject(source_id, estimate.task, estimate, cap, reason=detail)
     log.warning("%s: %s", source_id, detail)
     if raise_on_exceed:
         raise CapExceeded(f"{source_id}: {detail}")

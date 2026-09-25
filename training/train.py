@@ -31,7 +31,7 @@ from __future__ import annotations
 import argparse
 import logging
 from collections.abc import Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from artifact_registry import paths
@@ -73,6 +73,9 @@ class SwiftConfig:
     """
 
     args: dict[str, Any]
+    #: Environment for the launch. ms-swift's Qwen-VL processor reads its resize
+    #: budget from here, not from a CLI flag.
+    env: dict[str, str] = field(default_factory=dict)
 
     #: Rendered as ``--flag true`` / ``--flag false`` rather than as a bare
     #: presence flag. ms-swift parses these with HfArgumentParser, which accepts
@@ -234,6 +237,13 @@ def build_training_config(
         # the end of the target, and a clipped target trains the model to stop
         # early. What was dropped shows in the ms-swift log.
         "truncation_strategy": "delete",
+        # ms-swift tokenizes multimodal rows lazily, and a row that fails to
+        # encode is by default REPLACED with a randomly chosen other row: the
+        # document is lost, another is trained twice, and nothing records it.
+        # Strict turns that into a hard error. With every row checked against a
+        # pessimistic budget at corpus build it should never fire; if it does,
+        # the estimate is wrong and a run that says so beats one that hides it.
+        "strict": True,
         # The three settings that make the largest task cap affordable (§9.3).
         # Without use_logits_to_keep the LM head produces a 151k-vocabulary
         # distribution at every position of a 32k sequence, which dominates
@@ -306,7 +316,27 @@ def build_training_config(
         max_seq_len=max_length,
         seed=cfg["seed"],
     )
-    return SwiftConfig(args), recorded
+    return SwiftConfig(args, env=_pixel_budget(scope)), recorded
+
+
+def _pixel_budget(scope: Scope) -> dict[str, str]:
+    """The image resize budget ms-swift's Qwen-VL processor reads from the env.
+
+    The same per-task ``max_pixels`` the corpus was sized against (cap_check) and
+    serving uses. Left to the processor's default, training would resize pages to
+    a budget nobody chose — today the rendered pages happen to sit inside it, so
+    nothing differs, but the day a render or a vision budget changes, training
+    and serving would see different pixels with nothing to say so.
+    """
+    from common.config import vision_for_task
+    from common.tasks import FULL_RESOLUTION_TASKS
+
+    tasks = [task for task in scope.tasks if task in FULL_RESOLUTION_TASKS] or [Task.EXTRACT]
+    budgets = [vision_for_task(str(task)) for task in tasks]
+    return {
+        "MAX_PIXELS": str(max(int(b["max_pixels"]) for b in budgets)),
+        "MIN_PIXELS": str(min(int(b["min_pixels"]) for b in budgets)),
+    }
 
 
 def build_manifest(
@@ -409,35 +439,26 @@ def train(
             "test_examples": view.test_rows,
         })
 
-    if not dry_run:
-        # ms-swift reads LOCAL files in ITS row format. The view is Blob keys in
-        # the corpus's own shape — handed over as-is, the trainer finds nothing,
-        # and a row that did load would fail on its mixed-type content column.
-        # A dry run launches nothing, so it records the Blob keys instead.
-        from training.stage_data import stage_training_data
-
-        staged = stage_training_data(
-            view.epoch_files, view.val_path if client.exists(view.val_path) else None,
-            client, paths.staging_train_data_dir(scope.name, out_version),
-        )
-        corpus_paths = staged.epoch_files
-        val_paths = [staged.val_path] if staged.val_path else []
-        if not staged.val_rows:
-            # Refused here, before the pod does any work. The config asks for
-            # evaluation, early stopping and load_best_model_at_end, and
-            # checkpoint selection generates on validation: with no rows the run
-            # fails after the GPU is paid for, or trains with nothing to choose
-            # its checkpoint by.
-            raise TrainingError(
-                f"scope {scope.name!r} has no validation rows in corpus {corpus_version}. "
-                "Checkpoint selection and early stopping both read validation, so the run "
-                "cannot choose what to ship. Rebuild the corpus with enough documents of "
-                f"{list(scope.doc_types)} to fill a validation split."
-            )
-
+    # Every check that costs nothing runs before staging, which downloads every
+    # page image the run reads. A run that is going to be refused should be
+    # refused before that, not after thousands of images reach a paid pod.
     if continue_from:
         assert_checkpoint_path(continue_from)
+    val_rows = view.val_rows if not scope.is_unified else _count_rows(client, view.val_path)
+    if not dry_run and not val_rows:
+        # The config asks for evaluation, early stopping and
+        # load_best_model_at_end, and checkpoint selection generates on
+        # validation: with no rows the run fails after the GPU is paid for, or
+        # trains with nothing to choose its checkpoint by.
+        raise TrainingError(
+            f"scope {scope.name!r} has no validation rows in corpus {corpus_version}. "
+            "Checkpoint selection and early stopping both read validation, so the run "
+            "cannot choose what to ship. Rebuild the corpus with enough documents of "
+            f"{list(scope.doc_types)} to fill a validation split."
+        )
 
+    # Built against the Blob keys first: this is where the epoch count and every
+    # other configuration error surfaces, still before any download.
     swift, recorded = build_training_config(
         corpus_paths=corpus_paths,
         val_paths=val_paths,
@@ -447,6 +468,23 @@ def train(
         resume_from=continue_from,
         scope=scope,
     )
+
+    if not dry_run:
+        # ms-swift reads LOCAL files in ITS row format. The view is Blob keys in
+        # the corpus's own shape — handed over as-is, the trainer finds nothing,
+        # and a row that did load would fail on its mixed-type content column.
+        # A dry run launches nothing, so it records the Blob keys instead.
+        from training.stage_data import stage_training_data
+
+        epochs = len(swift.args["dataset"])
+        staged = stage_training_data(
+            view.epoch_files[:epochs], view.val_path, client,
+            paths.staging_train_data_dir(scope.name, out_version),
+            images_root=paths.staging_train_images_dir(corpus_version, tenant_id),
+        )
+        swift.args["dataset"] = staged.epoch_files
+        swift.args["val_dataset"] = [staged.val_path]
+
     # Only the epochs this run uses. Four files are always materialized because
     # the §11a sweep tests up to four passes (§6.1), and a sweep that regenerates
     # its own data is not comparing what it thinks it is.
@@ -468,6 +506,13 @@ def train(
 
     manifest = launch_and_record(swift, manifest, client)
     return swift, manifest
+
+
+def _count_rows(client: BlobClient, key: str) -> int:
+    """Rows in a Blob JSONL file, without staging it. Zero when it is absent."""
+    if not client.exists(key):
+        return 0
+    return sum(1 for line in client.read_text(key).splitlines() if line.strip())
 
 
 def assert_checkpoint_path(continue_from: str) -> None:
@@ -546,9 +591,11 @@ def launch(config: SwiftConfig) -> None:
             "the template, collator and masking against the §10.2 parity tests. A contingency, "
             "not a layer swap."
         )
+    import os
+
     argv = config.to_cli()
-    log.info("launching: %s", " ".join(argv))
-    subprocess.run(argv, check=True)
+    log.info("launching: %s (env %s)", " ".join(argv), config.env)
+    subprocess.run(argv, check=True, env={**os.environ, **config.env})
 
 
 def main(argv: Iterable[str] | None = None) -> int:  # pragma: no cover - thin CLI

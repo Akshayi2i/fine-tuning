@@ -23,9 +23,9 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from common.canonical import CanonicalLabelError, has_envelopes, training_target
-from common.constants import MODALITY_MODES
+from common.constants import MODALITY_MODES, TRAINER_SPECIAL_TAGS
 from common.schemas import is_canonical
-from data_pipeline.dataset_builder.cap_check import CapReport, check_row, estimate_row
+from data_pipeline.dataset_builder.cap_check import CapReport, estimate_row, evaluate
 from data_pipeline.dataset_builder.noisy_ocr_augment import corrupt_ocr_pages
 from data_pipeline.dataset_builder.policy_windows import (
     TargetReport,
@@ -310,13 +310,10 @@ def build_corpus(
         # whole document is set aside, not the one row: a document missing from
         # some epochs and not others is a run whose epoch count describes
         # something else, which train_rows_by_epoch refuses.
-        oversized = [row for row in rows if not _fits(row, result.cap_report)]
-        if oversized:
-            reason = result.cap_report.rejected[-1]["reason"]
-            result.skipped.append((
-                document.source_id,
-                f"{len(oversized)} row(s) exceed their task budget: {reason}",
-            ))
+        refusal = _refusal(document.source_id, rows, result.cap_report)
+        if refusal:
+            result.skipped.append((document.source_id, refusal))
+            log.warning("setting aside %s: %s", document.source_id, refusal)
             continue
 
         # Train rows are stamped with the epoch they belong to, so the corpus can
@@ -355,12 +352,59 @@ def build_corpus(
     return result
 
 
-def _fits(row: dict[str, Any], report: CapReport) -> bool:
-    """Whether one built row fits its task's sequence and output budgets."""
+def _refusal(source_id: str, rows: list[dict[str, Any]], report: CapReport) -> str | None:
+    """Why this document cannot enter the corpus, or ``None``. Records the verdict.
+
+    Two reasons, both judged over EVERY row before anything is recorded, because
+    the document is the unit that is kept or lost:
+
+    * **Text the trainer would parse as a tag.** ms-swift reads ``<image>``,
+      ``<video>`` and the rest as special tags wherever they appear, so OCR or a
+      target containing one would be rewritten and train on a prompt serving
+      never sends. Checked here rather than at staging, so one bad page is set
+      aside and reported at build instead of aborting a paid training run.
+    * **A row over its task budget** — reject, never truncate.
+    """
+    for row in rows:
+        for text in _texts(row):
+            tag = next((t for t in TRAINER_SPECIAL_TAGS if t in text), None)
+            if tag:
+                return (
+                    f"its text contains {tag!r}, which the trainer parses as a special tag — "
+                    "the prompt it would train on is not the one serving sends"
+                )
+
+    verdicts = [(row, evaluate(_estimate(row))) for row in rows]
+    failed = [(row, verdict) for row, verdict in verdicts if not verdict[0]]
+    if failed:
+        row, (_fits, cap, reason) = failed[0]
+        report.reject(source_id, row.get("task") or "extract", _estimate(row), cap, reason=reason)
+        report.documents_rejected += 1
+        return f"{len(failed)} of {len(rows)} row(s) exceed their task budget: {reason}"
+    for row, _verdict in verdicts:
+        estimate = _estimate(row)
+        report.record(estimate.task, estimate)
+    report.documents_accepted += 1
+    return None
+
+
+def _texts(row: dict[str, Any]) -> list[str]:
+    out: list[str] = []
+    for message in row["messages"]:
+        content = message["content"]
+        if isinstance(content, str):
+            out.append(content)
+        else:
+            out += [b.get("text", "") for b in content if b.get("type") == "text"]
+    return out
+
+
+def _estimate(row: dict[str, Any]):
+    """One built row's estimated cost against its task budget."""
     messages = row["messages"]
     user = messages[1]["content"] if len(messages) > 1 else []
     blocks = user if isinstance(user, list) else []
-    estimate = estimate_row(
+    return estimate_row(
         # A flat row is the whole-document `extract` task; a window names its own.
         task=row.get("task") or "extract",
         system_prompt=messages[0]["content"],
@@ -369,7 +413,6 @@ def _fits(row: dict[str, Any], report: CapReport) -> bool:
         target_json=messages[-1]["content"] if messages[-1]["role"] == "assistant" else "",
         doc_type=row.get("doc_type"),
     )
-    return check_row(estimate, source_id=row["source_id"], report=report)
 
 
 def train_source_ids(

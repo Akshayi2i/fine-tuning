@@ -115,7 +115,15 @@ def test_text_containing_the_placeholder_is_refused():
     """It would be read as an image and pair every later page with the wrong text."""
     bad = _row()
     bad["messages"][1]["content"][1]["text"] = "see <image> below"
-    with pytest.raises(StagingError, match="placeholder"):
+    with pytest.raises(StagingError, match="special tag"):
+        to_swift_row(bad, lambda key: key)
+
+
+@pytest.mark.parametrize("tag", ["<video>", "<audio>", "<bbox>", "<ref-object>"])
+def test_every_trainer_tag_is_refused_not_just_image(tag):
+    bad = _row()
+    bad["messages"][2]["content"] = f'{{"note": "{tag}"}}'
+    with pytest.raises(StagingError, match="special tag"):
         to_swift_row(bad, lambda key: key)
 
 
@@ -271,3 +279,106 @@ def test_a_scoped_run_records_its_own_counts_not_the_corpus(client, tmp_path, mo
     assert stats.train_examples == lossrun_rows("train")
     assert stats.val_examples == lossrun_rows("val")
     assert stats.test_examples == lossrun_rows("test")
+
+
+# --------------------------------------------------------------------------
+# Re-review: tags at corpus build, document-level budgets, safe staging
+# --------------------------------------------------------------------------
+
+def _build(docs):
+    groups: dict[str, list[GroupRecord]] = {}
+    for d in docs:
+        groups.setdefault(d.doc_type, []).append(
+            GroupRecord(group_id=d.source_id, doc_type=d.doc_type, source_ids=[d.source_id])
+        )
+    return build_corpus(docs, assign_group_splits(groups, seed=42))
+
+
+def test_a_document_whose_text_holds_a_trainer_tag_is_set_aside_at_build():
+    """At build, not on the pod: one bad page must not abort every training run
+    on the corpus version it was pinned into."""
+    docs = _documents()
+    docs[0].ocr_pages = ["Claims <bbox> listing"]
+    built = _build(docs)
+    assert docs[0].source_id not in {r["source_id"] for r in built.all_rows}
+    assert any(sid == docs[0].source_id and "<bbox>" in why for sid, why in built.skipped)
+
+
+def test_the_budget_report_counts_documents_and_names_the_real_limit(monkeypatch):
+    """One row of four over budget is the whole document lost, and a target that
+    overruns its OUTPUT reservation is not fixed by raising the total cap."""
+    from data_pipeline.dataset_builder import cap_check
+
+    real = cap_check.sequence_for_task
+    monkeypatch.setattr(
+        cap_check, "sequence_for_task",
+        lambda task, doc_type=None: {**real(task, doc_type), "max_output_tokens": 5},
+    )
+    built = _build(_documents())
+    report = built.cap_report
+    assert report.documents_rejected == 20 and report.documents_accepted == 0
+    assert report.accepted == 0, "rows of a set-aside document are not counted as accepted"
+    assert all("reserved" in r["reason"] for r in report.rejected)
+    assert not any("raise the cap" in r["reason"] for r in report.rejected)
+
+
+def test_an_interrupted_download_leaves_no_image_a_later_run_would_trust(client, tmp_path):
+    _seed(client)
+
+    flaky = BlobClient(backend=client._backend, container="main", raw_container="raw")
+    calls = {"n": 0}
+    original = flaky.download_file
+
+    def die_once(key, local):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            Path(local).write_bytes(b"\x89PNG half")      # a partial write, then the pod dies
+            raise ConnectionError("preempted")
+        original(key, local)
+
+    flaky.download_file = die_once
+    with pytest.raises(StagingError):
+        stage_training_data(EPOCHS, None, flaky, tmp_path / "run", images_root=tmp_path / "cache",
+                            workers=1)
+    # Images that finished are whole and may be reused; the one that died left
+    # nothing under its real name, and no partial file behind.
+    cached = list((tmp_path / "cache").rglob("*.png"))
+    assert all(p.read_bytes() == PNG for p in cached), "a truncated image survived"
+    assert not list((tmp_path / "cache").rglob("*.part"))
+
+    staged = stage_training_data(EPOCHS, None, client, tmp_path / "run",
+                                 images_root=tmp_path / "cache")
+    for local in staged.epoch_files:
+        for line in Path(local).read_text(encoding="utf-8").splitlines():
+            assert all(Path(i).read_bytes() == PNG for i in json.loads(line)["images"])
+
+
+def test_runs_on_one_corpus_version_share_its_images(client, tmp_path):
+    _seed(client)
+    first = stage_training_data(EPOCHS, None, client, tmp_path / "unified",
+                                images_root=tmp_path / "cache")
+    second = stage_training_data(EPOCHS, None, client, tmp_path / "lossrun",
+                                 images_root=tmp_path / "cache")
+    assert first.fetched == first.images > 0
+    assert second.fetched == 0, "a second run re-downloaded images the version already had"
+
+
+def test_a_run_that_will_be_refused_downloads_nothing(client, tmp_path, monkeypatch):
+    from training.train import TrainingError
+
+    _seed(client)
+    client.write_text(paths.corpus_eval_split("v1", "val"), "")
+    with pytest.raises(TrainingError):
+        _train(client, monkeypatch, tmp_path, dry_run=False)
+    assert not list(tmp_path.rglob("*.png")), "images were staged for a run that was refused"
+
+
+def test_encoding_is_strict_and_the_pixel_budget_is_explicit():
+    from common.config import vision_for_task
+    from training.train import build_training_config
+
+    swift, _ = build_training_config(
+        corpus_paths=["e1", "e2", "e3", "e4"], output_dir="/out", val_paths=["v"]
+    )
+    assert swift.args["strict"] is True
+    assert swift.env["MAX_PIXELS"] == str(vision_for_task("extract")["max_pixels"])

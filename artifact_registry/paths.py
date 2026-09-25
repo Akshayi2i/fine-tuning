@@ -640,6 +640,18 @@ def staging_train_data_dir(scope: str, version: str) -> str:
     return _under_staging("train-data", scope, version)
 
 
+def staging_train_images_dir(corpus_version: str, tenant_id: str | None = None) -> str:
+    """Page images for one corpus version, shared by every run that trains on it.
+
+    Keyed by corpus version, not by run: a unified run and three scoped runs at
+    one version read the same pages, and copying them four times fills the
+    volume with duplicates. Not shared ACROSS versions: a re-OCR writes new
+    pixels under the same key, and a cache spanning versions would keep serving
+    the old ones.
+    """
+    return _under_staging("train-images", _tenant(tenant_id), corpus_version)
+
+
 def staging_eval_report(
     version: str, doc_type: str | None = None, *, scope: str | None = None
 ) -> str:

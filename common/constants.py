@@ -219,3 +219,13 @@ LORA_TARGET_MODULES: Final[tuple[str, ...]] = (
     "q_proj", "k_proj", "v_proj", "o_proj",
     "gate_proj", "up_proj", "down_proj",
 )
+
+
+#: Strings ms-swift's template parses as special tags wherever they appear in
+#: message text: media placeholders and grounding markers. Text containing one
+#: is rewritten or fails to encode, so the rendered prompt would differ from the
+#: one serving sends. A document whose rows contain one is set aside at corpus
+#: build (``build_jsonl``) and refused again at staging (``training.stage_data``).
+TRAINER_SPECIAL_TAGS: Final[tuple[str, ...]] = (
+    "<image>", "<video>", "<audio>", "<bbox>", "<ref-object>",
+)

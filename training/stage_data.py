@@ -30,17 +30,24 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from collections.abc import Callable, Sequence
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 from artifact_registry.blob_client import BlobClient
+from common.constants import TRAINER_SPECIAL_TAGS
 
 log = logging.getLogger(__name__)
 
 #: ms-swift's image placeholder, one per entry in the row's ``images`` list.
 SWIFT_IMAGE_TAG = "<image>"
+
+#: Concurrent image downloads. Staging runs on the paid pod before launch, and
+#: 20,000 pages fetched one at a time is minutes of idle GPU.
+DOWNLOAD_WORKERS = 16
 
 
 class StagingError(RuntimeError):
@@ -56,6 +63,8 @@ class StagedData:
     rows: int = 0
     val_rows: int = 0
     images: int = 0
+    #: Images actually downloaded; the rest came from the version's shared cache.
+    fetched: int = 0
 
 
 def to_swift_row(row: dict[str, Any], local_image: Callable[[str], str]) -> dict[str, Any]:
@@ -95,13 +104,19 @@ def to_swift_row(row: dict[str, Any], local_image: Callable[[str], str]) -> dict
 
 
 def _refuse_placeholder(text: str, row: dict[str, Any]) -> None:
-    """OCR text that literally contains ``<image>`` would be read as a placeholder,
-    pairing the next page image with the wrong text and shifting every image
-    after it. Refused rather than escaped: there is no escape the template honours."""
-    if SWIFT_IMAGE_TAG in text:
+    """Text containing one of ms-swift's tags would be parsed as one: a literal
+    ``<image>`` pairs the next page with the wrong text, ``<bbox>`` or
+    ``<video>`` is rewritten or fails to encode. Refused rather than escaped:
+    there is no escape the template honours.
+
+    The corpus build sets such documents aside first (``build_jsonl``), so this
+    firing means a corpus built before that check. It is the backstop.
+    """
+    tag = next((t for t in TRAINER_SPECIAL_TAGS if t in text), None)
+    if tag:
         raise StagingError(
-            f"{row.get('source_id')}: the text contains a literal {SWIFT_IMAGE_TAG!r}, which "
-            "ms-swift would read as an image placeholder and pair with the wrong page."
+            f"{row.get('source_id')}: the text contains a literal {tag!r}, which ms-swift "
+            "parses as a special tag. Rebuild the corpus; the build now sets such documents aside."
         )
 
 
@@ -110,52 +125,90 @@ def stage_training_data(
     val_path: str | None,
     client: BlobClient,
     local_root: str | Path,
+    *,
+    images_root: str | Path | None = None,
+    workers: int = DOWNLOAD_WORKERS,
 ) -> StagedData:
     """Copy and convert a run's data onto local disk. Returns the local paths.
 
-    Idempotent: an image already on the volume is not downloaded again, so a
-    resumed run reuses what the first attempt staged.
+    Every row is read first, so the page images can be fetched concurrently and
+    each exactly once. ``images_root`` is the per-corpus-version cache every run
+    on that version shares (``paths.staging_train_images_dir``); without one the
+    images go under ``local_root``.
+
+    An image already in the cache is not fetched again. That is only safe
+    because a download is written to a temporary file and renamed into place: a
+    pod preempted mid-download leaves a ``.part`` file, never a truncated image
+    under the real name that a later run would trust.
     """
     root = Path(local_root)
-    images_root = root / "images"
+    cache = Path(images_root) if images_root is not None else root / "images"
     staged = StagedData()
-    local_of: dict[str, str] = {}
 
-    def local_image(key: str) -> str:
-        if key not in local_of:
-            target = images_root / key
-            if not target.exists():
-                if not client.exists(key):
-                    raise StagingError(
-                        f"page image {key} is referenced by the corpus but is not in Blob. "
-                        "Training on a row without its page would teach the model to answer "
-                        "from text it was told came with an image."
-                    )
-                client.download_file(key, target)
-            local_of[key] = str(target.resolve())
-        return local_of[key]
+    files: list[tuple[str, list[dict[str, Any]]]] = []
+    for index, key in enumerate(epoch_files, start=1):
+        files.append((f"train/epoch_{index}.jsonl", _read_rows(client, key)))
+    if val_path:
+        files.append(("val/val.jsonl", _read_rows(client, val_path)))
 
-    def stage(key: str, name: str) -> tuple[str, int]:
-        rows = [json.loads(line) for line in client.read_text(key).splitlines() if line.strip()]
+    keys = sorted({
+        block["image"]
+        for _name, rows in files
+        for row in rows
+        for message in row.get("messages") or []
+        if isinstance(message.get("content"), list)
+        for block in message["content"]
+        if block.get("type") == "image" and isinstance(block.get("image"), str)
+    })
+    local_of = {key: (cache / key).resolve() for key in keys}
+    missing = [key for key in keys if not local_of[key].exists()]
+    if missing:
+        with ThreadPoolExecutor(max_workers=max(1, workers)) as pool:
+            list(pool.map(lambda key: _download(client, key, local_of[key]), missing))
+
+    for name, rows in files:
         target = root / name
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(
             "".join(
-                json.dumps(to_swift_row(row, local_image), ensure_ascii=False) + "\n"
+                json.dumps(to_swift_row(row, lambda key: str(local_of[key])), ensure_ascii=False)
+                + "\n"
                 for row in rows
             ),
             encoding="utf-8",
         )
         staged.rows += len(rows)
-        return str(target.resolve()), len(rows)
-
-    for index, key in enumerate(epoch_files, start=1):
-        staged.epoch_files.append(stage(key, f"train/epoch_{index}.jsonl")[0])
-    if val_path:
-        staged.val_path, staged.val_rows = stage(val_path, "val/val.jsonl")
-    staged.images = len(local_of)
+        if name.startswith("val/"):
+            staged.val_path, staged.val_rows = str(target.resolve()), len(rows)
+        else:
+            staged.epoch_files.append(str(target.resolve()))
+    staged.images = len(keys)
+    staged.fetched = len(missing)
 
     log.info(
-        "staged %d row(s) and %d page image(s) under %s", staged.rows, staged.images, root
+        "staged %d row(s) under %s; %d page image(s), %d fetched, cache %s",
+        staged.rows, root, len(keys), len(missing), cache,
     )
     return staged
+
+
+def _read_rows(client: BlobClient, key: str) -> list[dict[str, Any]]:
+    return [json.loads(line) for line in client.read_text(key).splitlines() if line.strip()]
+
+
+def _download(client: BlobClient, key: str, target: Path) -> None:
+    """Fetch one image atomically: to ``<name>.part``, then renamed into place."""
+    target.parent.mkdir(parents=True, exist_ok=True)
+    partial = target.with_name(target.name + ".part")
+    try:
+        client.download_file(key, partial)
+    except Exception as exc:  # noqa: BLE001 - reported with the one question that matters
+        partial.unlink(missing_ok=True)
+        if not client.exists(key):
+            raise StagingError(
+                f"page image {key} is referenced by the corpus but is not in Blob. "
+                "Training on a row without its page would teach the model to answer "
+                "from text it was told came with an image."
+            ) from exc
+        raise StagingError(f"could not fetch page image {key}: {exc}") from exc
+    os.replace(partial, target)
