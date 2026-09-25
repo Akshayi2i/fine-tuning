@@ -33,6 +33,7 @@ from typing import Any
 
 from common.config import assert_resolution_parity, resolution_cap_px
 from common.constants import MODALITY_MODES
+from common.lob import normalize_lob
 from common.prompts import (
     PROMPT_TEMPLATE_VERSION,
     prompt_fingerprint,
@@ -302,7 +303,10 @@ def build_training_row(
     row = {
         "doc_type": doc_type,
         "acord_form": acord_form,
-        "lob": lob,
+        # Always a list. The review tool and export_golden_label pass a string,
+        # both importers a list; a JSONL column holding both is one pyarrow —
+        # and so HF datasets — refuses to load ("changed from string to array").
+        "lob": normalize_lob(lob),
         "modality_mode": modality_mode,
         "source_id": source_id,
         "tenant_id": tenant_id,

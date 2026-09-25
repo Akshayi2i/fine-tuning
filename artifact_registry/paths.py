@@ -629,6 +629,17 @@ def staging_quantized_model_dir(
     )
 
 
+def staging_train_data_dir(scope: str, version: str) -> str:
+    """Local copy of one run's training data: its JSONL files and page images.
+
+    ms-swift reads local files. The corpus lives in Blob, so a run copies what it
+    trains on here, onto the volume, before launch (``training.stage_data``).
+    Keyed by scope and version, so two scoped runs at one version never share —
+    or clear — each other's copy.
+    """
+    return _under_staging("train-data", scope, version)
+
+
 def staging_eval_report(
     version: str, doc_type: str | None = None, *, scope: str | None = None
 ) -> str:

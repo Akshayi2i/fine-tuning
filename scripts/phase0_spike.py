@@ -203,6 +203,66 @@ def check_interleaved_content(r: Result) -> None:
     r.data["sample"] = rendered[:400]
 
 
+def check_swift_row_format(r: Result) -> None:
+    """Does ms-swift render a staged row exactly as serving renders the corpus row?
+
+    ``training.stage_data`` converts each corpus row — a content LIST of image and
+    text blocks — into ms-swift's format: string content with ``<image>``
+    placeholders, joined with no separator, plus an ``images`` list. That is only
+    safe if the two render to the same tokens. A difference here is prompt drift
+    between training and serving, which degrades a fine-tuned model and shows up
+    in no training metric.
+
+    Uses the ms-swift 3 template API (``get_model_tokenizer`` / ``get_template``).
+    Vision-token runs are collapsed before comparing: ms-swift expands each
+    placeholder to the image's real token count, the text template does not.
+    """
+    import re
+    import tempfile
+
+    from PIL import Image
+    from swift.llm import get_model_tokenizer, get_template
+    from transformers import AutoProcessor
+
+    from training.stage_data import to_swift_row
+
+    tmp = Path(tempfile.mkdtemp())
+    for name in ("page_1.png", "page_2.png"):
+        Image.new("RGB", (448, 448), "white").save(tmp / name)
+    original = {"source_id": "spike", "messages": [
+        {"role": "system", "content": "extract"},
+        {"role": "user", "content": [
+            {"type": "image", "image": "page_1.png"},
+            {"type": "text", "text": "<page 1 of 2>\n\nfirst page"},
+            {"type": "image", "image": "page_2.png"},
+            {"type": "text", "text": "<page 2 of 2>\n\nsecond page"},
+        ]},
+        {"role": "assistant", "content": '{"policy": {}}'},
+    ]}
+    row = to_swift_row(original, lambda key: str(tmp / key))
+
+    processor = AutoProcessor.from_pretrained(MODEL_ID, trust_remote_code=True)
+    expected = processor.apply_chat_template(original["messages"], tokenize=False)
+
+    _model, swift_processor = get_model_tokenizer(MODEL_ID, load_model=False)
+    template = get_template(swift_processor.model_meta.template, swift_processor)
+    encoded = template.encode({"messages": row["messages"], "images": row["images"]})
+    rendered = swift_processor.tokenizer.decode(encoded["input_ids"])
+
+    def collapse(text: str) -> str:
+        return re.sub(r"(<\|image_pad\|>)+", "<|image_pad|>", text).strip()
+
+    r.ok = collapse(rendered) == collapse(expected)
+    r.detail = (
+        "a staged row renders identically to the corpus row" if r.ok else
+        "ms-swift renders the staged row DIFFERENTLY from serving — prompt drift; see sample"
+    )
+    r.data["images"] = len(row["images"])
+    if not r.ok:
+        r.data["expected"] = collapse(expected)[:600]
+        r.data["rendered"] = collapse(rendered)[:600]
+
+
 def check_vllm_multi_lora(r: Result) -> None:
     """Does vLLM support multi-LoRA for this architecture?
 
@@ -599,6 +659,8 @@ def main(argv: list[str] | None = None) -> int:
         run("model_config_resolves", "the pinned model id and revision", check_model_loads),
         run("interleaved_image_text", "the corpus row format; single-block + markers is the fallback",
             check_interleaved_content),
+        run("swift_row_format", "that a staged training row renders exactly as serving renders it",
+            check_swift_row_format),
         run("vllm_multi_lora", "SPEC_11 serving; merged per-type models are the fallback",
             check_vllm_multi_lora),
         run("llama_cpp_mmproj", "whether GGUF export can produce a model that can see",

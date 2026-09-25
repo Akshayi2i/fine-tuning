@@ -388,6 +388,20 @@ def train(
     val_paths = [view.val_path]
     staging = paths.scoped_staging_adapter_dir(scope.name, out_version)
 
+    if not dry_run:
+        # ms-swift reads LOCAL files in ITS row format. The view is Blob keys in
+        # the corpus's own shape — handed over as-is, the trainer finds nothing,
+        # and a row that did load would fail on its mixed-type content column.
+        # A dry run launches nothing, so it records the Blob keys instead.
+        from training.stage_data import stage_training_data
+
+        staged = stage_training_data(
+            view.epoch_files, view.val_path if client.exists(view.val_path) else None,
+            client, paths.staging_train_data_dir(scope.name, out_version),
+        )
+        corpus_paths = staged.epoch_files
+        val_paths = [staged.val_path] if staged.val_path else []
+
     if continue_from:
         assert_checkpoint_path(continue_from)
 
