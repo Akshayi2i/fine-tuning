@@ -635,6 +635,8 @@ def stage_dataset_build(ctx: StageContext) -> StageResult:
 
     for warning in coverage.warnings:
         log.warning("corpus coverage: %s", warning)
+    if cap_warning := built.cap_report.warning():
+        log.warning("corpus budget: %s", cap_warning)
 
     return StageResult(
         "dataset_build", "completed",
@@ -646,6 +648,9 @@ def stage_dataset_build(ctx: StageContext) -> StageResult:
             "confusable_example_count": coverage.confusable_example_count,
             "grouping": ctx.grouping,
             "modality_draws": modes.as_dict(),
+            # Rows over their task budget are rejected, never truncated, and the
+            # document is set aside; this is how many, and why.
+            "cap_check": built.cap_report.as_dict(),
         },
     )
 
@@ -735,7 +740,7 @@ def stage_training(ctx: StageContext) -> StageResult:
 
     return StageResult(
         "training", "completed",
-        f"trained {manifest.run_id} on {data_stats.train_examples} examples",
+        f"trained {manifest.run_id} on {manifest.data_stats.train_examples} examples",
         {
             "runs": [manifest.run_id],
             "run_type": manifest.run_type,

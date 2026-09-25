@@ -54,6 +54,7 @@ class StagedData:
     epoch_files: list[str] = field(default_factory=list)
     val_path: str | None = None
     rows: int = 0
+    val_rows: int = 0
     images: int = 0
 
 
@@ -134,7 +135,7 @@ def stage_training_data(
             local_of[key] = str(target.resolve())
         return local_of[key]
 
-    def stage(key: str, name: str) -> str:
+    def stage(key: str, name: str) -> tuple[str, int]:
         rows = [json.loads(line) for line in client.read_text(key).splitlines() if line.strip()]
         target = root / name
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -146,12 +147,12 @@ def stage_training_data(
             encoding="utf-8",
         )
         staged.rows += len(rows)
-        return str(target.resolve())
+        return str(target.resolve()), len(rows)
 
     for index, key in enumerate(epoch_files, start=1):
-        staged.epoch_files.append(stage(key, f"train/epoch_{index}.jsonl"))
+        staged.epoch_files.append(stage(key, f"train/epoch_{index}.jsonl")[0])
     if val_path:
-        staged.val_path = stage(val_path, "val/val.jsonl")
+        staged.val_path, staged.val_rows = stage(val_path, "val/val.jsonl")
     staged.images = len(local_of)
 
     log.info(

@@ -196,3 +196,78 @@ def test_a_real_run_points_ms_swift_at_local_staged_files(client, tmp_path, monk
     assert datasets and all(Path(p).is_file() for p in datasets), datasets
     assert all(str(tmp_path) in p for p in datasets)
     assert Path(config.args["val_dataset"][0]).is_file()
+
+
+# --------------------------------------------------------------------------
+# Budgets, validation, and what a scoped run records
+# --------------------------------------------------------------------------
+
+def test_a_document_over_its_task_budget_is_set_aside_not_truncated():
+    """A clipped target trains the model to stop early, so the row is rejected —
+    and with it the document, or it would be in some epochs and not others."""
+    docs = _documents()
+    huge = docs[0]
+    huge.ocr_pages = ["claim row " * 60_000]
+    groups: dict[str, list[GroupRecord]] = {}
+    for d in docs:
+        groups.setdefault(d.doc_type, []).append(
+            GroupRecord(group_id=d.source_id, doc_type=d.doc_type, source_ids=[d.source_id])
+        )
+    built = build_corpus(docs, assign_group_splits(groups, seed=42))
+
+    assert huge.source_id not in {r["source_id"] for r in built.all_rows}
+    assert any(sid == huge.source_id and "budget" in why for sid, why in built.skipped)
+    assert built.cap_report.rejected and built.cap_report.accepted
+    train_rows_by_epoch(built)   # every epoch still holds every remaining document
+
+
+def test_ms_swift_is_told_never_to_cut_a_row():
+    from training.train import build_training_config
+
+    swift, _ = build_training_config(
+        corpus_paths=["e1", "e2", "e3", "e4"], output_dir="/out", val_paths=["v"]
+    )
+    assert swift.args["truncation_strategy"] == "delete"
+
+
+def _train(client, monkeypatch, tmp_path, **kwargs):
+    from registry_utils.models import DataStats
+    from training import train as T
+
+    monkeypatch.setenv("RUNPOD_VOLUME_MOUNT", str(tmp_path))
+    monkeypatch.setattr(T, "validate_all", lambda **_kw: None)
+    launched = []
+    monkeypatch.setattr(T, "launch", lambda config: launched.append(config))
+    _swift, manifest = T.train(
+        corpus_version="v1", out_version="v9", client=client, corpus_manifest={},
+        data_stats=DataStats(train_examples=999, val_examples=999, test_examples=999),
+        **kwargs,
+    )
+    return manifest, launched
+
+
+def test_a_run_with_no_validation_rows_stops_before_launch(client, tmp_path, monkeypatch):
+    """Checkpoint selection and early stopping read validation; without it the
+    run fails after the GPU is paid for, or ships a checkpoint nobody chose."""
+    from training.train import TrainingError
+
+    _seed(client)
+    client.write_text(paths.corpus_eval_split("v1", "val"), "")
+    with pytest.raises(TrainingError, match="no validation rows"):
+        _train(client, monkeypatch, tmp_path, dry_run=False)
+
+
+def test_a_scoped_run_records_its_own_counts_not_the_corpus(client, tmp_path, monkeypatch):
+    from common.scopes import get_scope
+
+    built = _seed(client)
+    client.write_text(paths.corpus_eval_split("v1", "test"), write_jsonl(built.rows_by_split["test"]))
+    manifest, _ = _train(client, monkeypatch, tmp_path, dry_run=True, scope=get_scope("lossrun"))
+
+    def lossrun_rows(split):
+        return sum(1 for r in built.rows_by_split[split] if r["doc_type"] == "lossrun")
+
+    stats = manifest.data_stats
+    assert stats.train_examples == lossrun_rows("train")
+    assert stats.val_examples == lossrun_rows("val")
+    assert stats.test_examples == lossrun_rows("test")

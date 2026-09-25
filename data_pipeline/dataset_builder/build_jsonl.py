@@ -25,6 +25,7 @@ from typing import Any
 from common.canonical import CanonicalLabelError, has_envelopes, training_target
 from common.constants import MODALITY_MODES
 from common.schemas import is_canonical
+from data_pipeline.dataset_builder.cap_check import CapReport, check_row, estimate_row
 from data_pipeline.dataset_builder.noisy_ocr_augment import corrupt_ocr_pages
 from data_pipeline.dataset_builder.policy_windows import (
     TargetReport,
@@ -101,6 +102,9 @@ class BuildResult:
     #: read over several windows. The same values are unreachable at serving, so
     #: this is where a page rule that misses real content becomes visible.
     window_notes: dict[str, list[str]] = field(default_factory=dict)
+    #: Every row's estimated size against its task budget, and every document
+    #: set aside because one of its rows did not fit (``cap_check``).
+    cap_report: CapReport = field(default_factory=CapReport)
 
     @property
     def all_rows(self) -> list[dict[str, Any]]:
@@ -301,6 +305,20 @@ def build_corpus(
             log.warning("skipping %s: %s", document.source_id, exc)
             continue
 
+        # Reject, never truncate. A row over its task budget would be clipped on
+        # the pod, and a clipped target trains the model to stop early. The
+        # whole document is set aside, not the one row: a document missing from
+        # some epochs and not others is a run whose epoch count describes
+        # something else, which train_rows_by_epoch refuses.
+        oversized = [row for row in rows if not _fits(row, result.cap_report)]
+        if oversized:
+            reason = result.cap_report.rejected[-1]["reason"]
+            result.skipped.append((
+                document.source_id,
+                f"{len(oversized)} row(s) exceed their task budget: {reason}",
+            ))
+            continue
+
         # Train rows are stamped with the epoch they belong to, so the corpus can
         # be written as epoch_1..4.jsonl and a run reproduced from the files
         # alone rather than from a sampler behaving identically at training time.
@@ -335,6 +353,23 @@ def build_corpus(
 
     log.info("corpus built: %s", result.summary())
     return result
+
+
+def _fits(row: dict[str, Any], report: CapReport) -> bool:
+    """Whether one built row fits its task's sequence and output budgets."""
+    messages = row["messages"]
+    user = messages[1]["content"] if len(messages) > 1 else []
+    blocks = user if isinstance(user, list) else []
+    estimate = estimate_row(
+        # A flat row is the whole-document `extract` task; a window names its own.
+        task=row.get("task") or "extract",
+        system_prompt=messages[0]["content"],
+        ocr_pages=[b.get("text", "") for b in blocks if b.get("type") == "text"],
+        page_count=sum(1 for b in blocks if b.get("type") == "image"),
+        target_json=messages[-1]["content"] if messages[-1]["role"] == "assistant" else "",
+        doc_type=row.get("doc_type"),
+    )
+    return check_row(estimate, source_id=row["source_id"], report=report)
 
 
 def train_source_ids(

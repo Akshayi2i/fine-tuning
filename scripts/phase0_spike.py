@@ -150,6 +150,7 @@ def check_ms_swift(r: Result) -> None:
         "--val_dataset": "val_dataset" in help_text,
         "--freeze_vit": "freeze_vit" in help_text,
         "--lora_target_modules": "lora_target_modules" in help_text,
+        "--truncation_strategy": "truncation_strategy" in help_text,
     }
     r.data["arguments"] = required
     missing = [k for k, present in required.items() if not present]

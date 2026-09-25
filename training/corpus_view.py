@@ -45,6 +45,7 @@ class CorpusView:
     val_path: str = ""
     rows_by_epoch: dict[int, int] = field(default_factory=dict)
     val_rows: int = 0
+    test_rows: int = 0
     dropped_rows: int = 0
 
     @property
@@ -126,6 +127,10 @@ def materialize(
     view.val_path = paths.corpus_scope_eval_split(corpus_version, "val", scope.name, tenant_id)
     client.write_text(view.val_path, body)
     view.val_rows = kept
+
+    test = paths.corpus_eval_split(corpus_version, "test", tenant_id)
+    if client.exists(test):
+        _body, view.test_rows, _ = _filter(client.read_text(test), scope.doc_types)
 
     if not view.val_rows:
         # Not fatal here — it is the checkpoint selector and the gate that need

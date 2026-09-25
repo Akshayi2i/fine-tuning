@@ -188,9 +188,13 @@ def build_training_config(
         "model_type": "qwen3-vl-8b-instruct",
         "model_id_or_path": base["model"]["model_id"],
         "model_revision": base["model"]["revision"],
-        # The first N epoch files, read once each. Each file already holds every
-        # train document exactly once, in that epoch's modality draw, so the
-        # concatenation IS an N-epoch run.
+        # The first N epoch files, read once each. Every file holds every train
+        # document, in that epoch's modality draw, so the concatenation has the
+        # CONTENT of an N-epoch run: each document N times, in N regimes. Not its
+        # ORDER — the Trainer shuffles the concatenated rows and groups them by
+        # length, so a document's passes can land next to each other, and an
+        # early stop can come after some documents have been seen more often
+        # than others. Over a run that averages out; within one it does not.
         "dataset": list(corpus_paths[:epochs]),
         "output_dir": output_dir,
         "train_type": "lora",
@@ -223,6 +227,13 @@ def build_training_config(
         "gradient_checkpointing": batch["gradient_checkpointing"],
         "bf16": batch["bf16"],
         "max_length": max_length,
+        # Explicit, never left to ms-swift's default. Every row was checked
+        # against its task budget at corpus build (cap_check), so a row over
+        # max_length here means that estimate was wrong — and the answer is to
+        # drop it, not to cut it: "left" would remove the system prompt, "right"
+        # the end of the target, and a clipped target trains the model to stop
+        # early. What was dropped shows in the ms-swift log.
+        "truncation_strategy": "delete",
         # The three settings that make the largest task cap affordable (§9.3).
         # Without use_logits_to_keep the LM head produces a 151k-vocabulary
         # distribution at every position of a 32k sequence, which dominates
@@ -388,6 +399,16 @@ def train(
     val_paths = [view.val_path]
     staging = paths.scoped_staging_adapter_dir(scope.name, out_version)
 
+    if not scope.is_unified:
+        # The caller counts the whole corpus. A scoped run trains on its view,
+        # and its manifest has to say so: a lossrun run recording every policy
+        # row as its training data describes a run that did not happen.
+        data_stats = data_stats.model_copy(update={
+            "train_examples": view.train_rows,
+            "val_examples": view.val_rows,
+            "test_examples": view.test_rows,
+        })
+
     if not dry_run:
         # ms-swift reads LOCAL files in ITS row format. The view is Blob keys in
         # the corpus's own shape — handed over as-is, the trainer finds nothing,
@@ -401,6 +422,18 @@ def train(
         )
         corpus_paths = staged.epoch_files
         val_paths = [staged.val_path] if staged.val_path else []
+        if not staged.val_rows:
+            # Refused here, before the pod does any work. The config asks for
+            # evaluation, early stopping and load_best_model_at_end, and
+            # checkpoint selection generates on validation: with no rows the run
+            # fails after the GPU is paid for, or trains with nothing to choose
+            # its checkpoint by.
+            raise TrainingError(
+                f"scope {scope.name!r} has no validation rows in corpus {corpus_version}. "
+                "Checkpoint selection and early stopping both read validation, so the run "
+                "cannot choose what to ship. Rebuild the corpus with enough documents of "
+                f"{list(scope.doc_types)} to fill a validation split."
+            )
 
     if continue_from:
         assert_checkpoint_path(continue_from)
