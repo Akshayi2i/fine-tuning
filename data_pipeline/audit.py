@@ -48,14 +48,14 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from data_pipeline.ocr.run_mineru import TEXT_LAYER_MIN_CHARS as MIN_TEXT_CHARS
+
 log = logging.getLogger(__name__)
 
 REPO = Path(__file__).resolve().parent.parent
 DEFAULT_INPUT = REPO / "data" / "training data"
 DEFAULT_OUT = REPO / "data" / "audit_report"
 
-#: Characters of extracted text below which a page counts as having no text layer.
-MIN_TEXT_CHARS = 30
 #: Values this short ("Y", "1") match almost any page; they are not checked.
 MIN_CHECKABLE_CHARS = 3
 #: Share of each line drawn for the manual spot check.
@@ -126,13 +126,24 @@ def normalise(text: str) -> str:
 def appears(raw: str, page_text: str) -> bool:
     """Whether ``raw`` is on the page, as a phrase or — across line breaks and
     columns — as every one of its words."""
-    value, page = normalise(raw), normalise(page_text)
+    return _appears(normalise(raw), _Page(page_text))
+
+
+class _Page:
+    """A page's text normalised once, for every value looked up on it."""
+
+    def __init__(self, text: str) -> None:
+        self.padded = f" {normalise(text)} "
+        self.words = set(self.padded.split())
+
+
+def _appears(value: str, page: _Page) -> bool:
     if not value:
         return False
-    if f" {value} " in f" {page} ":
+    if f" {value} " in page.padded:
         return True
     words = value.split()
-    return len(words) > 1 and set(words) <= set(page.split())
+    return len(words) > 1 and set(words) <= page.words
 
 
 def iter_envelopes(node: Any, path: str = ""):
@@ -154,12 +165,31 @@ def iter_envelopes(node: Any, path: str = ""):
 
 
 def document_folders(root: Path) -> list[Path]:
-    """Every folder that holds a document: a PDF, a golden.json or a metadata.json."""
-    found = set()
-    for pattern in ("*.pdf", "*.PDF", "golden.json", "metadata.json"):
-        for path in root.rglob(pattern):
-            found.add(path.parent)
-    return sorted(found)
+    """The folders the importer will read: the IMMEDIATE subfolders of ``root``.
+
+    ``import_labeled_pdfs`` takes each direct subfolder of ``--input`` as one
+    document, so that is what is audited — a layout the audit passes is one the
+    importer can import. Documents nested deeper are reported by
+    :func:`misplaced`.
+    """
+    return sorted(p for p in root.iterdir() if p.is_dir())
+
+
+def misplaced(root: Path) -> list[Finding]:
+    """PDFs the importer would never see: loose in ``root``, or below a subfolder."""
+    found: list[Finding] = []
+    loose = sorted({*root.glob("*.pdf"), *root.glob("*.PDF")})
+    if loose:
+        found.append(Finding(".", "blocker", "structure",
+                             f"{len(loose)} PDF file(s) directly in the input folder; each document "
+                             "needs its own folder (<input>/<document>/{pdf, golden.json, metadata.json})"))
+    for folder in document_folders(root):
+        nested = [p for p in folder.rglob("*") if p.suffix.lower() == ".pdf" and p.parent != folder]
+        if nested:
+            found.append(Finding(folder.name, "blocker", "structure",
+                                 f"{len(nested)} PDF file(s) in subfolders below {folder.name}/; the "
+                                 "importer reads only <input>/<document>/ — move each document up"))
+    return found
 
 
 def _read_pdf(pdf: Path) -> tuple[list[str], str | None]:
@@ -251,29 +281,37 @@ def audit_document(folder: Path, report: AuditReport, checksums: dict[str, str])
         block("label", "golden.json is not a JSON object")
 
     envelopes = list(iter_envelopes(label)) if isinstance(label, dict) else []
+    for path, envelope in envelopes:
+        if not isinstance(envelope.get("page_ref") or [], list):
+            # One malformed label is one finding, never a crash of the whole run.
+            block("label", f"{path}: page_ref must be a list of page numbers, got "
+                           f"{envelope.get('page_ref')!r}")
     # Only against a PDF that opened: an unreadable one is already a blocker, and
     # reporting every page_ref against "0 pages" would bury the real cause.
     for path, envelope in envelopes if audit.pages else ():
-        for ref in envelope.get("page_ref") or []:
-            if not isinstance(ref, int) or not 1 <= ref <= max(audit.pages, 0):
+        for ref in _refs(envelope):
+            if not isinstance(ref, int) or not 1 <= ref <= audit.pages:
                 block("label", f"{path}: page_ref {ref} is not a page of this {audit.pages}-page PDF")
 
     audit.importable = not any(f.folder == name and f.severity == "blocker" for f in report.findings)
 
-    # ---- 3. values against the PDF
-    for path, envelope in envelopes:
+    # ---- 3. values against the PDF — only for a PDF that opened: an unreadable
+    # one is its blocker, not N "needs OCR" rows.
+    pages = [_Page(text) for text in page_texts]
+    for path, envelope in envelopes if audit.pages else ():
         raw = envelope.get("raw")
         if raw in (None, "") or isinstance(raw, (dict, list)):
             continue
         raw = str(raw)
-        refs = [r for r in envelope.get("page_ref") or [] if isinstance(r, int) and 1 <= r <= audit.pages]
+        refs = [r for r in _refs(envelope) if isinstance(r, int) and 1 <= r <= audit.pages]
         record = ValueCheck(name, path, raw, ",".join(map(str, refs)), "")
         if len(normalise(raw)) < MIN_CHECKABLE_CHARS:
             record.result = "skipped_short"
         elif refs and not any(has_text[r - 1] for r in refs) or not refs and not audit.text_pages:
             record.result = "needs_ocr"
         else:
-            on = [i + 1 for i, text in enumerate(page_texts) if has_text[i] and appears(raw, text)]
+            value = normalise(raw)
+            on = [i + 1 for i, page in enumerate(pages) if has_text[i] and _appears(value, page)]
             record.found_on = ",".join(map(str, on[:5]))
             if not refs:
                 record.result = "no_page_ref" if on else "not_found"
@@ -288,6 +326,14 @@ def audit_document(folder: Path, report: AuditReport, checksums: dict[str, str])
     # ---- 4. formats
     _check_formats(name, envelopes, report)
     return audit
+
+
+def _refs(envelope: dict) -> list:
+    """``page_ref`` as a list; a malformed scalar is reported by the shape check."""
+    refs = envelope.get("page_ref")
+    if refs is None:
+        return []
+    return refs if isinstance(refs, list) else [refs]
 
 
 def _check_formats(name: str, envelopes: list[tuple[str, dict]], report: AuditReport) -> None:
@@ -338,6 +384,7 @@ def _check_formats(name: str, envelopes: list[tuple[str, dict]], report: AuditRe
 def audit_folder(root: Path, *, scope: str | None = "personal_lines", seed: int = 42) -> AuditReport:
     report = AuditReport(root=str(root), scope=scope)
     checksums: dict[str, str] = {}
+    report.findings.extend(misplaced(root))
     folders = document_folders(root)
     for index, folder in enumerate(folders, 1):
         report.documents.append(audit_document(folder, report, checksums))

@@ -1075,6 +1075,14 @@ document count as scanned (older metas fall back to "any failed page"). **HTML t
 regex-matched: a row is a header only when it has header cells and no data cells (so row-header schedules
 count), and nested tables no longer cut the outer table short.
 
+**MinerU's own device setting** (`data_pipeline/ocr/mineru_config.py`): MinerU 1.x takes its device from
+`device-mode` in `~/magic-pdf.json` (file name overridable by `MINERU_TOOLS_CONFIG_JSON`), whose shipped default
+is `cpu` — a GPU being present does not make MinerU use it. The engine refuses unless the config says `cuda`;
+`python -m data_pipeline.ocr.mineru_config --cuda` sets it, and `setup_pod.sh ocr` runs that once the weights
+are downloaded. **Mixed documents**: any page without a text layer sends the whole document through OCR mode
+(text mode left scanned endorsement pages of a typed policy unread and unflagged); `scanned` is recorded per
+page and `is_scanned` is true when any page is a scan.
+
 ---
 
 # SPEC_04_labeling_golden_json
@@ -1282,6 +1290,11 @@ totals (documents per line, digital vs scanned, page spread, lines under 5, whet
 150 needed to freeze), plus a 5%-per-line spot-check sample. Output in `data/audit_report/` (git-ignored: the
 CSVs quote label values); the command exits non-zero while blockers remain.
 
+The audit reads the **importer's layout**: each immediate subfolder of the input is one document. PDFs loose in
+the input folder, or nested below a subfolder (e.g. `<input>/homeowners/<doc>/`), are blockers — the importer
+would never see them. A malformed `page_ref` is one blocker, never a crash; an unreadable PDF is one cause, not a
+row per value. Page text is normalised once per page.
+
 ---
 
 # SPEC_05_dataset_builder
@@ -1452,6 +1465,9 @@ every mode by design.
 **Line coverage in the manifest**: `lob_coverage` (the ≥20% enum target) counts only labels that carry
 `line_of_business` (ACORD, Loss Run); policy lines are counted from metadata in `policy_line_counts`
 (canonical schema names). Checking policy lines against the enum raised and failed the whole build.
+
+Only **policies** contribute to `policy_line_counts`; ACORD and Loss Run documents stay in the enum coverage
+even when the importer copied their label's `line_of_business` into metadata.
 
 ---
 
@@ -1899,6 +1915,10 @@ with the splits a model learns from and is selected on. The test split is what i
 sequence *build v1 → freeze v1's test → gate the model trained on v1* is valid; counting test made it fail as
 leakage for every frozen document. The family split keeps a frozen document's relatives out of train and val.
 
+**Frozen = the manifest exists.** An interrupted freeze (documents copied, no manifest) is not frozen: it can be
+resumed from the same corpus, a partial set from another corpus is refused with instructions, and the golden
+eval refuses to gate on a partial set.
+
 ---
 
 # SPEC_09_calibration
@@ -2336,6 +2356,11 @@ through the release `release_for` returned (it was a yes/no check whose answer w
 per-version calibration is needed only for a release without its own calibrators. An operator **pin**
 outranks line-scoped routing, so a rollback applies to every document of the type. Cold start no longer
 requires a unified run when releases are promoted. The plan's log lists line-scoped releases.
+
+**OCR pin at cold start**: the corpus manifest must still record `mineru_version`, but the version comparison
+runs only where MinerU is installed. A serving pod does no OCR (requests carry page texts produced by the pinned
+MinerU), and comparing against a MinerU it does not have refused every deployment. A real mismatch is a
+`ColdStartError`.
 
 ---
 
@@ -2909,7 +2934,7 @@ failure that was real:
 | `test_detach.py`, `test_pod_run.py` | on the pod every long entry point detaches; already-safe jobs do not re-detach; every entry point classified; the launcher never stops the pod or a run unasked; LF line endings |
 | `test_personal_lines_scope.py` | a scope narrowed by line: coverage rules, corpus view, golden eval and serving route by line and refuse other lines |
 | `test_mineru_engine.py` | one markdown string per page from MinerU's content list; HTML table rows counted; OCR vs text mode; GPU only |
-| `test_review_fixes.py` | serving through the chosen release (adapter + calibrators, LoRA when several), rollback pin, freeze guard on types with no test documents, scanned from MinerU's classification, HTML row headers and nested tables, explicit threshold targets, scoped pulls, classify in every scope |
+| `test_review_fixes.py` | both end-to-end reviews: MinerU config device, mixed PDFs OCR'd whole, serving OCR pin, policy-only line counts, resumable freeze, narrow keeps lines, audit layout / malformed page_ref / unreadable PDF; serving through the chosen release (adapter + calibrators, LoRA when several), rollback pin, freeze guard on types with no test documents, scanned from MinerU's classification, HTML row headers and nested tables, explicit threshold targets, scoped pulls, classify in every scope |
 | `test_data_audit.py` | the pre-upload audit on real synthetic PDFs: every blocker, wrong-page and missing values, scans left for OCR, format and period checks, totals, report files, audit output git-ignored |
 | `test_gpu_only.py` | model loaders require CUDA; no `device_map="cpu"`/`"auto"`; OCR refuses CPU; pod detection without `RUNPOD_POD_ID`, and look-alikes rejected |
 

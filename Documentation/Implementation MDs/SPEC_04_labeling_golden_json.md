@@ -200,3 +200,8 @@ formats (readable dates — the build rewrites them MM/DD/YYYY — amounts agree
 totals (documents per line, digital vs scanned, page spread, lines under 5, whether the test split reaches the
 150 needed to freeze), plus a 5%-per-line spot-check sample. Output in `data/audit_report/` (git-ignored: the
 CSVs quote label values); the command exits non-zero while blockers remain.
+
+The audit reads the **importer's layout**: each immediate subfolder of the input is one document. PDFs loose in
+the input folder, or nested below a subfolder (e.g. `<input>/homeowners/<doc>/`), are blockers — the importer
+would never see them. A malformed `page_ref` is one blocker, never a crash; an unreadable PDF is one cause, not a
+row per value. Page text is normalised once per page.

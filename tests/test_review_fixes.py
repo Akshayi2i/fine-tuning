@@ -230,3 +230,163 @@ def test_a_scoped_merged_model_is_pulled_from_its_own_path(client, tmp_path):
     push_merged_model(source, "v1", client=client, scope="personal_lines")
     pulled = pull_merged_model("v1", tmp_path / "out", client=client, scope="personal_lines")
     assert (pulled / "config.json").is_file()
+
+
+# ==========================================================================
+# Second end-to-end review
+# ==========================================================================
+
+
+# #1 — MinerU's own device setting, not just a GPU being present
+def test_mineru_config_must_say_cuda(tmp_path, monkeypatch):
+    from data_pipeline.ocr.mineru_config import MinerUConfigError, assert_on_cuda, set_cuda
+
+    config = tmp_path / "magic-pdf.json"
+    monkeypatch.setenv("MINERU_TOOLS_CONFIG_JSON", str(config))
+    with pytest.raises(MinerUConfigError, match="no MinerU config"):
+        assert_on_cuda()
+    config.write_text(json.dumps({"device-mode": "cpu", "models-dir": "/m"}), encoding="utf-8")
+    with pytest.raises(MinerUConfigError, match="device-mode 'cpu'"):
+        assert_on_cuda()
+    set_cuda()
+    assert_on_cuda()
+    assert json.loads(config.read_text(encoding="utf-8")) == {"device-mode": "cuda", "models-dir": "/m"}
+
+
+def test_the_engine_refuses_a_mineru_configured_for_cpu(tmp_path, monkeypatch):
+    from data_pipeline.ocr.run_mineru import MinerUEngine, OcrError
+
+    config = tmp_path / "magic-pdf.json"
+    config.write_text(json.dumps({"device-mode": "cpu"}), encoding="utf-8")
+    monkeypatch.setenv("MINERU_TOOLS_CONFIG_JSON", str(config))
+    monkeypatch.setattr("common.gpu.require_cuda", lambda what: "NVIDIA H100")
+    with pytest.raises(OcrError, match="run on the CPU"):
+        MinerUEngine().process(b"%PDF", device="cuda", max_long_side_px=800)
+
+
+# #7 — a mixed PDF is OCR'd whole
+def test_a_page_without_a_text_layer_sends_the_document_through_ocr(monkeypatch):
+    pymupdf = pytest.importorskip("pymupdf")
+    from data_pipeline.ocr.run_mineru import MinerUEngine
+    from tests.test_mineru_engine import CONTENT, _fake_mineru
+
+    doc = pymupdf.open()
+    doc.new_page().insert_text((72, 72), "DECLARATIONS page with a real text layer on it, typed")
+    doc.new_page()                                          # a scanned endorsement: no text
+    doc.new_page().insert_text((72, 72), "SCHEDULE page with a real text layer on it, typed")
+    calls = _fake_mineru(monkeypatch, CONTENT, scanned=False)   # MinerU alone would say "text"
+    pages = MinerUEngine().process(doc.tobytes(), device="cuda", max_long_side_px=800)
+    assert calls["mode"] == "ocr"
+    assert [p.scanned for p in pages] == [False, True, False]
+
+
+# #6 — a serving pod without MinerU does not fail the OCR pin
+def test_a_serving_pod_without_mineru_starts(monkeypatch):
+    from data_pipeline.ocr import mineru_version
+    from serving.vllm_entrypoint import assert_ocr_pin
+
+    monkeypatch.setattr(mineru_version, "get_mineru_version", lambda: mineru_version.UNKNOWN)
+    assert_ocr_pin({"mineru_version": "1.3.12", "ocr_device": "cuda"})      # does not raise
+
+
+def test_a_mineru_version_mismatch_is_a_cold_start_error(monkeypatch):
+    from data_pipeline.ocr import mineru_version
+    from serving.vllm_entrypoint import ColdStartError, assert_ocr_pin
+
+    monkeypatch.setattr(mineru_version, "get_mineru_version", lambda: "1.2.0")
+    monkeypatch.setattr(mineru_version, "assert_version_matches",
+                        lambda m: (_ for _ in ()).throw(mineru_version.MinerUVersionError("1.2.0 != 1.3.12")))
+    with pytest.raises(ColdStartError, match="1.2.0"):
+        assert_ocr_pin({"mineru_version": "1.3.12", "ocr_device": "cuda"})
+
+
+# #2 — only policies count as policy lines; ACORD lines stay in the enum coverage
+def test_policy_line_counts_hold_policies_only(client):
+    from orchestration.runpod_controller import LocalBackend, RunPodController
+    from tests.test_orchestration import make_context, seed_corpus
+
+    seed_corpus(client)
+    for sid, doc_type in (("acord_0001", "acord"), ("lossrun_0001", "lossrun")):
+        key = paths.label_metadata(doc_type, sid)
+        client.write_json(key, {**client.read_json(key), "lob": ["general_liability"]})
+    controller = RunPodController(backend=LocalBackend(), volume_id="v", git_commit="abc1234")
+    from orchestration.pipeline_dag import stage_dataset_build
+
+    stage_dataset_build(make_context(client, controller))
+    manifest = client.read_json(paths.corpus_manifest("v1"))
+    assert "general_liability" not in manifest["policy_line_counts"]
+    assert set(manifest["policy_line_counts"]) <= {"wc", "auto"}
+
+
+# #5 — an interrupted freeze is resumable, not permanent
+def test_an_interrupted_freeze_is_not_frozen_and_can_be_resumed(client):
+    from evaluation.freeze_eval_set import FreezeError, freeze_eval_set, is_frozen, partial_freeze
+
+    root = paths.golden_eval_set_dir()
+    client.write_json(f"{root}/policy_0001/metadata.json", {"frozen_from_corpus": "v1"})
+    client.write_json(f"{root}/policy_0001/golden.json", {})
+    assert not is_frozen(client)
+    assert partial_freeze(client) == {"policy_0001": "v1"}
+    with pytest.raises(FreezeError, match=r"interrupted freeze .* from corpus \['v1'\], not v2"):
+        freeze_eval_set(client, "v2", allow_small=True)
+
+
+def test_the_gate_refuses_a_partially_frozen_set(client):
+    from evaluation.golden_eval import GoldenEvalError, evaluate_version
+
+    client.write_json(f"{paths.golden_eval_set_dir()}/policy_0001/golden.json", {})
+    from common.scopes import get_scope
+
+    with pytest.raises(GoldenEvalError, match="interrupted"):
+        evaluate_version(client, object(), version="v1", corpus_version="v1", scope=get_scope("policy"))
+
+
+# #8 — narrowing keeps the line restriction
+def test_narrowing_a_line_scope_keeps_its_lines():
+    from common.scopes import get_scope, narrow
+
+    narrowed = narrow(get_scope("personal_lines"), ["policy"])
+    assert narrowed.lines == get_scope("personal_lines").lines
+    assert not narrowed.covers_lob("gl")
+
+
+# #3 #4 #9 — audit: the importer's layout, malformed page_ref, unreadable PDF
+def test_the_audit_flags_layouts_the_importer_cannot_read(tmp_path):
+    pytest.importorskip("pymupdf")
+    from data_pipeline.audit import audit_folder
+    from tests.test_data_audit import _document
+
+    _document(tmp_path / "homeowners", "doc1")           # nested one level too deep
+    (tmp_path / "loose.pdf").write_bytes(b"%PDF-1.4")    # loose in the input folder
+    report = audit_folder(tmp_path, scope=None)
+    details = " ".join(f.detail for f in report.blockers)
+    assert "in subfolders below homeowners/" in details
+    assert "directly in the input folder" in details
+
+
+def test_a_scalar_page_ref_is_one_blocker_not_a_crash(tmp_path):
+    pytest.importorskip("pymupdf")
+    import copy
+
+    from data_pipeline.audit import audit_folder
+    from tests.test_data_audit import GOLDEN, _document
+
+    golden = copy.deepcopy(GOLDEN)
+    golden["policy"]["policy_number"]["page_ref"] = 1
+    _document(tmp_path, "doc", golden=golden)
+    report = audit_folder(tmp_path, scope=None)       # does not raise
+    assert any("page_ref must be a list" in f.detail for f in report.blockers)
+
+
+def test_an_unreadable_pdf_is_one_cause_not_a_row_per_value(tmp_path):
+    from data_pipeline.audit import audit_folder
+
+    folder = tmp_path / "doc"
+    folder.mkdir()
+    (folder / "policy.pdf").write_bytes(b"not a pdf at all")
+    (folder / "golden.json").write_text(json.dumps({"policy": {"policy_number": {
+        "raw": "WC-1", "parsed": "WC-1", "page_ref": [1]}}}), encoding="utf-8")
+    (folder / "metadata.json").write_text(json.dumps({"lob": "homeowners"}), encoding="utf-8")
+    report = audit_folder(tmp_path, scope=None)
+    assert any("cannot be opened" in f.detail for f in report.blockers)
+    assert report.values == []

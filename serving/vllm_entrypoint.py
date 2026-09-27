@@ -130,10 +130,25 @@ def assert_ocr_pin(corpus_manifest: dict[str, Any]) -> None:
             "checked against what the model trained on. That pin is the arch §8a guarantee; "
             "serving without it means an OCR upgrade becomes an unattributable accuracy drop."
         )
+    from data_pipeline.ocr.mineru_version import UNKNOWN, MinerUVersionError, get_mineru_version
+
+    if get_mineru_version() == UNKNOWN:
+        # This endpoint runs no OCR: requests arrive with their page texts. The pin
+        # binds wherever those texts are produced (data_pipeline.ocr), not here —
+        # comparing it against a MinerU the serving pod does not have refused every
+        # deployment.
+        log.info(
+            "no MinerU on this endpoint; page texts must come from MinerU %s (the corpus pin)",
+            corpus_manifest.get("mineru_version"),
+        )
+        return
     # The manifest is passed whole: assert_version_matches reads both
     # mineru_version and ocr_device from it, and splitting them here would mean
     # two callers with two ideas of what the pin covers.
-    assert_version_matches(corpus_manifest)
+    try:
+        assert_version_matches(corpus_manifest)
+    except MinerUVersionError as exc:
+        raise ColdStartError(str(exc)) from exc
 
 
 def calibration_for(state: EndpointState, doc_type: str | None) -> Any:

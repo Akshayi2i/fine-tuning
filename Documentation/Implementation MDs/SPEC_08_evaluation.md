@@ -145,3 +145,7 @@ of counts as 0 and blocks the freeze (it used to pass unchecked and be missing f
 with the splits a model learns from and is selected on. The test split is what it is frozen FROM, so the
 sequence *build v1 → freeze v1's test → gate the model trained on v1* is valid; counting test made it fail as
 leakage for every frozen document. The family split keeps a frozen document's relatives out of train and val.
+
+**Frozen = the manifest exists.** An interrupted freeze (documents copied, no manifest) is not frozen: it can be
+resumed from the same corpus, a partial set from another corpus is refused with instructions, and the golden
+eval refuses to gate on a partial set.

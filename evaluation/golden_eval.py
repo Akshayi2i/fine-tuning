@@ -198,8 +198,14 @@ def evaluate_version(
     thresholds: Any = None,
 ) -> dict[str, Any]:
     """Evaluate, write the eval report where the gate reads it, return its dict."""
+    from evaluation.freeze_eval_set import is_frozen
     from evaluation.run_eval import assert_eval_set_disjoint, build_report
 
+    if client.list(paths.golden_eval_set_dir()) and not is_frozen(client):
+        raise GoldenEvalError(
+            "the golden eval set has documents but no manifest: a freeze was interrupted. Re-run "
+            "freeze-eval-set from the same corpus to finish it before gating on it."
+        )
     # Before anything is evaluated: a leaked eval set makes every number meaningless.
     assert_eval_set_disjoint(client, corpus_version, tenant_id)
     documents = [d for d in load_golden_set(client, scope.doc_types) if scope.covers_lob(d.lob)]

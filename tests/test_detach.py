@@ -81,6 +81,7 @@ QUICK = {
     "registry_utils/query_registry.py", "scripts/combine_specs.py",
     "scripts/derive_aliases_from_canonical.py", "testing/render_prompts.py",
     "pilot/pilot_report.py", "pilot/zero_shot_baseline.py", "testing/run_extraction.py",
+    "data_pipeline/ocr/mineru_config.py",
 }
 
 

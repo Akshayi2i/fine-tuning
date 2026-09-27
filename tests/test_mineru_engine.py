@@ -67,7 +67,8 @@ def _pdf(pages: int) -> bytes:
     pymupdf = pytest.importorskip("pymupdf")
     doc = pymupdf.open()
     for i in range(pages):
-        doc.new_page(width=612, height=792).insert_text((72, 72), f"page {i + 1}")
+        doc.new_page(width=612, height=792).insert_text(
+            (72, 72), f"page {i + 1} of a policy with a real text layer on it")
     return doc.tobytes()
 
 
@@ -115,6 +116,7 @@ def _fake_mineru(monkeypatch, content, *, scanned=False):
     for name, module in modules.items():
         monkeypatch.setitem(sys.modules, name, module)
     monkeypatch.setattr("common.gpu.require_cuda", lambda what: "NVIDIA H100")
+    monkeypatch.setattr("data_pipeline.ocr.mineru_config.assert_on_cuda", lambda path=None: None)
     return calls
 
 
@@ -127,7 +129,7 @@ def test_the_engine_returns_a_page_per_page_with_its_image(monkeypatch, scanned,
     assert pages[0].markdown.startswith("# COMMON POLICY DECLARATIONS")
     # An empty page is an OCR failure only on a scan; on a text layer it is blank.
     assert pages[1].ocr_failed is scanned and not pages[0].ocr_failed
-    assert all(p.scanned is scanned for p in pages)
+    assert not any(p.scanned for p in pages)          # every page has a text layer
     assert pages[2].table_row_count == 1
     assert all(p.image_bytes.startswith(b"\x89PNG") for p in pages)
 

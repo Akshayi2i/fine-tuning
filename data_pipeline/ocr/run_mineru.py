@@ -50,8 +50,8 @@ class PageOutput:
     image_bytes: bytes
     table_row_count: int = 0  # feeds the row-completeness signal (SPEC_09)
     ocr_failed: bool = False
-    #: MinerU's own classification of the DOCUMENT: OCR mode for a scan, text mode
-    #: for a text layer. Recorded as ``is_scanned``; the same on every page.
+    #: The page has no text layer (a scan). A document with any such page is
+    #: OCR'd whole and recorded as ``is_scanned``.
     scanned: bool = False
 
 
@@ -91,11 +91,14 @@ class MinerUEngine:
         if device != "cuda":
             raise OcrError(f"MinerU runs on the GPU only; device {device!r} is refused")
         from common.gpu import GPUError, require_cuda
+        from data_pipeline.ocr.mineru_config import MinerUConfigError, assert_on_cuda
         from data_pipeline.ocr.render_only import render_pdf_pages
 
         try:
             require_cuda("MinerU OCR")
-        except GPUError as exc:
+            # The GPU existing is not MinerU using it: its config decides.
+            assert_on_cuda()
+        except (GPUError, MinerUConfigError) as exc:
             raise OcrError(str(exc)) from exc
         try:
             from magic_pdf.config.enums import SupportedPdfParseMethod
@@ -110,15 +113,19 @@ class MinerUEngine:
             ) from exc
 
         images = render_pdf_pages(pdf_bytes, max_long_side_px)
+        text_layer = text_layer_pages(pdf_bytes)
         import json
         import tempfile
 
         with tempfile.TemporaryDirectory() as tmp:  # pragma: no cover - needs MinerU and a GPU
             writer = FileBasedDataWriter(tmp)
             dataset = PymuDocDataset(pdf_bytes)
-            # A text layer is read as text; a scan is OCR'd. MinerU decides, per
-            # document, from the embedded text — the same call on every document.
-            scanned = dataset.classify() == SupportedPdfParseMethod.OCR
+            # Text mode reads only a text layer. A MIXED document — typed
+            # declarations, scanned endorsements — classified as text left its
+            # scanned pages unread and unflagged, trained as blank. So any page
+            # without a text layer sends the whole document through OCR.
+            scanned = (dataset.classify() == SupportedPdfParseMethod.OCR
+                       or not all(text_layer))
             if scanned:
                 piped = dataset.apply(doc_analyze, ocr=True).pipe_ocr_mode(writer)
             else:
@@ -138,10 +145,22 @@ class MinerUEngine:
                 # page it is a blank or picture-only page, which is not. Either
                 # way the page is kept and built with the blank-page placeholder.
                 ocr_failed=scanned and not text.strip(),
-                scanned=scanned,
+                scanned=not text_layer[index],
             )
             for index, (text, image) in enumerate(zip(texts, images, strict=True))
         ]
+
+
+#: Characters of embedded text below which a page counts as having no text layer.
+TEXT_LAYER_MIN_CHARS = 30
+
+
+def text_layer_pages(pdf_bytes: bytes) -> list[bool]:
+    """Per page, whether the PDF carries a text layer (a digital page, not a scan)."""
+    import pymupdf
+
+    with pymupdf.open(stream=pdf_bytes, filetype="pdf") as doc:
+        return [len(page.get_text().strip()) >= TEXT_LAYER_MIN_CHARS for page in doc]
 
 
 def pages_from_content_list(blocks: Iterable[dict[str, Any]], page_count: int) -> list[str]:

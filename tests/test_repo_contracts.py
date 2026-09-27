@@ -79,6 +79,8 @@ def test_every_package_is_declared_for_packaging():
 LIBRARY_OWNED_VARS = frozenset({
     "HF_TOKEN", "HF_MODEL_REVISION", "WANDB_API_KEY", "MLFLOW_TRACKING_URI",
     "RUNPOD_ENDPOINT_ID",
+    # MinerU's own: the name of its config file under the home directory.
+    "MINERU_TOOLS_CONFIG_JSON",
 })
 
 

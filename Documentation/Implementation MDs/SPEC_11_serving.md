@@ -161,3 +161,8 @@ through the release `release_for` returned (it was a yes/no check whose answer w
 per-version calibration is needed only for a release without its own calibrators. An operator **pin**
 outranks line-scoped routing, so a rollback applies to every document of the type. Cold start no longer
 requires a unified run when releases are promoted. The plan's log lists line-scoped releases.
+
+**OCR pin at cold start**: the corpus manifest must still record `mineru_version`, but the version comparison
+runs only where MinerU is installed. A serving pod does no OCR (requests carry page texts produced by the pinned
+MinerU), and comparing against a MinerU it does not have refused every deployment. A real mismatch is a
+`ColdStartError`.

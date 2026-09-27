@@ -83,8 +83,14 @@ if role in ("ocr", "train", "serve", "quantize"):
 PY
 
 if [ "$role" = "ocr" ]; then
-  echo "Next: download MinerU's model weights (see the MinerU 1.x docs: download_models_hf.py),"
-  echo "which writes ~/magic-pdf.json. OCR fails at model load without them."
+  # MinerU takes its device from its own config, not from the GPU being there.
+  if [ -f "$HOME/${MINERU_TOOLS_CONFIG_JSON:-magic-pdf.json}" ]; then
+    python -m data_pipeline.ocr.mineru_config --cuda
+  else
+    echo "Next: download MinerU's model weights (see the MinerU 1.x docs: download_models_hf.py),"
+    echo "which writes ~/magic-pdf.json, then run: python -m data_pipeline.ocr.mineru_config --cuda"
+    echo "(MinerU's default device-mode is cpu; OCR refuses to run until it is cuda)."
+  fi
 fi
 if [ "$role" = "train" ] || [ "$role" = "serve" ]; then
   echo "Next: put the base model under /workspace/models (or set FIDEON_BASE_MODEL_DIR),"

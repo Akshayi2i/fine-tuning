@@ -418,6 +418,9 @@ def narrow(scope: Scope, doc_types: list[str] | tuple[str, ...] | None) -> Scope
         floors=dict(scope.floors),
         not_applicable_metrics=scope.not_applicable_metrics,
         long_doc_types=tuple(d for d in scope.long_doc_types if d in wanted),
+        # A line-scoped scope stays line-scoped: dropping this turned a narrowed
+        # personal_lines into a scope covering every line.
+        lines=scope.lines,
     )
 
 

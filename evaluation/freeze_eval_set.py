@@ -60,10 +60,28 @@ def manifest_key() -> str:
 
 
 def is_frozen(client: BlobClient) -> bool:
-    """Whether a golden eval set exists. Split assignment and exclusion key on it."""
+    """Whether the golden eval set is frozen: its manifest exists.
+
+    The manifest is written last, so it is the commit point. Keying on "any
+    golden.json exists" made an interrupted freeze (40 of 180 documents copied)
+    permanent — re-freezing was refused and the gate scored 40 documents.
+    """
+    return client.exists(manifest_key())
+
+
+def partial_freeze(client: BlobClient) -> dict[str, str]:
+    """Documents left by an interrupted freeze: ``{source_id: frozen_from_corpus}``."""
     from evaluation.run_eval import eval_set_source_ids
 
-    return bool(eval_set_source_ids(client))
+    if is_frozen(client):
+        return {}
+    root = paths.golden_eval_set_dir()
+    found = {}
+    for source_id in eval_set_source_ids(client):
+        key = f"{root}/{source_id}/metadata.json"
+        meta = client.read_json(key) if client.exists(key) else {}
+        found[source_id] = str(meta.get("frozen_from_corpus") or "unknown")
+    return found
 
 
 def frozen_manifest(client: BlobClient) -> dict[str, Any]:
@@ -89,6 +107,18 @@ def freeze_eval_set(
     from data_pipeline.dataset_builder.split_groups import line_of
     from data_pipeline.labeling.export_golden_labels import load_golden_label
 
+    partial = partial_freeze(client)
+    if partial and set(partial.values()) != {corpus_version}:
+        raise FreezeError(
+            f"an interrupted freeze left {len(partial)} document(s) in {paths.golden_eval_set_dir()}/ "
+            f"from corpus {sorted(set(partial.values()))}, not {corpus_version}. Delete that prefix "
+            "and freeze again, or re-run the freeze from the corpus it started from."
+        )
+    if partial:
+        log.warning(
+            "resuming an interrupted freeze from corpus %s: %d document(s) already copied are "
+            "copied again", corpus_version, len(partial),
+        )
     if is_frozen(client):
         existing = frozen_manifest(client)
         raise FreezeError(

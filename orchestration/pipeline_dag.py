@@ -733,7 +733,14 @@ def stage_dataset_build(ctx: StageContext) -> StageResult:
             d.source_id: d.field_provenance for d in documents if d.source_id in kept
         },
         split_assignment=assignment.as_dict(),
-        lob_by_source={d.source_id: d.lob for d in documents if d.source_id in kept},
+        # Policies only: a policy's line is metadata (a schema name). ACORD and
+        # Loss Run labels carry line_of_business themselves, and the importer copies
+        # it into their metadata — keying on "has a metadata lob" dropped them from
+        # the enum coverage and counted their values as policy lines.
+        lob_by_source={
+            d.source_id: d.lob for d in documents
+            if d.source_id in kept and d.doc_type == "policy"
+        },
         ocr_environment=ocr_environment,
         doc_types=sorted(by_type),
         seed=ctx.seed,

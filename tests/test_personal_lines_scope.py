@@ -118,6 +118,7 @@ def test_the_golden_eval_scores_only_the_scopes_lines(client, monkeypatch):
         client.write_json(f"{base}/metadata.json", {"doc_type": "policy", "lob": lob})
         client.write_bytes(f"{base}/page_1.png", b"png")
         client.write_json(f"{base}/golden.json", {})
+    client.write_json(f"{paths.golden_eval_set_dir()}/manifest.json", {"source_ids": ["h1", "g1", "n1"]})
     monkeypatch.setattr(golden_eval, "evaluate", fake_evaluate)
     monkeypatch.setattr("evaluation.run_eval.assert_eval_set_disjoint", lambda *a, **k: None)
     golden_eval.evaluate_version(client, object(), version="v2", corpus_version="v1", scope=PERSONAL)

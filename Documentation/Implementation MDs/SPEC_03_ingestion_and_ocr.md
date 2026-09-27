@@ -129,3 +129,11 @@ is an OCR failure only on a scan; on a text layer it is a blank or picture-only 
 document count as scanned (older metas fall back to "any failed page"). **HTML table rows are parsed**, not
 regex-matched: a row is a header only when it has header cells and no data cells (so row-header schedules
 count), and nested tables no longer cut the outer table short.
+
+**MinerU's own device setting** (`data_pipeline/ocr/mineru_config.py`): MinerU 1.x takes its device from
+`device-mode` in `~/magic-pdf.json` (file name overridable by `MINERU_TOOLS_CONFIG_JSON`), whose shipped default
+is `cpu` — a GPU being present does not make MinerU use it. The engine refuses unless the config says `cuda`;
+`python -m data_pipeline.ocr.mineru_config --cuda` sets it, and `setup_pod.sh ocr` runs that once the weights
+are downloaded. **Mixed documents**: any page without a text layer sends the whole document through OCR mode
+(text mode left scanned endorsement pages of a typed policy unread and unflagged); `scanned` is recorded per
+page and `is_scanned` is true when any page is a scan.

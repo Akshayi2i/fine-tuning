@@ -79,7 +79,7 @@ that works and checks CUDA afterwards:
 
 | Pod | Command | Installs |
 |---|---|---|
-| OCR (stage 2) | `bash scripts/setup_pod.sh ocr` | `requirements-ocr.txt`: MinerU 1.x (`magic-pdf[full]`) |
+| OCR (stage 2) | `bash scripts/setup_pod.sh ocr` | `requirements-ocr.txt`: MinerU 1.x (`magic-pdf[full]`); after downloading its weights, `python -m data_pipeline.ocr.mineru_config --cuda` (MinerU defaults to CPU) |
 | Training | `bash scripts/setup_pod.sh train` | `requirements-train.txt`: ms-swift, torch 2.8, **and vLLM** (checkpoint selection and calibration generate with it), then flash-attn built against that torch |
 | Serving | `bash scripts/setup_pod.sh serve` | `requirements-serve.txt`: vLLM 0.11.0, the same build the training pod calibrates with |
 | Quantization (only once FP8 is verified) | `bash scripts/setup_pod.sh quantize` | `requirements-quantize.txt`: llmcompressor, in its own environment (its `datasets`/`transformers` ranges conflict with ms-swift and vLLM) |
