@@ -22,6 +22,10 @@ def launched(monkeypatch):
     monkeypatch.setattr(detach.subprocess, "run", lambda cmd, check: calls.append(cmd))
     for var in ("RUNPOD_POD_ID", "TMUX", detach.DETACHED_ENV, detach.NO_DETACH_ENV):
         monkeypatch.delenv(var, raising=False)
+    # This machine is not the pod whatever it happens to have: pod signals come
+    # only from what each test sets.
+    monkeypatch.setattr(detach, "RUNPOD_ENV_FILE", Path("/nonexistent/rp_environment"))
+    monkeypatch.setattr(detach, "_is_linux", lambda: False)
     return calls
 
 

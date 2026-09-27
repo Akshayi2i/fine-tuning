@@ -190,6 +190,9 @@ def quantize(plan: QuantizationPlan, *, dry_run: bool = False) -> dict[str, str]
 
 def _export(plan: QuantizationPlan, fmt: ServingFormat) -> str:  # pragma: no cover - needs a GPU
     """One llm-compressor export, decoder only."""
+    from common.gpu import require_cuda
+
+    require_cuda(f"the {fmt} export")
     try:
         import llmcompressor  # noqa: F401
     except ImportError as exc:

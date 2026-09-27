@@ -34,10 +34,33 @@ DETACHED_ENV = "FIDEON_DETACHED"
 NO_DETACH_ENV = "FIDEON_NO_DETACH"
 #: RunPod sets this in every pod.
 POD_ENV = "RUNPOD_POD_ID"
+#: RunPod's copy of the pod environment, present even when a shell lacks it.
+RUNPOD_ENV_FILE = Path("/etc/rp_environment")
+#: The pod's network volume mount.
+WORKSPACE = Path("/workspace")
 
 
 def on_pod() -> bool:
-    return bool(os.environ.get(POD_ENV))
+    """Whether this is the RunPod pod.
+
+    ``RUNPOD_POD_ID`` first. It is set in the pod's own environment, but an SSH
+    session does not always inherit it, and a job started from a session that
+    misses it would run attached and die with the connection. So also: RunPod's
+    environment file, or — on Linux — ``/workspace`` MOUNTED as a volume on a
+    machine with a GPU. A mount, not merely a folder: a laptop with a GPU and a
+    ``workspace`` directory is not the pod.
+    """
+    from common.gpu import gpu_present
+
+    if os.environ.get(POD_ENV) or RUNPOD_ENV_FILE.exists():
+        return True
+    return _is_linux() and os.path.ismount(WORKSPACE) and gpu_present()
+
+
+def _is_linux() -> bool:
+    import sys
+
+    return sys.platform.startswith("linux")
 
 
 def already_safe() -> bool:

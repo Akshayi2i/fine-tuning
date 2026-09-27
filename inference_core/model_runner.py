@@ -229,6 +229,10 @@ class VLLMBackend(ModelBackend):
 
         from vllm import LLM
 
+        from common.gpu import require_cuda
+
+        require_cuda("the vLLM engine")
+
         # Checked where the engine is built, which is the only place the mode can
         # still be changed. The comment below used to claim this and nothing did.
         config.assert_logprobs_are_the_models_own()
@@ -415,6 +419,9 @@ class HFBackend(ModelBackend):
         import torch
         from transformers import AutoModelForVision2Seq, AutoProcessor
 
+        from common.gpu import require_cuda
+
+        require_cuda("the Hugging Face backend")
         base = self.resolved.get("merged_model") or self.resolved.get("base_model")
         if not base:
             raise ModelRunnerError(
@@ -422,7 +429,9 @@ class HFBackend(ModelBackend):
             )
 
         model = AutoModelForVision2Seq.from_pretrained(
-            base, torch_dtype=torch.bfloat16, device_map="auto", trust_remote_code=True,
+            # "cuda", not "auto": auto quietly offloads layers to the CPU when
+            # VRAM runs short, and every generation then crawls.
+            base, torch_dtype=torch.bfloat16, device_map="cuda", trust_remote_code=True,
         )
 
         # Foundation first, then the per-type LoRA on top — the order they were

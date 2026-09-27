@@ -114,6 +114,16 @@ name to confirm. The session stays open after the run ends so its output can be
 read. What a run does not survive is the pod itself stopping or restarting;
 then `status` says so, and `--from-stage` resumes from the last completed stage.
 
+## GPU only
+
+Every step that runs a model refuses to start without a CUDA device rather than
+fall back to the CPU (`common/gpu.py`): training, the merge, quantization, vLLM
+generation (checkpoint selection, calibration, the golden eval, serving), the
+Hugging Face backend and MinerU OCR. Models are placed with `device_map="cuda"`,
+never `"auto"`, which would quietly offload layers to the CPU when VRAM runs
+short. The error names the cause - a CPU-only torch build, or no visible GPU.
+What stays on the CPU has no GPU form: JSON, tokenizer counts, downloads.
+
 ## The eval set: freeze it once
 
 Train and val come from each corpus build. The promotion gate does NOT score the

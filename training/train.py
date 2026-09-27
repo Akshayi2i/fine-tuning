@@ -479,14 +479,13 @@ def assert_on_pod() -> None:
     # The mount the staging paths resolve under, however it is configured.
     mount = os.environ.get("RUNPOD_VOLUME_MOUNT", "/runpod-volume")
 
+    from common.gpu import GPUError, require_cuda
+
     problems = []
     try:
-        import torch
-
-        if not torch.cuda.is_available():
-            problems.append("no CUDA device is visible")
-    except ImportError:
-        problems.append("torch is not installed")
+        require_cuda("training")
+    except GPUError as exc:
+        problems.append(str(exc))
     if not Path(mount).is_dir():
         problems.append(f"the staging volume is not mounted at {mount}")
     # Configured but absent means ms-swift would fall back to the Hub and pull

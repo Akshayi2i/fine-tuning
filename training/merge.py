@@ -139,14 +139,18 @@ def merge(plan: MergePlan, *, dry_run: bool = False) -> str:
     if partial.exists():
         shutil.rmtree(partial)
 
+    from common.gpu import require_cuda
+
+    require_cuda("the merge")
     # The base in the merge dtype, never 4-bit: merging into quantized weights
-    # loses the precision the adapter was trained to add. On the CPU, because a
-    # merge is arithmetic, not inference, and the GPU may still hold an engine.
+    # loses the precision the adapter was trained to add. On the GPU: every
+    # engine is released before merge runs (orchestration.pipeline_dag), and an
+    # 8B merge on the CPU takes far longer for the same result.
     dtype = torch.bfloat16 if plan.dtype == "bf16" else torch.float16
     # The pod's local copy when there is one; the pinned Hub revision otherwise.
     source, source_revision = (str(local), None) if local is not None else (model_id, revision)
     base = AutoModelForImageTextToText.from_pretrained(  # pragma: no cover - needs weights
-        source, revision=source_revision, torch_dtype=dtype, device_map="cpu",
+        source, revision=source_revision, torch_dtype=dtype, device_map="cuda",
     )
     merged = PeftModel.from_pretrained(base, str(adapter)).merge_and_unload()
     merged.save_pretrained(str(partial), safe_serialization=True, max_shard_size="5GB")

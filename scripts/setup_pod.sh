@@ -21,7 +21,15 @@ cd "$(dirname "$0")/.."
 
 # On the pod, run detached in tmux: an install cut off halfway by a closed laptop
 # leaves a broken environment. pod_run.sh installs tmux itself if it is missing.
-if [ -n "${RUNPOD_POD_ID:-}" ] && [ -z "${TMUX:-}" ] && [ "${FIDEON_DETACHED:-}" != "1" ] \
+# The pod: RUNPOD_POD_ID (not always inherited by an SSH session), RunPod's
+# environment file, or on Linux /workspace mounted as a volume with a GPU present.
+on_pod=0
+if [ -n "${RUNPOD_POD_ID:-}" ] || [ -f /etc/rp_environment ] \
+   || { [ "$(uname -s)" = Linux ] && mountpoint -q /workspace 2>/dev/null \
+        && { [ -e /dev/nvidia0 ] || command -v nvidia-smi >/dev/null 2>&1; }; }; then
+  on_pod=1
+fi
+if [ "$on_pod" = 1 ] && [ -z "${TMUX:-}" ] && [ "${FIDEON_DETACHED:-}" != "1" ] \
    && [ "${FIDEON_NO_DETACH:-}" != "1" ]; then
   name="setup-${role}-$(date -u +%Y%m%d-%H%M%S)"
   bash scripts/pod_run.sh start "$name" -- bash scripts/setup_pod.sh "$role"
