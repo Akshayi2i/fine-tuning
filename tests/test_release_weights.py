@@ -78,3 +78,62 @@ def test_the_off_pod_override_is_explicit(monkeypatch):
 
     monkeypatch.setenv(train.OFF_POD_ENV, "1")
     train.assert_on_pod()
+
+
+# --------------------------------------------------------------------------
+# The base model is loaded from the pod's local copy
+# --------------------------------------------------------------------------
+
+
+def _write_model(directory: Path) -> Path:
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / "config.json").write_text("{}", encoding="utf-8")
+    return directory
+
+
+@pytest.mark.parametrize("layout", ["flat", "named", "hub_cache"])
+def test_the_base_is_found_under_the_models_directory(tmp_path, monkeypatch, layout):
+    from common.config import BASE_MODEL_DIR_ENV, base_model_dir, base_model_source
+
+    target = {
+        "flat": tmp_path,
+        "named": tmp_path / "Qwen3-VL-8B-Instruct",
+        "hub_cache": tmp_path / "models--Qwen--Qwen3-VL-8B-Instruct" / "snapshots" / "abc123",
+    }[layout]
+    _write_model(target)
+    monkeypatch.setenv(BASE_MODEL_DIR_ENV, str(tmp_path))
+    assert base_model_dir() == target
+    assert base_model_source() == str(target)
+
+
+def test_training_and_serving_load_the_local_copy(tmp_path, monkeypatch):
+    from common.config import BASE_MODEL_DIR_ENV
+    from registry_utils.query_registry import resolve_model_version
+    from training.train import build_training_config
+
+    local = _write_model(tmp_path / "Qwen3-VL-8B-Instruct")
+    monkeypatch.setenv(BASE_MODEL_DIR_ENV, str(tmp_path))
+    swift, _ = build_training_config(corpus_paths=["e1.jsonl", "e2.jsonl", "e3.jsonl"], output_dir="out",
+                                     val_paths=["val.jsonl"])
+    assert swift.args["model"] == str(local)
+    assert swift.args.get("model_revision") is None
+
+    client = BlobClient(backend=InMemoryBackend(), container="main", raw_container="raw")
+    assert resolve_model_version("base", client)["base_model"] == str(local)
+
+
+def test_without_local_weights_the_hub_id_is_the_fallback(tmp_path, monkeypatch):
+    from common.config import BASE_MODEL_DIR_ENV, base_model_config, base_model_source
+
+    monkeypatch.setenv(BASE_MODEL_DIR_ENV, str(tmp_path / "empty"))
+    assert base_model_source() == base_model_config()["model"]["model_id"]
+
+
+def test_a_real_launch_is_refused_when_the_configured_base_is_missing(tmp_path, monkeypatch):
+    from common.config import BASE_MODEL_DIR_ENV
+    from training import train
+
+    monkeypatch.delenv(train.OFF_POD_ENV, raising=False)
+    monkeypatch.setenv(BASE_MODEL_DIR_ENV, str(tmp_path / "nothing-here"))
+    with pytest.raises(train.TrainingError, match="no base model"):
+        train.assert_on_pod()

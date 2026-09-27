@@ -24,7 +24,6 @@ from typing import Any
 
 from artifact_registry import paths
 from artifact_registry.blob_client import BlobClient, BlobError
-from common.config import base_model_config
 from common.constants import ACTIVE_DOC_TYPES
 from common.run_ids import is_valid_run_id, lineage_of, version_of
 from registry_utils.models import RunManifest, RunStatus, RunType
@@ -188,8 +187,11 @@ def resolve_model_version(
     spot-checked with ``extract`` before ``package`` has published it.
     """
     tag = tag.strip().lower()
-    model_cfg = base_model_config().get("model", {})
-    base_ref = f"{model_cfg.get('model_id')}@{model_cfg.get('revision')}"
+    from common.config import base_model_source
+
+    # What vLLM and HF LOAD: the pod's local copy, else the Hub id. It used to
+    # be "model_id@revision" — an identity string no loader accepts as a path.
+    base_ref = base_model_source()
 
     if tag == "base":
         return ResolvedModel(

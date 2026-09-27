@@ -65,7 +65,24 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-MODEL_ID = "Qwen/Qwen3-VL-8B-Instruct"
+HUB_MODEL_ID = "Qwen/Qwen3-VL-8B-Instruct"
+
+
+def _model_source() -> str:
+    """The pod's local base (configs/base_model.yaml `local_dir`), else the Hub id.
+
+    The spike checks the weights training and serving will load, so it loads
+    them from the same place.
+    """
+    try:
+        from common.config import base_model_source
+
+        return base_model_source()
+    except Exception:  # noqa: BLE001 - the spike must start even without the repo on path
+        return HUB_MODEL_ID
+
+
+MODEL_ID = _model_source()
 
 
 @dataclass
@@ -449,7 +466,10 @@ def check_merger_module_names(r: Result) -> None:
 
     from huggingface_hub import hf_hub_download
 
-    index = hf_hub_download(MODEL_ID, "model.safetensors.index.json")
+    local_index = Path(MODEL_ID) / "model.safetensors.index.json"
+    index = local_index if local_index.is_file() else hf_hub_download(
+        HUB_MODEL_ID, "model.safetensors.index.json"
+    )
     keys = list(_json.loads(Path(index).read_text(encoding="utf-8"))["weight_map"])
     r.data["parameter_count"] = len(keys)
 

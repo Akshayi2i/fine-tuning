@@ -241,7 +241,12 @@ def test_resolve_base_returns_the_pinned_model_with_no_adapter(client):
     resolved = Q.resolve_model_version("base", client)
     assert resolved["kind"] == "base"
     assert resolved["foundation_adapter"] is None
-    assert "@" in resolved["base_model"]
+    # Something a loader can open — the pod's local copy or the Hub id — not the
+    # "model_id@revision" identity string, which vLLM cannot load.
+    from common.config import base_model_source
+
+    assert resolved["base_model"] == base_model_source()
+    assert "@" not in resolved["base_model"]
 
 
 def test_staged_version_resolves_to_the_volume_not_blob(client):

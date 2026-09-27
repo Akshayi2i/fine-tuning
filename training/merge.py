@@ -113,8 +113,11 @@ def merge(plan: MergePlan, *, dry_run: bool = False) -> str:
             f"{adapter} holds no adapter_config.json, so there is no adapter to merge. Point "
             "the merge at a checkpoint directory ms-swift wrote (checkpoint-N), not its root."
         )
+    from common.config import base_model_dir
+
     model_id, revision = _split_ref(plan.base_model)
-    if revision in (None, "", "PIN_ME"):
+    local = base_model_dir()
+    if local is None and revision in (None, "", "PIN_ME"):
         raise MergeError(
             f"the base model revision is {revision!r}. Merging into a floating revision folds "
             "the adapter into weights that may not be the ones it trained against; pin "
@@ -140,14 +143,16 @@ def merge(plan: MergePlan, *, dry_run: bool = False) -> str:
     # loses the precision the adapter was trained to add. On the CPU, because a
     # merge is arithmetic, not inference, and the GPU may still hold an engine.
     dtype = torch.bfloat16 if plan.dtype == "bf16" else torch.float16
+    # The pod's local copy when there is one; the pinned Hub revision otherwise.
+    source, source_revision = (str(local), None) if local is not None else (model_id, revision)
     base = AutoModelForImageTextToText.from_pretrained(  # pragma: no cover - needs weights
-        model_id, revision=revision, torch_dtype=dtype, device_map="cpu",
+        source, revision=source_revision, torch_dtype=dtype, device_map="cpu",
     )
     merged = PeftModel.from_pretrained(base, str(adapter)).merge_and_unload()
     merged.save_pretrained(str(partial), safe_serialization=True, max_shard_size="5GB")
     # The processor travels with the weights: vLLM reads the chat template and the
     # image processor config from the model directory it is pointed at.
-    AutoProcessor.from_pretrained(model_id, revision=revision).save_pretrained(str(partial))
+    AutoProcessor.from_pretrained(source, revision=source_revision).save_pretrained(str(partial))
 
     if not (partial / "config.json").is_file() or not any(partial.glob("*.safetensors")):
         raise MergeError(f"the merge wrote no config or weights to {partial}")

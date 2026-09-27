@@ -39,6 +39,8 @@ from artifact_registry import paths
 from artifact_registry.blob_client import BlobClient
 from common.config import (
     base_model_config,
+    base_model_dir,
+    base_model_source,
     sequence_for_task,
     training_config,
     validate_all,
@@ -220,8 +222,10 @@ def build_training_config(
     args: dict[str, Any] = {
         # No model_type: ms-swift 3 infers it from the checkpoint, and the 2.x
         # name "qwen3-vl-8b-instruct" is not one it registers.
-        "model": base["model"]["model_id"],
-        "model_revision": base["model"]["revision"],
+        # The pod's local copy (configs/base_model.yaml `local_dir`). A revision
+        # means nothing to a directory, so it is passed only for a Hub id.
+        "model": base_model_source(),
+        "model_revision": None if base_model_dir() else base["model"]["revision"],
         # From the Hugging Face hub, not ModelScope (ms-swift's default): the
         # pinned revision is a Hugging Face commit, and the tokenizer the
         # pre-launch length check loads, serving and the manifest all assume it.
@@ -485,6 +489,13 @@ def assert_on_pod() -> None:
         problems.append("torch is not installed")
     if not Path(mount).is_dir():
         problems.append(f"the staging volume is not mounted at {mount}")
+    # Configured but absent means ms-swift would fall back to the Hub and pull
+    # 16 GB onto the pod — at whatever revision is current, not the pinned one.
+    local_dir = os.environ.get("FIDEON_BASE_MODEL_DIR") or base_model_config()["model"].get(
+        "local_dir"
+    )
+    if local_dir and base_model_dir() is None:
+        problems.append(f"no base model (a config.json) was found under {local_dir}")
     if problems:
         raise TrainingError(
             "refusing to launch training here: " + "; ".join(problems) + ". Run it on the "
@@ -658,6 +669,8 @@ def _token_counter():
     from training.length_check import tokenizer_counter
 
     model = base_model_config()["model"]
+    if base_model_dir() is not None:
+        return tokenizer_counter(base_model_source())
     return tokenizer_counter(model["model_id"], model.get("revision"))
 
 

@@ -7,6 +7,14 @@ model:
   model_id: "Qwen/Qwen3-VL-8B-Instruct"
   revision: "PIN_ME"                    # TODO Phase 0: set to a concrete commit SHA
   trust_remote_code: true
+  # Where the pod holds the base weights. Everything that LOADS the base reads
+  # them from here — training, the tokenizer, the merge, vLLM — and never from
+  # the Hub. The directory may hold the model itself (config.json at its root),
+  # a folder named after it (Qwen3-VL-8B-Instruct/ or Qwen/Qwen3-VL-8B-Instruct/),
+  # or a Hugging Face cache (models--Qwen--Qwen3-VL-8B-Instruct/snapshots/<sha>).
+  # FIDEON_BASE_MODEL_DIR overrides it. model_id and revision above remain the
+  # model's IDENTITY, recorded in every manifest.
+  local_dir: "/workspace/models"
 
 # Base precision (arch 9). DEFAULT: LoRA on a bf16 base - the base is held in
 # bf16 and never updated; only the LoRA adapters train. This is behavior/format

@@ -74,6 +74,46 @@ def base_model_config() -> dict[str, Any]:
     return load_yaml(BASE_MODEL_CONFIG)
 
 
+#: Overrides ``model.local_dir`` in base_model.yaml.
+BASE_MODEL_DIR_ENV = "FIDEON_BASE_MODEL_DIR"
+
+
+def base_model_dir() -> Path | None:
+    """The local directory holding the base weights, or ``None`` if there is none.
+
+    Looked for under ``model.local_dir`` (or ``$FIDEON_BASE_MODEL_DIR``): the
+    directory itself, a folder named after the model, or a Hugging Face cache
+    snapshot — the pinned revision's when it is there. A directory counts only
+    if it holds a ``config.json``.
+    """
+    model = base_model_config()["model"]
+    root_setting = os.environ.get(BASE_MODEL_DIR_ENV) or model.get("local_dir")
+    if not root_setting:
+        return None
+    root = Path(root_setting)
+    model_id = str(model["model_id"])
+    candidates = [root, root / model_id.rsplit("/", 1)[-1], root / model_id]
+    snapshots = root / f"models--{model_id.replace('/', '--')}" / "snapshots"
+    if snapshots.is_dir():
+        pinned = snapshots / str(model.get("revision", ""))
+        candidates += [pinned, *sorted(p for p in snapshots.iterdir() if p.is_dir())]
+    for candidate in candidates:
+        if (candidate / "config.json").is_file():
+            return candidate
+    return None
+
+
+def base_model_source() -> str:
+    """What to LOAD the base from: the local directory, else the Hub id.
+
+    The Hub id is the fallback for a machine without the weights (a laptop dry
+    run, CI). A real launch never reaches it: ``training.train.assert_on_pod``
+    refuses to start while ``local_dir`` is configured and holds no model.
+    """
+    local = base_model_dir()
+    return str(local) if local is not None else str(base_model_config()["model"]["model_id"])
+
+
 @lru_cache(maxsize=1)
 def serving_config() -> dict[str, Any]:
     return load_yaml(SERVING_CONFIG)
