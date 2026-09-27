@@ -262,3 +262,37 @@ def prompt_versions(
         "prompt_template_version": PROMPT_TEMPLATE_VERSION,
         "schema_version": schema_version(doc_type, acord_form, lob),
     }
+
+
+def prompt_input_files() -> list[Path]:
+    """Every file that shapes what the model is shown, in a fixed order.
+
+    The templates (the per-doc-type ones in ``prompts/doc_types/`` included),
+    the schemas the prompt embeds — ours and the client's canonical files — and
+    the section map that slices a policy into windows. The release hash used to
+    cover the top-level templates alone, so an edit to ``policy.jinja``, a
+    canonical schema or a section group changed every served prompt and left
+    the hash — the one thing meant to notice — exactly as it was.
+    """
+    from common.config import CONFIG_DIR
+    from common.schemas import CANONICAL_DIR, SCHEMA_DIR
+
+    return (
+        sorted(PROMPT_DIR.rglob("*.jinja"))
+        + sorted(SCHEMA_DIR.glob("*.json"))
+        + sorted(CANONICAL_DIR.glob("*.json"))
+        + [CONFIG_DIR / "schema_sections.yaml"]
+    )
+
+
+def prompt_hash() -> str:
+    """SHA-256 over :func:`prompt_input_files`, each keyed by its repo path."""
+    import hashlib
+
+    root = PROMPT_DIR.parent
+    digest = hashlib.sha256()
+    for path in prompt_input_files():
+        digest.update(path.relative_to(root).as_posix().encode())
+        digest.update(b"\0")
+        digest.update(path.read_bytes())
+    return digest.hexdigest()

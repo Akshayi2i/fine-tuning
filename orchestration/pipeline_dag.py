@@ -429,7 +429,23 @@ def load_labeled_documents(ctx: StageContext) -> list[Any]:
                 log.warning("%s is labeled but not OCR'd — skipping; re-run stage 2", source_id)
                 continue
             ocr_meta = ctx.client.read_json(meta_key)
-            page_count = int(ocr_meta.get("page_count", 1))
+            if ocr_meta.get("render_only"):
+                # Rendered for labeling, never OCR'd: there is no page text. Built
+                # into ocr_plus_image rows it would teach the model that every page
+                # of a document can be blank while the image is full of values.
+                log.warning(
+                    "%s was rendered but never OCR'd (render_only) — skipping; run OCR (stage 2) "
+                    "to train on it", source_id,
+                )
+                continue
+            # No default. Assuming one page made a document whose meta lost its
+            # count train on page 1 alone, against a label for every page.
+            page_count = int(ocr_meta.get("page_count") or 0)
+            if page_count < 1:
+                log.warning(
+                    "%s records no pages in its OCR meta — skipping; re-run stage 2", source_id
+                )
+                continue
 
             documents.append(SourceDocument(
                 source_id=source_id,
@@ -464,20 +480,25 @@ def load_labeled_documents(ctx: StageContext) -> list[Any]:
 def _declared_carrier(label: dict[str, Any]) -> str | None:
     """The carrier the label names. ACORD 25 lists insurers instead; its first
     one is the carrier the certificate is primarily about. A canonical policy
-    label holds it as ``carrier.company_name``, inside an envelope."""
+    label holds it as ``carrier.company_name``, inside an envelope.
+
+    Normalised (:func:`common.normalize.normalize_carrier`): the split holds a
+    carrier out by this key, and one insurer written three ways was three.
+    """
     from common.canonical import values_view
+    from common.normalize import normalize_carrier
 
     label = values_view(label)
     carrier = label.get("carrier")
     if isinstance(carrier, dict):
         carrier = carrier.get("company_name")
     if isinstance(carrier, str) and carrier.strip():
-        return carrier
+        return normalize_carrier(carrier)
     insurers = label.get("insurers")
     if isinstance(insurers, list) and insurers and isinstance(insurers[0], dict):
         name = insurers[0].get("name")
         if isinstance(name, str) and name.strip():
-            return name
+            return normalize_carrier(name)
     return None
 
 
@@ -491,6 +512,37 @@ def _declared_account(label: dict[str, Any]) -> str | None:
     named = label.get("named_insured")
     account = named.get("primary_name") if isinstance(named, dict) else label.get("insured_name")
     return account if isinstance(account, str) and account.strip() else None
+
+
+def group_records(documents: list[Any]) -> dict[str, list[Any]]:
+    """One :class:`GroupRecord` per family, per doc type, sorted by group id."""
+    from data_pipeline.dataset_builder.split_groups import GroupRecord
+
+    # One GroupRecord per family, per doc type. A document with no detected
+    # family is its own group — which reproduces the v1 per-document behaviour
+    # for that document rather than leaving it unassigned.
+    records: dict[str, dict[str, GroupRecord]] = {}
+    for document in documents:
+        per_type = records.setdefault(document.doc_type, {})
+        record = per_type.get(document.family)
+        if record is None:
+            per_type[document.family] = GroupRecord(
+                group_id=document.family,
+                doc_type=document.doc_type,
+                source_ids=[document.source_id],
+                carrier=document.carrier,
+                synthetic=document.synthetic,
+            )
+        else:
+            record.source_ids.append(document.source_id)
+            # One synthetic member pins the whole family to train. A family moves
+            # as a unit, so a mixed family made splittable — which `and` did,
+            # while this comment claimed the opposite — could land in val or
+            # test with its generated labels, and eval would score the
+            # generator. The real members cost nothing: they still train.
+            record.synthetic = record.synthetic or document.synthetic
+
+    return {dt: sorted(v.values(), key=lambda r: r.group_id) for dt, v in records.items()}
 
 
 def assign_document_groups(ctx: StageContext, documents: list[Any]) -> dict[str, Any]:
@@ -566,35 +618,13 @@ def stage_dataset_build(ctx: StageContext) -> StageResult:
         write_jsonl,
     )
     from data_pipeline.dataset_builder.sample_modes import assert_mix_is_close, sample_modes
-    from data_pipeline.dataset_builder.split_groups import GroupRecord, assign_group_splits
+    from data_pipeline.dataset_builder.split_groups import assign_group_splits
 
     documents = load_labeled_documents(ctx)
     if not documents:
         raise PipelineError("no labeled, OCR'd documents to build a corpus from")
 
-    # One GroupRecord per family, per doc type. A document with no detected
-    # family is its own group — which reproduces the v1 per-document behaviour
-    # for that document rather than leaving it unassigned.
-    records: dict[str, dict[str, GroupRecord]] = {}
-    for document in documents:
-        per_type = records.setdefault(document.doc_type, {})
-        record = per_type.get(document.family)
-        if record is None:
-            per_type[document.family] = GroupRecord(
-                group_id=document.family,
-                doc_type=document.doc_type,
-                source_ids=[document.source_id],
-                carrier=document.carrier,
-                synthetic=document.synthetic,
-            )
-        else:
-            record.source_ids.append(document.source_id)
-            # A family is synthetic only if every member is. One real document in
-            # the group makes the whole group splittable, which is the safe
-            # direction: it keeps generated labels out of val and test.
-            record.synthetic = record.synthetic and document.synthetic
-
-    by_type = {dt: sorted(v.values(), key=lambda r: r.group_id) for dt, v in records.items()}
+    by_type = group_records(documents)
     assignment = assign_group_splits(by_type, seed=ctx.seed)
     # One modality draw per train document per epoch (arch v2.1 §6.1). This is
     # the only sampling step: v1's down-sampler discarded rows to fix a 33/33/33
@@ -602,6 +632,20 @@ def stage_dataset_build(ctx: StageContext) -> StageResult:
     modes = sample_modes(train_source_ids(documents, assignment), seed=ctx.seed)
     assert_mix_is_close(modes)
     built = build_corpus(documents, assignment, seed=ctx.seed, mode_assignment=modes)
+    # Refused before anything is written. An epoch file of zero rows trains
+    # nothing, and the run would still record a corpus version as built.
+    missing = [s for s in ("train", "val", "test") if not built.rows_by_split.get(s)]
+    if missing and ctx.dry_run and "train" not in missing:
+        # A fixture-sized dry-run corpus is too small to fill every split; a real
+        # build is refused below, and training refuses a run with no val anyway.
+        log.warning("corpus %s has no %s rows (dry run, not refused)", ctx.corpus, missing)
+    elif missing:
+        why = built.cap_report.warning() or "see the build log for rejections"
+        raise PipelineError(
+            f"corpus {ctx.corpus} has no {'/'.join(missing)} rows from {len(documents)} loaded "
+            f"document(s) ({why}). Training needs all three: train to learn from, val to select "
+            "a checkpoint and fit calibration, test for the gate. Nothing was written."
+        )
 
     # Written where training reads them: one file per epoch, one per eval split,
     # all doc types together — one adapter trains on every type (§8.1).
@@ -632,6 +676,7 @@ def stage_dataset_build(ctx: StageContext) -> StageResult:
             d.source_id: d.field_provenance for d in documents if d.source_id in kept
         },
         split_assignment=assignment.as_dict(),
+        lob_by_source={d.source_id: d.lob for d in documents if d.source_id in kept},
         ocr_environment=ocr_environment,
         doc_types=sorted(by_type),
         seed=ctx.seed,
@@ -732,22 +777,29 @@ def stage_training(ctx: StageContext) -> StageResult:
             staged = paths.scoped_staging_adapter_dir(ctx.scope.name, ctx.out_version)
             ctx.checkpoints, ctx.best_loss_checkpoint = discover_checkpoints(staged)
             if not ctx.checkpoints:
-                log.warning(
-                    "training finished but no checkpoint-* directory was found under %s, so "
-                    "checkpoint selection will be skipped. Check save_steps.", staged,
+                # A failure, not a warning. ms-swift exiting 0 is not evidence
+                # that an adapter exists: zero steps (a resume past max_steps, a
+                # tiny corpus) exits cleanly too, and merge would then fall back
+                # to the output root, which holds no adapter at all.
+                raise PipelineError(
+                    f"training for {manifest.run_id} exited cleanly but wrote no checkpoint "
+                    f"under {staged}, so there is no adapter to select or merge. Check the "
+                    "ms-swift log for the step count."
                 )
         # The staging volume is where merge, quantize and push look for the
         # weights. Without this mark the artifacts exist and the pipeline cannot
         # find them.
         ctx.volume.mark(paths.scoped_staging_adapter_dir(ctx.scope.name, ctx.out_version))
 
-    if ctx.push_adapters:
+    if ctx.push_adapters and not ctx.dry_run:
         # Belt and braces: the adapter is tens of MB, so pushing it now costs
-        # little and means a reclaimed volume loses only the merged model.
+        # little and means a reclaimed volume loses only the merged model. The
+        # adapter itself — the checkpoint that loss preferred, or the last one —
+        # not the placeholder note this used to write in its place.
+        adapter = ctx.best_loss_checkpoint or ctx.checkpoints[-1]
         blob_dir = paths.scoped_adapter_dir(ctx.scope.name, ctx.out_version)
-        ctx.client.write_json(
-            f"{blob_dir}/adapter_placeholder.json", {"staged_copy_of": manifest.run_id}
-        )
+        pushed = ctx.client.upload_dir(adapter, blob_dir)
+        log.info("pushed %d adapter file(s) from %s -> %s", pushed, adapter, blob_dir)
 
     return StageResult(
         "training", "completed",
@@ -765,6 +817,21 @@ def stage_training(ctx: StageContext) -> StageResult:
 # --------------------------------------------------------------------------
 
 
+def _rediscover_checkpoints(ctx: StageContext) -> None:
+    """Fill ``ctx.checkpoints`` from the staging volume when this process did
+    not train. ``--from-stage checkpoint_eval``, ``--from-stage merge`` and a
+    training stage skipped as already complete all left it empty, so checkpoint
+    selection "skipped" and merge fell back to the ms-swift output root — which
+    holds a ``v0-<timestamp>/`` directory, not a loadable adapter."""
+    if ctx.dry_run or ctx.checkpoints:
+        return
+    from evaluation.checkpoint_eval import discover_checkpoints
+
+    staged = paths.scoped_staging_adapter_dir(ctx.scope.name, ctx.out_version)
+    if Path(staged).is_dir():
+        ctx.checkpoints, ctx.best_loss_checkpoint = discover_checkpoints(staged)
+
+
 def stage_checkpoint_eval(ctx: StageContext) -> StageResult:
     """Pick the checkpoint that ships, by GENERATED field F1.
 
@@ -780,6 +847,7 @@ def stage_checkpoint_eval(ctx: StageContext) -> StageResult:
     """
     from evaluation.checkpoint_eval import CheckpointEvalError, select_best
 
+    _rediscover_checkpoints(ctx)
     checkpoints = sorted(ctx.checkpoints or [])
     if not checkpoints:
         return StageResult(
@@ -801,6 +869,7 @@ def stage_checkpoint_eval(ctx: StageContext) -> StageResult:
             val_path=paths.corpus_scope_eval_split(
                 ctx.corpus, "val", ctx.scope.name, ctx.tenant_id
             ),
+            images_root=paths.staging_train_images_dir(ctx.corpus, ctx.tenant_id),
         )
 
     try:
@@ -810,6 +879,11 @@ def stage_checkpoint_eval(ctx: StageContext) -> StageResult:
             f"no checkpoint could be selected for {ctx.out_version}: {exc}. Merging an "
             "arbitrary one would ship a model nobody measured."
         ) from exc
+    finally:
+        # The base engine is done once selection is; merge and calibration need
+        # the card for the next model.
+        if callable(getattr(scorer, "close", None)):
+            scorer.close()
 
     ctx.client.write_json(
         paths.checkpoint_selection(ctx.out_version, scope=ctx.scope.name), report.as_dict()
@@ -919,12 +993,31 @@ def eval_report_metrics(ctx: StageContext) -> dict[str, Any]:
             log.info("gate metrics read from %s", summary_key)
             return dict(metrics)
 
-    raise PipelineError(
-        f"no eval report at {summary_key}, and scoring the candidate needs the model on a GPU "
-        "(evaluation/run_eval.py, still waiting on a live backend). Run the eval pass and write "
-        "its report, or pass a metrics_provider explicitly. The gate will not judge a candidate "
-        "on metrics nobody measured."
-    )
+    if ctx.dry_run:
+        raise PipelineError(
+            f"no eval report at {summary_key}, and a dry run loads no model to produce one. "
+            "The gate will not judge a candidate on metrics nobody measured."
+        )
+
+    # No report yet: produce it. The frozen golden set goes through the serving
+    # pipeline with the merged bf16 model and the release's own bf16 calibrators,
+    # so the gate measures what production would serve — windows, merge, date
+    # post-process and calibrated confidence included.
+    from evaluation.golden_eval import evaluate_version
+    from inference_core.model_runner import release_model
+
+    loader = ctx.serving_model_loader or _staged_serving_model
+    model = loader(ctx, "bf16")
+    try:
+        report = evaluate_version(
+            ctx.client, model,
+            version=ctx.out_version, corpus_version=ctx.corpus, scope=ctx.scope,
+            tenant_id=ctx.tenant_id,
+            calibrators=ctx.calibrators.get("bf16"), thresholds=ctx.thresholds.get("bf16"),
+        )
+    finally:
+        release_model(model)
+    return dict(report.get("gate_metrics") or {})
 
 
 def default_baseline_metrics(ctx: StageContext) -> dict[str, Any] | None:
@@ -1082,6 +1175,22 @@ def _is_merged(ctx: StageContext) -> bool:
     return ctx.volume.exists(paths.staging_merged_model_dir(ctx.out_version, scope=ctx.scope.name))
 
 
+def selected_checkpoint(ctx: StageContext) -> str | None:
+    """The checkpoint the §11.2 selector picked, from this process or from Blob.
+
+    ONE reader for merge and package: the adapter published must be the one
+    merged. A resumed process (``--from-stage merge`` or ``package``) did not run
+    checkpoint_eval, but an earlier one did and wrote its choice down.
+    """
+    selection = ctx.results.get("checkpoint_eval")
+    selected = (selection.data or {}).get("selected") if selection else None
+    if selected is None:
+        key = paths.checkpoint_selection(ctx.out_version, scope=ctx.scope.name)
+        if ctx.client.exists(key):
+            selected = ctx.client.read_json(key).get("selected")
+    return selected
+
+
 def stage_merge(ctx: StageContext) -> StageResult:
     """PEFT ``merge_and_unload()`` — ONE adapter into the bf16 base.
 
@@ -1095,10 +1204,12 @@ def stage_merge(ctx: StageContext) -> StageResult:
     from training.merge import merge, plan_merge
 
     base = base_model_config()["model"]
-    # The checkpoint the §11.2 selector picked, when checkpoint_eval ran. Falling
-    # back to the staged adapter directory is what `--from-stage merge` does.
-    selection = ctx.results.get("checkpoint_eval")
-    selected = (selection.data or {}).get("selected") if selection else None
+    selected = selected_checkpoint(ctx)
+    if selected is None and not ctx.dry_run:
+        raise PipelineError(
+            f"no checkpoint was selected for {ctx.out_version}: run checkpoint_eval first. "
+            "Merging the ms-swift output root would merge a directory with no adapter in it."
+        )
 
     plan = plan_merge(
         base_model=f"{base['model_id']}@{base['revision']}",
@@ -1160,6 +1271,7 @@ def stage_quantize(ctx: StageContext) -> StageResult:
         version=ctx.out_version,
         formats=ctx.formats,
         fp8_verified=ctx.fp8_verified,
+        scope=ctx.scope.name,
     )
     outputs = quantize(plan, dry_run=ctx.dry_run)
     for fmt, directory in outputs.items():
@@ -1223,22 +1335,39 @@ def collect_calibration_samples(ctx: StageContext) -> dict[str, Any]:
     every real run — every field of every release routed to review.
     """
     from evaluation.validation_generation import (
+        assert_generations_usable,
         calibration_samples,
         generate_validation,
         read_rows,
     )
+    from inference_core.model_runner import release_model
 
     val_key = paths.corpus_scope_eval_split(ctx.corpus, "val", ctx.scope.name, ctx.tenant_id)
     if not ctx.client.exists(val_key):
         log.warning("no validation split at %s; nothing to calibrate on", val_key)
         return {}
     rows = read_rows(ctx.client.read_text(val_key))
+    if ctx.serving_model_loader is None:
+        # The real vLLM path opens images by local path; the rows hold Blob keys.
+        from training.stage_data import localize_rows
+
+        rows = localize_rows(
+            rows, ctx.client, paths.staging_train_images_dir(ctx.corpus, ctx.tenant_id)
+        )
     loader = ctx.serving_model_loader or _staged_serving_model
 
     samples: dict[str, Any] = {}
     formats = ["bf16"] if ctx.skip_quantize else list(ctx.formats)
     for fmt in formats:
-        halves = calibration_samples(generate_validation(rows, loader(ctx, fmt)))
+        # One engine at a time: each format's model is freed before the next
+        # loads, or the second format finds the card still full of the first.
+        model = loader(ctx, fmt)
+        try:
+            generations = generate_validation(rows, model)
+        finally:
+            release_model(model)
+        assert_generations_usable(generations, what=f"calibration ({fmt})")
+        halves = calibration_samples(generations)
         # Only a format with evidence gets an entry. An empty entry reads as
         # "samples supplied" and would fit a calibrator on nothing.
         if any(halves.values()):
@@ -1385,6 +1514,32 @@ def assert_release_id(ctx: StageContext) -> None:
     )
 
 
+def assert_gate_passed(ctx: StageContext) -> None:
+    """Refuse to package a version whose promotion gate did not pass.
+
+    ``finetune`` stops at a blocked gate, but ``package`` is its own command and
+    read nothing the gate wrote — so a blocked version could be published by
+    running package next. The recorded decision is the authority; an override is
+    already folded into its ``passed``.
+    """
+    key = paths.gate_decision(ctx.out_version, scope=ctx.scope.name)
+    if not ctx.client.exists(key):
+        if ctx.dry_run:
+            log.warning("no gate decision at %s; a dry run packages without one", key)
+            return
+        raise PipelineError(
+            f"no gate decision at {key}, so {ctx.out_version} was never judged. Run the "
+            "evaluation gate (`finetune --from-stage evaluation_gate`) before packaging."
+        )
+    decision = ctx.client.read_json(key)
+    if not decision.get("passed"):
+        raise PipelineError(
+            f"{ctx.out_version} did not pass its promotion gate (failed: "
+            f"{decision.get('failed_gates')}), so it is not packaged. Fix the model, or record a "
+            "written override through the gate (arch v2.1 §15.5) — not by running package."
+        )
+
+
 def assert_staged(ctx: StageContext) -> None:
     """Fail loudly, with remediation, when the version is not on the volume."""
     if ctx.from_blob:
@@ -1421,7 +1576,7 @@ def build_release_bundle(ctx: StageContext) -> tuple[Any, list[str]]:
     record claim a guarantee nobody measured.
     """
     from common.config import base_model_config
-    from common.prompts import PROMPT_DIR
+    from common.prompts import prompt_hash
     from registry_utils.models import GateOverride, ReleaseBundle
 
     root = Path(__file__).resolve().parent.parent
@@ -1435,9 +1590,15 @@ def build_release_bundle(ctx: StageContext) -> tuple[Any, list[str]]:
         else paths.quantized_model_dir(ctx.out_version, fmt, scope=ctx.scope.name)
         for fmt in formats
     }
+    # In memory when calibrate ran in this process; in Blob when package runs on
+    # its own (`package`, or a resumed `--from-stage package`). Reading memory
+    # alone marked every resumed release "gated: no calibrator" although the
+    # calibrators it points at were written by the earlier run.
     calibrators = {
         fmt: paths.release_calibrators(ctx.release_id, fmt, ctx.tenant_id)
-        for fmt in formats if fmt in ctx.calibrators
+        for fmt in formats
+        if fmt in ctx.calibrators
+        or ctx.client.exists(paths.release_calibrators(ctx.release_id, fmt, ctx.tenant_id))
     }
     gate_reports = {
         fmt: paths.release_gate_decision(ctx.release_id, fmt, ctx.tenant_id)
@@ -1485,7 +1646,7 @@ def build_release_bundle(ctx: StageContext) -> tuple[Any, list[str]]:
             serving_formats=serving_formats,
             calibrators=calibrators,
             gate_reports=gate_reports,
-            prompt_hash=_file_hash(*sorted(Path(PROMPT_DIR).glob("*.jinja"))),
+            prompt_hash=prompt_hash(),
             schema_versions={
                 str(k): str(v) for k, v in (corpus_manifest.get("schema_versions") or {}).items()
             },
@@ -1530,31 +1691,10 @@ def _clear_staged_scope(ctx: StageContext) -> int:
     return sum(ctx.volume.clear(path) for path in owned)
 
 
-def stage_push(ctx: StageContext) -> StageResult:
-    """Copy adapters, merged model and quantized models into Blob, then flip the
-    manifest from ``staged`` to ``published``.
-
-    The layouts mirror each other deliberately (SPEC_13 §3), so this copies
-    rather than translates — a translation step is where a path convention drifts
-    between the two stores and an artifact becomes unfindable.
-    """
-    from registry_utils.query_registry import get as get_manifest
-    from registry_utils.query_registry import list_runs
-    from registry_utils.write_run_manifest import mark_published
-
-    assert_staged(ctx)
-    pushed: dict[str, str] = {}
-
-    # ONE adapter and ONE merged model (arch v2.1 §4.1). v1 fanned this out per
-    # document type; that topology is gone, because vLLM applies one LoRA per
-    # request and a Foundation plus a per-type adapter could never both be
-    # active. A graduated per-type adapter (§4.2) is published by its own run,
-    # not by this one.
-    #
-    # Through the SPEC_02 §3 helper's path, never assembled here. The only place
-    # that built these inline is the place that published a Foundation against
-    # paths that were never produced.
+def _record_dry_run_push(ctx: StageContext) -> dict[str, str]:
+    """A dry run trained nothing, so it records where each artifact WOULD go."""
     scope = ctx.scope
+    pushed: dict[str, str] = {}
     blob_dir = paths.scoped_adapter_dir(scope.name, ctx.out_version)
     ctx.client.write_json(f"{blob_dir}/adapter_config.json", {
         "version": ctx.out_version,
@@ -1574,7 +1714,76 @@ def stage_push(ctx: StageContext) -> StageResult:
             quant_dir = paths.quantized_model_dir(ctx.out_version, fmt, scope=scope.name)
             ctx.client.write_json(f"{quant_dir}/config.json", {"format": fmt})
             pushed[f"quantized:{scope.name}:{fmt}"] = quant_dir
+    return pushed
 
+
+def _push_weights(ctx: StageContext) -> dict[str, str]:
+    """Upload the adapter, the merged model and each quantized format to Blob.
+
+    Package used to write a one-line JSON at each destination — a placeholder
+    ``adapter_config.json`` and ``config.json`` — and publish the run against
+    them, so a "published" release pointed serving at prefixes holding no
+    weights. Every upload goes through :mod:`artifact_registry.transfer`, which
+    refuses a missing source directory rather than creating an empty prefix.
+    """
+    from artifact_registry.transfer import push_merged_model, push_quantized, push_scoped_adapter
+
+    scope = ctx.scope
+    adapter = selected_checkpoint(ctx) or paths.scoped_staging_adapter_dir(
+        scope.name, ctx.out_version
+    )
+    pushed = {
+        f"adapter:{scope.name}": push_scoped_adapter(
+            adapter, scope.name, ctx.out_version, client=ctx.client
+        ),
+        f"merged:{scope.name}": push_merged_model(
+            paths.staging_merged_model_dir(ctx.out_version, scope=scope.name), ctx.out_version,
+            client=ctx.client, scope=scope.name,
+        ),
+    }
+    if not ctx.skip_quantize:
+        for fmt in ctx.formats:
+            if fmt == "bf16":
+                continue   # bf16 IS the merged model, pushed above
+            pushed[f"quantized:{scope.name}:{fmt}"] = push_quantized(
+                paths.staging_quantized_model_dir(ctx.out_version, fmt, scope=scope.name),
+                ctx.out_version, fmt, client=ctx.client, scope=scope.name,
+            )
+    return pushed
+
+
+def stage_push(ctx: StageContext) -> StageResult:
+    """Copy adapters, merged model and quantized models into Blob, then flip the
+    manifest from ``staged`` to ``published``.
+
+    The layouts mirror each other deliberately (SPEC_13 §3), so this copies
+    rather than translates — a translation step is where a path convention drifts
+    between the two stores and an artifact becomes unfindable.
+    """
+    from registry_utils.query_registry import get as get_manifest
+    from registry_utils.query_registry import list_runs
+    from registry_utils.write_run_manifest import mark_published
+
+    assert_gate_passed(ctx)
+    assert_staged(ctx)
+    pushed: dict[str, str] = {}
+
+    # ONE adapter and ONE merged model (arch v2.1 §4.1). v1 fanned this out per
+    # document type; that topology is gone, because vLLM applies one LoRA per
+    # request and a Foundation plus a per-type adapter could never both be
+    # active. A graduated per-type adapter (§4.2) is published by its own run,
+    # not by this one.
+    #
+    # Through the SPEC_02 §3 helper's path, never assembled here. The only place
+    # that built these inline is the place that published a Foundation against
+    # paths that were never produced.
+    scope = ctx.scope
+    if ctx.dry_run:
+        pushed.update(_record_dry_run_push(ctx))
+    else:
+        pushed.update(_push_weights(ctx))
+
+    quantized = [] if ctx.skip_quantize else [f for f in ctx.formats if f != "bf16"]
     published: list[str] = []
     for row in list_runs(ctx.client, scope=scope.name):
         run_id = str(row.get("run_id", ""))
@@ -1620,13 +1829,13 @@ def stage_push(ctx: StageContext) -> StageResult:
             merged_model=(
                 paths.merged_model_dir(ctx.out_version, scope=scope.name) if owns_a_model else None
             ),
+            # The first QUANTIZED format. formats[0] is bf16, which is the merged
+            # model and is never exported, so this pointed at an empty prefix.
             quantized_model=(
-                paths.quantized_model_dir(ctx.out_version, ctx.formats[0], scope=scope.name)
-                if owns_a_model and not ctx.skip_quantize else None
+                paths.quantized_model_dir(ctx.out_version, quantized[0], scope=scope.name)
+                if owns_a_model and quantized else None
             ),
-            quantized_formats=(
-                list(ctx.formats) if owns_a_model and not ctx.skip_quantize else []
-            ),
+            quantized_formats=list(quantized) if owns_a_model else [],
         )
         published.append(run_id)
 
@@ -1694,6 +1903,27 @@ def stage_feedback(ctx: StageContext) -> StageResult:
 # --------------------------------------------------------------------------
 # The DAG
 # --------------------------------------------------------------------------
+
+
+def _deterministic_errors() -> tuple[type[BaseException], ...]:
+    """Failures a retry would only repeat, after re-doing every step before them.
+
+    A training stage that fails on a missing page image, an over-length row, a
+    refused configuration or a crashed ``swift sft`` fails identically the second
+    time — after re-materializing, re-staging and re-measuring the corpus, and,
+    for a crash at hour five, after a second full training run. Retries are for
+    transient faults (a throttled Blob read), not for these. Imported lazily so
+    the DAG stays importable without the training stack.
+    """
+    import subprocess
+
+    from training.corpus_view import CorpusViewError
+    from training.length_check import LengthCheckError
+    from training.stage_data import StagingError
+    from training.train import TrainingError
+
+    return (TrainingError, StagingError, LengthCheckError, CorpusViewError,
+            subprocess.CalledProcessError)
 
 
 @dataclass(frozen=True)
@@ -1959,7 +2189,9 @@ def run_stages(ctx: StageContext, stages: Sequence[Stage], *, command: str = "fi
                 log.error("stage %s cannot run: %s (not retried)", stage.name, exc)
                 return report
             except Exception as exc:  # noqa: BLE001 - retried, then recorded and stops the run
-                if attempts < max(1, ctx.max_attempts):
+                if attempts < max(1, ctx.max_attempts) and not isinstance(
+                    exc, _deterministic_errors()
+                ):
                     # Configured in pipeline.yaml and previously read by nothing,
                     # so both attempts fired within milliseconds — inside the same
                     # throttle window that caused the first failure.

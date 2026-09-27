@@ -643,7 +643,10 @@ def test_package_pushes_all_three_artifact_classes_and_publishes(client, control
     # adapter, because the merged models were produced per document type by the
     # per-type runs stacked on top of it.
     assert foundation.artifacts.merged_model
-    assert foundation.artifacts.quantized_formats == ["bf16"]
+    # bf16 is the merged model, never a quantized export, so a bf16-only
+    # cycle publishes no quantized format.
+    assert foundation.artifacts.quantized_formats == []
+    assert foundation.artifacts.quantized_model is None
 
 
 def test_no_per_type_run_is_produced_by_a_default_build(client, controller):
@@ -672,7 +675,10 @@ def test_a_default_build_publishes_the_unified_model(client, controller):
 
     foundation = get("extractor-v1", client)
     assert foundation.artifacts.merged_model
-    assert foundation.artifacts.quantized_formats == ["bf16"]
+    # bf16 is the merged model, never a quantized export, so a bf16-only
+    # cycle publishes no quantized format.
+    assert foundation.artifacts.quantized_formats == []
+    assert foundation.artifacts.quantized_model is None
 
 
 def test_package_clears_staging_after_a_verified_push(client, controller):
@@ -713,7 +719,10 @@ def test_push_adapters_leaves_only_the_merged_model_staged(client, controller):
     ctx = make_context(client, controller, push_adapters=True)
     run_stages(ctx, stages_for("finetune"), command="finetune")
 
-    assert client.exists(f"{paths.adapter_dir('foundation', 'v1')}/adapter_placeholder.json")
+    # A dry run trained nothing, so there is no adapter to push — and the
+    # placeholder note that used to stand in for one is gone. The real upload
+    # is covered by test_push_adapters_uploads_the_adapter_itself.
+    assert not client.exists(f"{paths.adapter_dir('foundation', 'v1')}/adapter_placeholder.json")
 
 
 # --------------------------------------------------------------------------
@@ -1600,3 +1609,154 @@ def test_two_scopes_cannot_share_one_release_id():
     assert cli.release_id_for(
         ["release-2026.9.1"], get_scope("policy"), scope_count=1
     ) == "release-2026.9.1"
+
+
+# --------------------------------------------------------------------------
+# Phase 1: deterministic failures, resumed merges
+# --------------------------------------------------------------------------
+
+
+def test_a_deterministic_training_failure_is_not_retried(client, controller):
+    """A missing image or an over-length row fails the same way twice — after
+    re-staging and re-measuring the corpus, or a second full training run."""
+    from orchestration.pipeline_dag import Stage
+    from training.train import TrainingError
+
+    calls = []
+
+    def boom(ctx):
+        calls.append(1)
+        raise TrainingError("over-length row")
+
+    ctx = make_context(client, controller, max_attempts=3)
+    report = run_stages(ctx, [Stage(5, "training", "finetune", True, boom)], command="finetune")
+    assert report.failed_at == "training"
+    assert len(calls) == 1, "a deterministic failure was retried"
+
+
+def test_a_transient_failure_is_still_retried(client, controller):
+    from orchestration.pipeline_dag import Stage
+
+    calls = []
+
+    def flaky(ctx):
+        calls.append(1)
+        if len(calls) == 1:
+            raise ConnectionError("throttled")
+        from orchestration.pipeline_dag import StageResult
+        return StageResult("training", "completed")
+
+    ctx = make_context(client, controller, max_attempts=2)
+    report = run_stages(ctx, [Stage(5, "training", "finetune", True, flaky)], command="finetune")
+    assert report.ok and len(calls) == 2
+
+
+def test_a_resumed_merge_reads_the_checkpoint_already_selected(client, controller):
+    """`--from-stage merge` did not run checkpoint_eval, but an earlier process
+    did and wrote its choice down."""
+    from orchestration.pipeline_dag import stage_merge
+
+    ctx = make_context(client, controller)
+    chosen = "/runpod-volume/staging/adapters/foundation/v1/v0-1/checkpoint-150"
+    client.write_json(paths.checkpoint_selection("v1", scope=ctx.scope.name), {"selected": chosen})
+    result = stage_merge(ctx)
+    assert result.data["selected_checkpoint"] == chosen
+
+
+def test_package_refuses_a_version_whose_gate_blocked(client, controller):
+    """`package` is its own command; it read nothing the gate wrote, so running it
+    after a blocked gate published the blocked version anyway."""
+    from orchestration.pipeline_dag import stage_push
+
+    seed_corpus(client)
+    ctx = make_context(client, controller, release_id="release-2026.11.1")
+    report = run_stages(ctx, stages_for("all"), command="all")
+    assert report.ok, report.render()
+
+    key = paths.gate_decision("v1")
+    client.write_json(key, {**client.read_json(key), "passed": False, "failed_gates": ["x"]})
+    with pytest.raises(PipelineError, match="did not pass its promotion gate"):
+        stage_push(ctx)
+
+
+def test_a_resumed_package_finds_the_calibrators_in_blob(client, controller):
+    """Resumed at package, ctx.calibrators is empty; the calibrators the earlier
+    process wrote are in Blob and the bundle must still point at them."""
+    from orchestration.pipeline_dag import build_release_bundle
+
+    seed_corpus(client)
+    first = make_context(
+        client, controller, release_id="release-2026.11.1",
+        calibration_samples={"bf16": _calibration_samples()},
+    )
+    assert run_stages(first, stages_for("all"), command="all").ok
+
+    resumed = make_context(client, controller, release_id="release-2026.11.1")
+    bundle, reasons = build_release_bundle(resumed)
+    assert "bf16" in bundle.calibrators
+    assert not any("no calibrator" in r for r in reasons)
+
+
+def test_a_family_with_any_synthetic_member_stays_in_train():
+    """A family moves as a unit. Made splittable by its one real member, it could
+    carry its generated labels into val or test, where eval scores the generator."""
+    from types import SimpleNamespace
+
+    from orchestration.pipeline_dag import group_records
+
+    def doc(source_id, synthetic):
+        return SimpleNamespace(
+            source_id=source_id, doc_type="acord", family="fam-1", carrier=None,
+            synthetic=synthetic,
+        )
+
+    [record] = group_records([doc("real-1", False), doc("synth-1", True)])["acord"]
+    assert record.synthetic
+    assert record.source_ids == ["real-1", "synth-1"]
+
+
+def _set_ocr_meta(client, source_id: str, **fields) -> None:
+    doc_type = source_id.rsplit("_", 1)[0]
+    key = paths.ocr_meta(doc_type, source_id)
+    client.write_json(key, {**client.read_json(key), **fields})
+
+
+def test_a_render_only_document_is_not_trained_as_ocr(client, controller):
+    """Rendered for labeling and never OCR'd, it has no page text; built into
+    ocr_plus_image rows it would teach that full pages can be blank."""
+    from orchestration.pipeline_dag import load_labeled_documents
+
+    seeded = seed_corpus(client)
+    _set_ocr_meta(client, seeded[0], render_only=True)
+    loaded = {d.source_id for d in load_labeled_documents(make_context(client, controller))}
+    assert seeded[0] not in loaded
+    assert set(seeded[1:]) <= loaded
+
+
+def test_a_document_with_no_recorded_pages_is_skipped_not_assumed_one(client, controller):
+    from orchestration.pipeline_dag import load_labeled_documents
+
+    seeded = seed_corpus(client)
+    _set_ocr_meta(client, seeded[0], page_count=0)
+    loaded = {d.source_id for d in load_labeled_documents(make_context(client, controller))}
+    assert seeded[0] not in loaded
+
+
+def test_a_corpus_with_no_training_rows_is_refused(client, controller, monkeypatch):
+    from data_pipeline.dataset_builder import build_jsonl
+    from orchestration import pipeline_dag
+
+    seed_corpus(client)
+    real = build_jsonl.build_corpus
+
+    def no_train(*args, **kwargs):
+        built = real(*args, **kwargs)
+        built.rows_by_split["train"] = []
+        return built
+
+    monkeypatch.setattr(pipeline_dag, "build_corpus", no_train, raising=False)
+    monkeypatch.setattr(build_jsonl, "build_corpus", no_train)
+    ctx = make_context(client, controller)
+    with pytest.raises(PipelineError, match="no train"):
+        pipeline_dag.stage_dataset_build(ctx)
+    assert not client.exists(paths.corpus_manifest(ctx.corpus, None))

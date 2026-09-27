@@ -27,6 +27,8 @@ import logging
 from dataclasses import dataclass, field
 from typing import Any
 
+from common.constants import DEFAULT_LONG_DOC_PAGE_THRESHOLD
+
 log = logging.getLogger(__name__)
 
 #: Section markers that identify a page worth reading, weighted by how strongly
@@ -99,7 +101,7 @@ def score_page(text: str, page_number: int) -> PageScore:
 def plan_pages(
     page_texts: dict[int, str],
     *,
-    page_threshold: int = 5,
+    page_threshold: int = DEFAULT_LONG_DOC_PAGE_THRESHOLD,
     selection_threshold: float = SELECTION_THRESHOLD,
     max_pages: int | None = None,
 ) -> RoutingPlan:
@@ -111,16 +113,23 @@ def plan_pages(
         max_pages: cap on selected pages, highest-scoring first.
     """
     total = len(page_texts)
+    # Scored whatever the length. The declarations page is what the decl group
+    # reads beyond pages 1-3, and a short policy behind a fax cover sheet — its
+    # declarations on page 4 or 5 of 5 — reported none, so its policy-level
+    # fields were asked of three pages that do not print them.
+    scores = [score_page(text, page) for page, text in sorted(page_texts.items())]
+    declarations = next((s.page for s in scores if s.is_declarations), None)
 
     if total <= page_threshold:
         return RoutingPlan(
             pages=sorted(page_texts),
+            scores=scores,
+            declarations_page=declarations,
             routed=False,
             reason=f"{total} page(s) is at or below the {page_threshold}-page threshold — "
                    "single-pass extraction, no routing",
         )
 
-    scores = [score_page(text, page) for page, text in sorted(page_texts.items())]
     matched = {s.page for s in scores if s.score >= selection_threshold}
 
     # Check for an empty selection BEFORE adding the always-include first page:
@@ -134,7 +143,8 @@ def plan_pages(
             selection_threshold, total,
         )
         return RoutingPlan(
-            pages=sorted(page_texts), scores=scores, routed=False,
+            pages=sorted(page_texts), scores=scores, declarations_page=declarations,
+            routed=False,
             reason="no page matched the selection signals; reading all pages",
         )
 
@@ -143,8 +153,6 @@ def plan_pages(
         # The header carries the document's identity, and a poorly-OCR'd scan
         # can score zero while still being the declarations page.
         selected.add(min(page_texts))
-
-    declarations = next((s.page for s in scores if s.is_declarations), None)
 
     if max_pages and len(selected) > max_pages:
         # The first page and the declarations page survive the cap regardless of

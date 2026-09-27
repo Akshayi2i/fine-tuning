@@ -124,6 +124,10 @@ class ModelBackend(ABC):
     @abstractmethod
     def supports_logprobs(self) -> bool: ...
 
+    def close(self) -> None:
+        """Release whatever the backend holds (GPU memory). Default: nothing."""
+        return None
+
     def generate_batch(
         self,
         messages_list: list[list[dict[str, Any]]],
@@ -184,6 +188,39 @@ class VLLMBackend(ModelBackend):
     def supports_logprobs(self) -> bool:
         return True
 
+    def close(self) -> None:
+        """Drop the engine and hand its GPU memory back.
+
+        One pipeline process loads several engines in turn — the base for
+        checkpoint selection, the merged bf16 for calibration and the golden
+        eval, then each quantized format. An engine takes
+        ``gpu_memory_utilization`` of the card and nothing freed it, so the
+        second load failed for want of memory it could see was allocated.
+        """
+        if self._engine is None:
+            return
+        self._engine = None
+        import gc
+
+        try:  # pragma: no cover - needs vLLM and a GPU
+            from vllm.distributed.parallel_state import (
+                destroy_distributed_environment,
+                destroy_model_parallel,
+            )
+
+            destroy_model_parallel()
+            destroy_distributed_environment()
+        except Exception:  # noqa: BLE001 - best effort; the GC below still runs
+            pass
+        gc.collect()
+        try:  # pragma: no cover - needs torch with CUDA
+            import torch
+
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+        except ImportError:
+            pass
+
     def _load(self, config: RunnerConfig):
         """Build the engine once and keep it. A cold start per request would
         reload 16GB of weights for every document."""
@@ -203,8 +240,16 @@ class VLLMBackend(ModelBackend):
                 "stack has to be merged first (SPEC_10)."
             )
 
+        from common.config import pixel_budget
+
+        # The pixel budget training resized pages to (common.config.pixel_budget),
+        # passed to the processor explicitly. Left to its default the engine
+        # resized to a budget nobody chose — identical today by coincidence, and
+        # silently different the day either side's budget moved.
+        min_pixels, max_pixels = pixel_budget()
         self._engine = LLM(
             model=model_path,
+            mm_processor_kwargs={"min_pixels": min_pixels, "max_pixels": max_pixels},
             enable_lora=config.enable_lora,
             max_loras=config.max_loras,
             max_lora_rank=config.max_lora_rank,
@@ -526,6 +571,13 @@ class LoadedModel:
         pre-annotation (SPEC_04), and ``extract --model base`` (SPEC_13).
         """
         return self.resolved.get("kind") == "base"
+
+
+def release_model(model: Any) -> None:
+    """Free a loaded model's backend. A no-op for anything without one."""
+    backend = getattr(model, "backend", None)
+    if backend is not None and hasattr(backend, "close"):
+        backend.close()
 
 
 def load_model(

@@ -285,15 +285,15 @@ def cold_start(
             "falls back to serving merged per-type models and only this function changes."
         )
 
+    plan = build_serving_plan(client, tenant_id=tenant_id, pins=release_pins())
+    assert_prompt_hash(plan)
     state = EndpointState(
         model_version=model_version,
         model=model,
         classifier=classifier,
         adapter_map=build_adapter_map(model_version, client),
         calibration=load_calibrations(model_version, client),
-        plan=build_serving_plan(
-            client, tenant_id=tenant_id, pins=release_pins(),
-        ),
+        plan=plan,
         corpus_manifest=manifest,
         ready=True,
     )
@@ -302,6 +302,34 @@ def cold_start(
         model_version, sorted(state.adapter_map), config.get("logprobs", True),
     )
     return state
+
+
+def assert_prompt_hash(plan: Any) -> None:
+    """Refuse to serve a release trained on prompts this code does not render.
+
+    Each release records the hash of every prompt input at packaging time. A
+    template, schema or section-map edit since then means this deployment shows
+    the model a prompt it was never trained on — the output degrades with every
+    request still returning well-formed JSON. Checked at cold start, before the
+    first document. A release with no hash (written before it was recorded) is
+    warned about, not refused: there is nothing to compare.
+    """
+    from common.prompts import prompt_hash
+
+    current = prompt_hash()
+    releases = {r.release_id: r for r in getattr(plan, "by_doc_type", {}).values()}
+    for release in releases.values():
+        if not release.prompt_hash:
+            log.warning(
+                "%s records no prompt hash, so prompt drift since it was packaged cannot be "
+                "checked", release.release_id,
+            )
+        elif release.prompt_hash != current:
+            raise ColdStartError(
+                f"{release.release_id} was packaged with prompt hash {release.prompt_hash[:12]}, "
+                f"and this code renders {current[:12]}: a template, schema or section map changed "
+                "since it was trained. Serve the code it was packaged from, or retrain."
+            )
 
 
 def build_request(payload: dict[str, Any]) -> ExtractionRequest:
@@ -325,16 +353,63 @@ def build_request(payload: dict[str, Any]) -> ExtractionRequest:
             "not a state it was trained on."
         )
 
+    try:
+        page_texts = {int(k): v for k, v in (payload.get("page_texts") or {}).items()}
+    except (TypeError, ValueError) as exc:
+        raise ServingError(f"page_texts keys must be page numbers: {exc}") from exc
+    # One text per image, numbered 1..n. Anything else pairs a page's text with
+    # another page's image — page 3's text read against page 4 — and the model
+    # reports a value on the wrong page with full confidence.
+    if page_texts and sorted(page_texts) != list(range(1, len(images) + 1)):
+        raise ServingError(
+            f"page_texts covers pages {sorted(page_texts)} but {len(images)} page image(s) were "
+            f"sent; it must hold exactly pages 1..{len(images)}, one text per image."
+        )
+
     return ExtractionRequest(
         source_id=str(source_id),
         image_paths=[str(p) for p in images],
         ocr_text=ocr_text,
-        page_texts={int(k): v for k, v in (payload.get("page_texts") or {}).items()},
+        page_texts=page_texts,
         ocr_meta=payload.get("ocr_meta") or {},
         modality_mode=mode,
         known_doc_type=payload.get("doc_type"),
         known_acord_form=payload.get("acord_form"),
+        known_lob=request_lob(payload),
     )
+
+
+def request_lob(payload: Mapping[str, Any]) -> str | list[str] | None:
+    """The policy's line of business, as the caller (L1/L2) supplies it.
+
+    ``lob`` (or ``line_of_business``): one line, or a list for a package policy.
+    It selects the line's canonical schema. Nothing set it before, so every
+    served policy was read against the canonical fallback while training had
+    read it against its line's schema — the model was trained on one output
+    shape and served another. A single line with no schema is refused: falling
+    back quietly is the same mismatch with a name that looks right.
+    """
+    from common.schemas import schema_selectors
+
+    lob = payload.get("lob", payload.get("line_of_business"))
+    if lob is None:
+        return None
+    lines = [lob] if isinstance(lob, str) else lob
+    if not isinstance(lines, list) or not lines or not all(
+        isinstance(line, str) and line.strip() for line in lines
+    ):
+        raise ServingError(f"lob must be a line name or a non-empty list of them, got {lob!r}")
+    if len(lines) == 1:
+        from common.schemas import LOB_SCHEMA_ALIASES
+
+        line = lines[0].strip().lower()
+        known = {q for doc_type, _, q in schema_selectors() if doc_type == "policy" and q}
+        if LOB_SCHEMA_ALIASES.get(line, line) not in known:
+            raise ServingError(
+                f"no canonical policy schema for line {lob!r}; known lines: "
+                f"{sorted(known | set(LOB_SCHEMA_ALIASES))}"
+            )
+    return lob
 
 
 def serving_thresholds() -> dict[str, Any]:
@@ -348,13 +423,11 @@ def serving_thresholds() -> dict[str, Any]:
     config = serving_config()
     routing = config.get("routing") or {}
     confidence = config.get("confidence") or {}
-    long_documents = config.get("long_documents") or {}
 
     tuning: dict[str, Any] = {}
     for key, value in (
         ("classifier_threshold", routing.get("classifier_confidence_threshold")),
         ("review_threshold", confidence.get("review_threshold")),
-        ("page_threshold", long_documents.get("page_threshold")),
     ):
         if isinstance(value, (int, float)) and not isinstance(value, bool):
             tuning[key] = value

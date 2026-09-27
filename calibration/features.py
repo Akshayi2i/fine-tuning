@@ -150,7 +150,11 @@ def infer_field_type(field_path: str, value: Any = None) -> str:
     if kind in mapping:
         return mapping[kind]
     leaf = field_path.rsplit(".", 1)[-1].casefold()
-    if "address" in leaf:
+    # By any path segment, not the leaf alone: a canonical address is split into
+    # components (``carrier.address.city``, ``named_insured.mailing_address.line_1``)
+    # whose leaf never says "address", so they all fell into free_text — which
+    # has no error target and is never auto-accepted.
+    if any("address" in part for part in field_path.casefold().replace("[]", "").split(".")):
         return "address"
     if "line_of_business" in leaf or leaf.endswith("_type") or leaf.endswith("_status"):
         return "enum"
@@ -180,12 +184,18 @@ def rule_checks(field_path: str, value: Any, document: dict[str, Any]) -> bool |
     which means a rule applied and the value broke it.
     """
     from common.normalize import normalize_currency, normalize_date
+    from evaluation.metrics.field_accuracy import flatten_scalars
 
     leaf = field_path.rsplit(".", 1)[-1].casefold()
+    # Siblings are read beside the field, wherever it sits: a canonical policy's
+    # period is policy.effective_date / policy.expiration_date, and reading the
+    # top level found nothing, so the date-order rule never fired for a policy.
+    flat = flatten_scalars(document)
+    parent = field_path[: len(field_path) - len(field_path.rsplit(".", 1)[-1])]
 
     if leaf in ("effective_date", "expiration_date"):
-        start = normalize_date(document.get("effective_date"))
-        end = normalize_date(document.get("expiration_date"))
+        start = normalize_date(flat.get(f"{parent}effective_date"))
+        end = normalize_date(flat.get(f"{parent}expiration_date"))
         if start and end:
             return start < end
         return None
@@ -221,6 +231,7 @@ def build_features(
     cross_mode_value: Any = None,
     mapped: bool = True,
     reason: str | None = None,
+    printed_value: Any = None,
 ) -> FieldFeatures:
     """Assemble one field's feature vector.
 
@@ -248,7 +259,12 @@ def build_features(
         is_null=is_null,
         mapped=mapped,
         reason=reason,
-        ocr_agreement=None if is_null else ocr_agreement(value, page_text),
+        # Against what the page PRINTS. ``value`` is the normalised form — a date
+        # rewritten to MM/DD/YYYY, a figure stripped of "$" and "," — which is
+        # not on the page, so every reformatted value scored 0 agreement.
+        ocr_agreement=None if is_null else ocr_agreement(
+            value if printed_value is None else printed_value, page_text
+        ),
         rule_checks_passed=None if is_null else rule_checks(field_path, value, document),
     )
     if spans:
@@ -275,8 +291,14 @@ def build_document_features(
     not dropped: a field that silently vanishes between generation and
     confidence is one nobody reviews and nobody counts.
     """
+    from common.canonical import printed_view, values_view
     from evaluation.metrics.field_accuracy import flatten_scalars
 
+    # Envelopes in, values out: features are keyed and valued on the value view
+    # (both views are no-ops on a flat extraction). The printed view keeps each
+    # value's printed form — a canonical envelope's ``raw`` — for OCR agreement.
+    printed = flatten_scalars(printed_view(extraction))
+    extraction = values_view(extraction)
     out: list[FieldFeatures] = []
     for path, value in sorted(flatten_scalars(extraction).items()):
         logprobs = _span_logprobs(path, value, spans)
@@ -291,6 +313,7 @@ def build_document_features(
             cross_mode_value=(cross_mode or {}).get(path),
             mapped=located or empty,
             reason=None if located or empty else "no span located in the generation",
+            printed_value=printed.get(path),
         ))
     return out
 
@@ -354,3 +377,24 @@ def group_by_field_type(
             features, was_correct
         )
     return sets
+
+
+_PAGE_MARKER = re.compile(r"^<page \d+ of \d+>\s*")
+
+
+def shown_ocr_text(page_texts: list[str | None]) -> str | None:
+    """The OCR text the model was shown, as the OCR-agreement feature reads it.
+
+    ONE definition for fitting (validation rows) and serving (requests): the page
+    texts of the pages sent, page markers stripped, ``None`` when there is no OCR
+    text at all (image_only). Fitting used to join every user text block — the
+    markers alone for an image-only row, so agreement was "present" and almost
+    always 0 — while serving passed ``request.ocr_text``, ``None`` for any
+    multi-page request. The calibrators learned a feature serving never sent.
+    """
+    from inference_core.input_builder import EMPTY_PAGE_TEXT
+
+    texts = [_PAGE_MARKER.sub("", text or "").strip() for text in page_texts]
+    # The blank-page placeholder is prompt text, not OCR: nothing agrees with it.
+    joined = "\n".join(t for t in texts if t and t != EMPTY_PAGE_TEXT)
+    return joined or None

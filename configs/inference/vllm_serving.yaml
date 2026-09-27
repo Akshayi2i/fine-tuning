@@ -97,7 +97,11 @@ long_documents:
   # than sending the whole document (arch 7). Primarily a Policy concern: a
   # 50-page policy at full resolution would blow the context window and spend
   # most of it on pages with nothing extractable.
-  page_threshold: 5
+  #
+  # The threshold itself is NOT set here: it is common.constants.
+  # DEFAULT_LONG_DOC_PAGE_THRESHOLD, the value the corpus build planned every
+  # training window with. A serving-only knob moved the served window plan away
+  # from the trained one with nothing to say so; changing it is a corpus rebuild.
   # When the same field appears on several pages, the declarations page wins for
   # policy-level fields.
   conflict_resolution: "declarations_page_wins"

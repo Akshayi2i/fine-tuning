@@ -120,6 +120,22 @@ def test_a_single_type_scope_still_classifies_so_the_floor_keeps_meaning():
     a real guarantee would quietly disappear."""
     policy = get_scope("policy")
     assert Task.CLASSIFY in policy.tasks
+
+
+def test_the_classifier_metric_applies_exactly_when_classify_rows_are_trained(monkeypatch):
+    """Declared is not trained. While the corpus builds no classify rows the
+    classifier is never trained, so its accuracy is not a measurement of this
+    model — and as a required gate it blocked every candidate. The moment the
+    corpus emits classify rows, the floor applies again, for single-type scopes
+    too."""
+    from common import scopes as S
+    from common.tasks import CORPUS_TASKS
+
+    policy = get_scope("policy")
+    assert Task.CLASSIFY not in CORPUS_TASKS
+    assert "doc_type_classifier_accuracy" in structural_not_applicable(policy)
+
+    monkeypatch.setattr(S, "CORPUS_TASKS", CORPUS_TASKS | {Task.CLASSIFY})
     assert "doc_type_classifier_accuracy" not in structural_not_applicable(policy)
 
 

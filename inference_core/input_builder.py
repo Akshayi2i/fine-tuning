@@ -126,6 +126,15 @@ class BuiltMessages:
             )
 
 
+#: Stands in for a page whose OCR recovered no text, in training AND serving.
+#: Serving substituted it and training sent the marker alone, so the model
+#: trained on one prompt for a blank page and was served another. An empty
+#: string is not an option at serving either: ALWAYS_INCLUDE_FIRST_PAGE makes a
+#: poorly scanned first page the likeliest page to be selected, and a request
+#: that refused on it aborted exactly the documents routing exists for.
+EMPTY_PAGE_TEXT = "(no OCR text recovered for this page — read it from the image)"
+
+
 def _image_block(image: str | Path | bytes) -> dict[str, Any]:
     """One image content block, in the chat format ms-swift and vLLM expect."""
     if isinstance(image, bytes):
@@ -241,7 +250,8 @@ def build_messages(
             # holding pages 9 and 14 of 20 rather than a two-page document.
             user_content.append({"type": "text", "text": marker})
         else:
-            user_content.append({"type": "text", "text": marker + "\n\n" + ocr_pages[index]})
+            text = ocr_pages[index] if (ocr_pages[index] or "").strip() else EMPTY_PAGE_TEXT
+            user_content.append({"type": "text", "text": marker + "\n\n" + text})
 
     messages: list[dict[str, Any]] = [
         {"role": "system", "content": system},

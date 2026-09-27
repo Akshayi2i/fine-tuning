@@ -71,14 +71,17 @@ class ValidationGeneration:
     @property
     def page_text(self) -> str | None:
         """The OCR text the prompt carried, for the OCR-agreement feature."""
-        texts = [
+        from calibration.features import shown_ocr_text
+
+        if self.row.get("modality_mode") == "image_only":
+            return None
+        return shown_ocr_text([
             part.get("text", "")
             for message in self.row.get("messages", [])
             if message.get("role") == "user" and isinstance(message.get("content"), list)
             for part in message["content"]
             if isinstance(part, dict) and part.get("type") == "text"
-        ]
-        return "\n".join(texts) or None
+        ])
 
 
 def read_rows(text: str) -> list[dict[str, Any]]:
@@ -122,15 +125,18 @@ def generate_validation(
 
     out: list[ValidationGeneration] = []
     for row in rows:
-        messages, golden = split_prompt(row)
-        entry = ValidationGeneration(row=row, golden=golden)
-        schema = (
-            resolved_schema(
-                row["doc_type"], row.get("acord_form"), row.get("lob"), row.get("sections")
-            )
-            if constrain else None
-        )
+        entry = ValidationGeneration(row=row, golden={})
         try:
+            # Inside the per-row guard: a row with no assistant turn, or an ACORD
+            # row with no form (no schema to select), used to raise out of the
+            # loop and abort every other row's scoring with it.
+            messages, entry.golden = split_prompt(row)
+            schema = (
+                resolved_schema(
+                    row["doc_type"], row.get("acord_form"), row.get("lob"), row.get("sections")
+                )
+                if constrain else None
+            )
             result = generate(model, messages, adapter=adapter, json_schema=schema)
             extraction = json.loads(result.text)
             if not isinstance(extraction, dict):
@@ -213,3 +219,31 @@ def calibration_samples(
             unassigned,
         )
     return halves
+
+
+#: Above this share of rows failing to generate, a pass over validation is not
+#: a measurement. Scoring the failures as empty answers turned a broken setup —
+#: unreadable images, a model that would not load — into a checkpoint "chosen"
+#: at 0.0 and a calibrator fitted on nothing, with no error anywhere.
+MAX_GENERATION_FAILURE_RATE = 0.10
+
+
+class ValidationGenerationError(RuntimeError):
+    """Raised when too many validation rows failed to generate to trust a score."""
+
+
+def assert_generations_usable(
+    generations: list[ValidationGeneration], *, what: str,
+    max_failure_rate: float = MAX_GENERATION_FAILURE_RATE,
+) -> None:
+    """Refuse a pass in which more than ``max_failure_rate`` of rows failed."""
+    if not generations:
+        raise ValidationGenerationError(f"{what}: no validation rows were generated")
+    failed = [g for g in generations if g.error]
+    if len(failed) / len(generations) > max_failure_rate:
+        sample = sorted({g.error for g in failed})[:3]
+        raise ValidationGenerationError(
+            f"{what}: {len(failed)} of {len(generations)} validation rows failed to generate "
+            f"(e.g. {sample}). That is a broken pass, not a score — scoring the failures as "
+            "empty answers would pick or fit on nothing."
+        )

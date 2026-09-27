@@ -30,6 +30,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from calibration.apply_calibration import CalibratedField, CalibratedResult, apply_calibration
+from calibration.features import shown_ocr_text
 from calibration.fit_calibration import CalibrationParams
 from calibration.list_completeness import (
     check_document,
@@ -40,7 +41,7 @@ from calibration.logprob_confidence import field_confidences
 from common.canonical import collapse_spans, envelope, values_view, with_output_dates
 from common.constants import DEFAULT_LONG_DOC_PAGE_THRESHOLD, DEFAULT_REVIEW_CONFIDENCE_THRESHOLD
 from common.schemas import is_canonical, is_valid, iter_validation_errors, resolved_schema
-from inference_core.input_builder import build_messages
+from inference_core.input_builder import EMPTY_PAGE_TEXT, build_messages
 from inference_core.model_runner import Generation, LoadedModel, generate, generate_batch
 from inference_core.span_map import SpanMapError, map_field_spans
 from serving.adapter_router import Route, RoutingError, route
@@ -139,24 +140,26 @@ def _resolve_route(request: ExtractionRequest, classifier: Classifier, *,
 def _image_for(request: ExtractionRequest, page: int) -> str:
     """The image for one page, by the `page_N.` convention the OCR stage writes.
 
-    Falls back to positional order when a caller supplies paths that do not
-    follow it — silently pairing every page with page 1's image, as the previous
-    code did, is worse than an approximate match.
+    Otherwise by position: page ``N`` is the ``N``-th image (the endpoint checks
+    that ``page_texts`` numbers exactly 1..n against the images). The fallback
+    used to index into ``page_texts``, which an image_only request does not
+    have — so every page of it resolved to image 1 — and clamped an
+    out-of-range page to the last image instead of saying it did not exist.
     """
     for path in request.image_paths:
-        if f"page_{page}." in path:
+        name = path.replace("\\", "/").rsplit("/", 1)[-1]
+        if name.startswith(f"page_{page}."):
             return path
-    index = sorted(request.page_texts).index(page) if page in request.page_texts else 0
-    return request.image_paths[min(index, len(request.image_paths) - 1)]
+    if not 1 <= page <= len(request.image_paths):
+        raise PipelineError(
+            f"{request.source_id}: page {page} requested but only "
+            f"{len(request.image_paths)} page image(s) were sent"
+        )
+    return request.image_paths[page - 1]
 
 
-#: Stands in for a page whose OCR produced nothing. An empty string would make
-#: `build_messages` refuse the whole request — and ALWAYS_INCLUDE_FIRST_PAGE
-#: makes a poorly-scanned first page the single most likely page to be selected,
-#: so one blank page aborted exactly the documents page routing exists for. The
-#: marker says the page is there and unreadable, which is true and is what the
-#: image is for.
-_EMPTY_PAGE = "(no OCR text recovered for this page — read it from the image)"
+#: The blank-page placeholder, defined where training's messages are built too.
+_EMPTY_PAGE = EMPTY_PAGE_TEXT
 
 
 def _all_page_texts(request: ExtractionRequest) -> list[str]:
@@ -639,8 +642,12 @@ def extract(
             else list(range(1, len(request.image_paths) + 1))
         )
         page_ocr = None if request.modality_mode == "image_only" else _all_page_texts(request)
+        # Images by page, in the order the texts are in. Sent as the caller
+        # listed them, `page_10.png` listed before `page_2.png` put page 10's
+        # image beside page 2's text.
         extraction, all_spans, latency = _generate_once(
-            model, route_, request.image_paths, page_ocr, request.modality_mode,
+            model, route_, [_image_for(request, page) for page in pages_used],
+            page_ocr, request.modality_mode,
             page_numbers=pages_used if request.page_texts else None,
             lob=lob,
         )
@@ -665,9 +672,16 @@ def extract(
     # equivalent.
     if calibrators is not None:
         calibrated: CalibratedResult = _feature_calibrated(
-            extraction=values, spans=all_spans,
+            # The model form, envelopes and all: flattened it gives the same
+            # values, and it still carries each value's printed form.
+            extraction=extraction, spans=all_spans,
             calibrators=calibrators, thresholds=thresholds,
-            page_text=request.ocr_text,
+            # The same definition validation fits the calibrators with: the OCR
+            # text of the pages the model was shown, none for image_only.
+            page_text=None if request.modality_mode == "image_only" else shown_ocr_text(
+                [request.page_texts.get(page) for page in pages_used]
+                if request.page_texts else [request.ocr_text]
+            ),
         )
     else:
         log.warning(

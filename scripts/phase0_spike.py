@@ -132,6 +132,14 @@ def check_flash_attn(r: Result) -> None:
 
 
 def check_ms_swift(r: Result) -> None:
+    """Does ms-swift accept the EXACT command training renders?
+
+    Parsed with ms-swift's own argument parser, not grepped from ``--help``. The
+    grep checked six flags by substring and could not see a renamed argument, a
+    2.x name in a 3.x install, or a value outside a flag's choices — the ways a
+    real run dies at argument parsing, on the pod, after staging. ``parse_known_args``
+    only parses: no model is loaded and no dataset path is opened.
+    """
     import shutil
 
     if shutil.which("swift") is None:
@@ -139,26 +147,35 @@ def check_ms_swift(r: Result) -> None:
         r.detail = "the `swift` CLI is not on PATH; install the [train] extra"
         return
 
-    out = subprocess.run(["swift", "sft", "--help"], capture_output=True, text=True, timeout=120)
-    help_text = (out.stdout + out.stderr).lower()
-    r.data["exit_code"] = out.returncode
+    from transformers import HfArgumentParser
 
-    # The three arguments the training entrypoints actually emit. A missing one
-    # means the config this repo renders would not be accepted.
-    required = {
-        "--dataset": "--dataset" in help_text,
-        "--val_dataset": "val_dataset" in help_text,
-        "--freeze_vit": "freeze_vit" in help_text,
-        "--lora_target_modules": "lora_target_modules" in help_text,
-        "--truncation_strategy": "truncation_strategy" in help_text,
-        "--strict": "--strict" in help_text,
-    }
-    r.data["arguments"] = required
-    missing = [k for k, present in required.items() if not present]
-    r.ok = not missing
+    try:
+        from swift.llm import TrainArguments
+    except ImportError as exc:
+        r.ok = False
+        r.detail = f"not ms-swift 3 (no swift.llm.TrainArguments: {exc}); pyproject pins >=3.9"
+        return
+
+    from training.train import build_training_config
+
+    swift, _ = build_training_config(
+        corpus_paths=["e1.jsonl", "e2.jsonl", "e3.jsonl", "e4.jsonl"],
+        output_dir="/tmp/spike-out", val_paths=["val.jsonl"], train_rows=400,
+    )
+    argv = swift.to_cli()[2:]                       # drop "swift sft"
+    try:
+        _namespace, unknown = HfArgumentParser(TrainArguments).parse_known_args(argv)
+    except SystemExit as exc:                        # argparse: a value outside its choices
+        r.ok = False
+        r.detail = f"ms-swift refused the rendered command (argparse exit {exc.code}); see argv"
+        r.data["argv"] = argv
+        return
+    r.data["argv"] = argv
+    r.data["unknown"] = unknown
+    r.ok = not unknown
     r.detail = (
-        "ms-swift accepts every argument the trainer emits"
-        if r.ok else f"ms-swift does not accept {missing} — check the fallback in arch §10"
+        "ms-swift's parser accepts every argument and value training renders"
+        if r.ok else f"ms-swift does not know {unknown} — rename them in training/train.py"
     )
 
 
@@ -290,17 +307,27 @@ def check_swift_image_budget(r: Result) -> None:
     from training.train import _pixel_budget
 
     env = _pixel_budget(default_scope())
+    # Restored afterwards: the checks share one process, and a budget left in
+    # the environment would silently resize every image a later check encodes.
+    saved = {key: os.environ.get(key) for key in env}
     os.environ.update(env)
-    page = Path(tempfile.mkdtemp()) / "page.png"
-    Image.new("RGB", (1700, 2200), "white").save(page)   # US Letter at 200 dpi
+    try:
+        page = Path(tempfile.mkdtemp()) / "page.png"
+        Image.new("RGB", (1700, 2200), "white").save(page)   # US Letter at 200 dpi
 
-    _model, processor = get_model_tokenizer(MODEL_ID, load_model=False)
-    template = get_template(processor.model_meta.template, processor)
-    encoded = template.encode({
-        "messages": [{"role": "user", "content": "<image>page"},
-                     {"role": "assistant", "content": "{}"}],
-        "images": [str(page)],
-    })
+        _model, processor = get_model_tokenizer(MODEL_ID, load_model=False)
+        template = get_template(processor.model_meta.template, processor)
+        encoded = template.encode({
+            "messages": [{"role": "user", "content": "<image>page"},
+                         {"role": "assistant", "content": "{}"}],
+            "images": [str(page)],
+        })
+    finally:
+        for key, value in saved.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
     pad_id = processor.tokenizer.convert_tokens_to_ids("<|image_pad|>")
     measured = sum(1 for token in encoded["input_ids"] if token == pad_id)
     predicted = image_tokens(

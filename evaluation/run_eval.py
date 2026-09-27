@@ -305,10 +305,20 @@ def score_subset(
     confidences: list[float] = []
     correctness: list[bool] = []
 
-    for expected, got, metadata in scored:
+    # Field accuracy is pooled per DOCUMENT reading (source x modality), then
+    # averaged over documents. Averaged per row, a policy read as sixty windows
+    # counted sixty times and a one-page certificate once, so the gate measured
+    # long policies and little else. Pooling also means a window with nothing to
+    # score — boilerplate pages answered with nothing — adds nothing, rather
+    # than a 0.0.
+    pooled: dict[Any, list[int]] = {}
+    for index, (expected, got, metadata) in enumerate(scored):
         accuracy = score_fields(expected, got)
-        accuracies.append(accuracy.normalized_match)
-        exacts.append(accuracy.exact_match)
+        key = (metadata.get("source_id") or f"#{index}", metadata.get("modality_mode"))
+        tally = pooled.setdefault(key, [0, 0, 0])
+        tally[0] += sum(r.correct for r in accuracy.results)
+        tally[1] += sum(r.exact for r in accuracy.results)
+        tally[2] += accuracy.total
 
         misattributions.append(
             score_misattribution(
@@ -341,6 +351,11 @@ def score_subset(
             recalls.append(list_report.recall)
             f1s.append(list_report.f1)
 
+    for correct, exact, total in pooled.values():
+        if total:
+            accuracies.append(correct / total)
+            exacts.append(exact / total)
+
     lob = score_lob([(e, g) for e, g, _m in scored])
     misattribution = aggregate_misattribution(misattributions)
 
@@ -370,8 +385,9 @@ def score_subset(
         )
 
     report.metrics = {
-        "field_normalized_match": sum(accuracies) / len(accuracies),
-        "field_exact_match": sum(exacts) / len(exacts),
+        # None when no row had anything to score — not measured, not zero.
+        "field_normalized_match": sum(accuracies) / len(accuracies) if accuracies else None,
+        "field_exact_match": sum(exacts) / len(exacts) if exacts else None,
         "list_field_recall": sum(recalls) / len(recalls) if recalls else None,
         # The name the gate (GATING_METRICS) and RunManifest both use. Emitting
         # `list_field_f1` meant the gate never received it: an F1 collapse did
@@ -379,7 +395,8 @@ def score_subset(
         # later candidate would be blocked forever as "not measured".
         "field_f1_list_fields": sum(f1s) / len(f1s) if f1s else None,
         "schema_validity_rate": validity_rate,
-        "lob_detection_accuracy": lob.overall,
+        # Absent, not 0.0, when no document in the set carries a line to score.
+        "lob_detection_accuracy": lob.overall if lob.scored else None,
         "lob_accuracy_by_value": lob.accuracy_by_value(),
         # A gating metric in its own right (arch §15): returning the certificate
         # holder's name for insured_name is the failure the canonical mapping
@@ -527,6 +544,7 @@ def main(argv: Iterable[str] | None = None) -> int:  # pragma: no cover - thin C
     parser.add_argument("--doc-types", nargs="+", default=list(ACTIVE_DOC_TYPES),
                         choices=list(ACTIVE_DOC_TYPES))
     parser.add_argument("--tenant", default=None)
+    parser.add_argument("--scope", default=None, help="configs/scopes.yaml; defaults to unified")
     args = parser.parse_args(list(argv) if argv is not None else None)
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
@@ -536,13 +554,20 @@ def main(argv: Iterable[str] | None = None) -> int:  # pragma: no cover - thin C
     # below meaningless, so it is not worth computing them first.
     assert_eval_set_disjoint(client, args.corpus_version, args.tenant)
 
-    raise SystemExit(
-        f"Wire the inference loop here: load_model({args.model!r}) and extract each frozen eval "
-        "document through serving.pipeline (never a bespoke inference path — SPEC_08 constraint), "
-        "then pass the (expected, got, metadata) triples to build_report(). The leakage assertion "
-        "above already ran, and the scoring, subset breakdown and gate-metric assembly are "
-        "complete; only the model backend is outstanding (Phase 0)."
+    # Through serving.pipeline, never a bespoke inference path (SPEC_08): the
+    # report measures what production serves.
+    from common.scopes import default_scope, get_scope
+    from evaluation.golden_eval import dumps, evaluate_version
+    from inference_core.model_runner import load_model
+
+    scope = get_scope(args.scope) if args.scope else default_scope()
+    body = evaluate_version(
+        client, load_model(args.model, client),
+        version=args.model, corpus_version=args.corpus_version, scope=scope,
+        tenant_id=args.tenant,
     )
+    print(dumps(body.get("gate_metrics") or {}))
+    return 0
 
 
 if __name__ == "__main__":  # pragma: no cover

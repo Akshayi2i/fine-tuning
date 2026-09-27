@@ -1339,17 +1339,24 @@ def test_not_applicable_is_reported_apart_from_unmeasured():
     failed to produce."""
     from common.scopes import get_scope
 
-    metrics = _without(_passing(), "lossrun_totals_reconciliation_rate", "lob_detection_accuracy")
+    metrics = _without(
+        _passing(), "lossrun_totals_reconciliation_rate", "lob_detection_accuracy",
+        "false_null_rate",
+    )
     result = promotion_gate(metrics, None, scope=get_scope("policy"))
 
     assert not result.passed, "a metric the scope CAN produce and did not must block"
-    assert "lob_detection_accuracy" in result.failed_gates
+    assert "false_null_rate" in result.failed_gates
     assert "lossrun_totals_reconciliation_rate" not in result.failed_gates
+    # A canonical policy has no line of business for the model to detect.
+    assert "lob_detection_accuracy" not in result.failed_gates
 
     report = result.report()
-    assert "UNMEASURED: lob_detection_accuracy" in report
+    assert "UNMEASURED: false_null_rate" in report
     assert "not applicable: lossrun_totals_reconciliation_rate" in report
-    assert result.as_dict()["not_applicable"] == ["lossrun_totals_reconciliation_rate"]
+    assert set(result.as_dict()["not_applicable"]) >= {
+        "lossrun_totals_reconciliation_rate", "lob_detection_accuracy",
+    }
 
 
 def test_a_unified_run_still_blocks_on_the_same_missing_metric():

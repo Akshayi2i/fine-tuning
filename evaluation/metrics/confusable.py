@@ -79,6 +79,14 @@ def score_misattribution(
     this is the model conflating two parties, which is a different failure with a
     different fix.
     """
+    from evaluation.metrics.field_accuracy import flatten_scalars
+
+    # On values, by path. A canonical label is all nested sections, so a loop
+    # over its top-level keys evaluated nothing and reported a perfect 0.0 for a
+    # gating metric. Flattened (envelopes collapsed), a canonical document is
+    # checked exactly as a flat one is; table rows are left to the list metrics.
+    expected = {path: v for path, v in flatten_scalars(expected).items() if "[" not in path}
+    got = flatten_scalars(got)
     report = MisattributionReport()
 
     for field_path, expected_value in sorted(expected.items()):
@@ -101,8 +109,10 @@ def score_misattribution(
                 # values into a GATING metric: two cities that happen to match
                 # blocked a promotion, and the rate stopped measuring the
                 # entity-collapse failure it is named for.
-                confusables = alias_registry.confusables_for(doc_type, field_path)
-                label = alias_registry.aliases_for(doc_type, other_field)
+                # The registry is keyed by canonical field name, not by where the
+                # field sits, so a nested path is looked up by its leaf.
+                confusables = alias_registry.confusables_for(doc_type, _leaf(field_path))
+                label = alias_registry.aliases_for(doc_type, _leaf(other_field))
                 # Both sides must resolve before a collision is dismissed as
                 # coincidental. Dropping the `label` requirement — so an
                 # unresolvable other_field meant "skip" — silently discarded real
@@ -128,6 +138,10 @@ def score_misattribution(
                 )
                 break
     return report
+
+
+def _leaf(path: str) -> str:
+    return path.rsplit(".", 1)[-1]
 
 
 def aggregate_misattribution(reports: list[MisattributionReport]) -> MisattributionReport:

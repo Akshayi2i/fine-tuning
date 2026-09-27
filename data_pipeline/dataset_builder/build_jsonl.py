@@ -171,6 +171,12 @@ def expand_document(
     for mode_index, mode in enumerate(modes):
         if mode == "image_only":
             ocr_pages = None
+        elif mode == "noisy_ocr_image" and windowed:
+            # Corrupted per WINDOW below, each under its own budget: a window is
+            # what one row shows the model. One budget for a 200-page policy put
+            # two corruptions in one or two of its windows, and every other
+            # "noisy" row was byte-identical to its clean one.
+            ocr_pages = list(document.ocr_pages)
         elif mode == "noisy_ocr_image":
             # One budget for the whole document, spent across its pages. Calling
             # the single-page corrupter per page would multiply the noise by the
@@ -183,7 +189,9 @@ def expand_document(
             ocr_pages = list(document.ocr_pages)
 
         if windowed:
-            for row in _policy_window_rows(document, split, mode, ocr_pages, details):
+            for row in _policy_window_rows(
+                document, split, mode, ocr_pages, details, seed=seed
+            ):
                 row["mode_index"] = mode_index
                 rows.append(row)
             continue
@@ -214,6 +222,8 @@ def _policy_window_rows(
     mode: str,
     ocr_pages: list[str] | None,
     details: list[str],
+    *,
+    seed: int = 42,
 ) -> list[dict[str, Any]]:
     """One row per window, planned exactly as serving plans them.
 
@@ -229,11 +239,21 @@ def _policy_window_rows(
     for plan in plans:
         target = window_target(document.golden_label, document.lob, plan, report)
         indices = [page - 1 for page in plan.pages]
+        window_ocr = None if ocr_pages is None else [ocr_pages[i] for i in indices]
+        if window_ocr is not None and mode == "noisy_ocr_image":
+            # The document-level budget, applied to the pages this row carries.
+            # Seeded per window, so a rebuild is byte-identical.
+            window_ocr, window_details = corrupt_ocr_pages(
+                window_ocr, f"{document.source_id}#{plan.group}:{plan.window_index}", seed=seed
+            )
+            details.extend(
+                f"window {plan.group}:{plan.window_index} {d}" for d in window_details
+            )
         row = build_training_row(
             document.doc_type,
             document.source_id,
             [document.image_paths[i] for i in indices],
-            None if ocr_pages is None else [ocr_pages[i] for i in indices],
+            window_ocr,
             mode,
             json.dumps(target, ensure_ascii=False, sort_keys=False),
             acord_form=document.acord_form,

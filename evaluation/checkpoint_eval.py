@@ -234,7 +234,11 @@ def generation_scorer(rows: list[dict[str, Any]], model: Any) -> Scorer:
     which is the gate's own ``build_report``. A selector scoring by a different
     definition of "correct" picks a checkpoint the gate rejects.
     """
-    from evaluation.validation_generation import generate_validation, score_generations
+    from evaluation.validation_generation import (
+        assert_generations_usable,
+        generate_validation,
+        score_generations,
+    )
 
     if not rows:
         raise CheckpointEvalError(
@@ -242,18 +246,31 @@ def generation_scorer(rows: list[dict[str, Any]], model: Any) -> Scorer:
             "nothing would ship an arbitrary checkpoint."
         )
 
+    def close() -> None:
+        from inference_core.model_runner import release_model
+
+        release_model(model)
+
     def score(checkpoint: str) -> dict[str, float]:
         generations = generate_validation(rows, model, adapter=checkpoint)
+        # Raises for a broken pass, so select_best records this checkpoint as
+        # unscorable instead of ranking it at 0.0 — and refuses the stage when
+        # no checkpoint scored at all.
+        assert_generations_usable(generations, what=f"checkpoint {checkpoint}")
         return {
             k: float(v)
             for k, v in score_generations(generations, model_version=checkpoint).items()
             if isinstance(v, (int, float))
         }
 
+    # Called by the checkpoint stage once selection is done, to free the engine.
+    score.close = close  # type: ignore[attr-defined]
     return score
 
 
-def vllm_scorer(*, client: Any, val_path: str, model: Any = None) -> Scorer:
+def vllm_scorer(
+    *, client: Any, val_path: str, model: Any = None, images_root: str | None = None
+) -> Scorer:
     """A :func:`generation_scorer` over the stored validation split, on the base.
 
     The base is loaded in bf16 with LoRA enabled and each checkpoint applied as a
@@ -266,7 +283,13 @@ def vllm_scorer(*, client: Any, val_path: str, model: Any = None) -> Scorer:
         from inference_core.model_runner import load_model
 
         model = load_model("base", client)
-    return generation_scorer(read_rows(client.read_text(val_path)), model)
+    rows = read_rows(client.read_text(val_path))
+    if images_root is not None:
+        # vLLM opens images by path; the rows hold Blob keys.
+        from training.stage_data import localize_rows
+
+        rows = localize_rows(rows, client, images_root)
+    return generation_scorer(rows, model)
 
 
 def discover_checkpoints(output_dir: str) -> tuple[list[str], str | None]:

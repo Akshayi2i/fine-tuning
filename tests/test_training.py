@@ -365,7 +365,9 @@ def test_training_is_one_unified_run_on_a_bf16_base():
         corpus_paths=EPOCH_PATHS, output_dir="/tmp/out"
     )
     assert swift.args["train_type"] == "lora"
-    assert swift.args["quantization_bit"] == 0
+    # bf16 emits no quantization flag at all: ms-swift 3's quant_bits defaults to
+    # None, and the 2.x "quantization_bit" is not an argument it accepts.
+    assert "quant_bits" not in swift.args and "quantization_bit" not in swift.args
     assert "bnb_4bit_quant_type" not in swift.args
     assert recorded.technique == "LoRA"
     assert recorded.base_quantization == "bf16_frozen_base"
@@ -381,7 +383,7 @@ def test_both_the_vit_and_the_mergers_are_frozen():
 
     assert swift.args["freeze_vit"] is True
     assert swift.args["freeze_aligner"] is True
-    assert "merger" not in swift.args["lora_target_modules"]
+    assert "merger" not in swift.args["target_modules"]
     assert "merger" not in recorded.target_modules
     assert set(recorded.target_modules) == {
         "q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"
@@ -396,7 +398,7 @@ def test_the_memory_settings_that_make_the_largest_cap_affordable_reach_the_trai
 
     assert swift.args["use_logits_to_keep"] is True
     assert swift.args["padding_free"] is True
-    assert swift.args["length_grouped_sampling"] is True
+    assert swift.args["group_by_length"] is True
     assert swift.args["gradient_checkpointing"] is True
 
 
@@ -445,7 +447,7 @@ def test_four_bit_is_a_live_flag_not_a_hardcoded_constant(monkeypatch):
 
     swift, recorded = T.build_training_config(corpus_paths=EPOCH_PATHS, output_dir="/tmp/out")
 
-    assert swift.args["quantization_bit"] == 4
+    assert swift.args["quant_method"] == "bnb" and swift.args["quant_bits"] == 4
     assert swift.args["bnb_4bit_quant_type"] == "nf4"
     assert recorded.technique == "QLoRA"
     assert recorded.base_quantization == "nf4_double_quant_bfloat16_compute"
@@ -633,14 +635,64 @@ def test_a_crashed_run_is_recorded_as_failed(monkeypatch):
 
 
 def test_a_registry_run_id_is_refused_where_a_checkpoint_path_belongs():
-    """`continue_from` reaches ms-swift as resume_from_checkpoint, which reads a
-    directory. A run-id finds no checkpoint, trains from base, and the manifest
-    records `continued_from` — a lineage that never happened, later read as
-    evidence for how much regression testing a promotion needs."""
-    with pytest.raises(T.TrainingError, match="checkpoint path"):
-        T.assert_checkpoint_path("extractor-v3")
+    """`continue_from` reaches ms-swift as an adapter directory. A run-id finds
+    no adapter, trains from base, and the manifest records `continued_from` — a
+    lineage that never happened, later read as evidence for how much regression
+    testing a promotion needs. Refused however it is spelled."""
+    for run_id in ("extractor-v3", "extractor-v3/", "policy-v2/", "./extractor-v3"):
+        with pytest.raises(T.TrainingError, match="checkpoint path"):
+            T.assert_checkpoint_path(run_id)
 
     T.assert_checkpoint_path("/runpod-volume/staging/adapters/foundation/v3")   # fine
+
+
+def test_a_real_run_refuses_a_directory_with_no_adapter_in_it(tmp_path):
+    with pytest.raises(T.TrainingError, match="adapter_config.json"):
+        T.assert_checkpoint_path(str(tmp_path), must_exist=True)
+    (tmp_path / "adapter_config.json").write_text("{}", encoding="utf-8")
+    T.assert_checkpoint_path(str(tmp_path), must_exist=True)
+
+
+def test_continuing_starts_a_new_run_from_the_adapter():
+    """resume_from_checkpoint restores the old optimizer and global_step, so a
+    continuation could run zero steps and exit "trained" with the old weights."""
+    swift, _ = T.build_training_config(
+        corpus_paths=EPOCH_PATHS, output_dir="/tmp/out", resume_from="/ckpt/checkpoint-150"
+    )
+    assert swift.args["adapters"] == ["/ckpt/checkpoint-150"]
+    assert "resume_from_checkpoint" not in swift.args
+
+
+def test_the_command_uses_ms_swift_3_names_only():
+    """One ms-swift version, throughout. Its parser refuses an unknown flag, so a
+    2.x name in a 3.x command kills the run at argument parsing."""
+    swift, _ = T.build_training_config(corpus_paths=EPOCH_PATHS, output_dir="/tmp/out")
+    for old in ("model_type", "model_id_or_path", "lora_target_modules", "quantization_bit",
+                "length_grouped_sampling", "early_stopping_patience", "resume_from_checkpoint"):
+        assert old not in swift.args, f"{old} is not an ms-swift 3 argument"
+    assert swift.args["model"] == T.base_model_config()["model"]["model_id"]
+    assert swift.args["use_hf"] is True
+    assert swift.args["split_dataset_ratio"] == 0.0
+    assert swift.args["report_to"] == "none"
+    assert swift.args["attn_impl"] == "flash_attn"
+
+
+def test_the_evaluation_interval_is_sized_to_the_run():
+    """A fixed 50 steps gave a ~56-step pilot run one evaluation, and checkpoint
+    selection nothing to choose between."""
+    small, _ = T.build_training_config(corpus_paths=EPOCH_PATHS, output_dir="/o", train_rows=450)
+    assert small.args["eval_steps"] == small.args["save_steps"]
+    steps = -(-450 // 8)
+    assert steps // small.args["eval_steps"] >= T.MIN_EVALUATIONS
+    big, _ = T.build_training_config(corpus_paths=EPOCH_PATHS, output_dir="/o", train_rows=10**6)
+    assert big.args["eval_steps"] == 50, "a large run keeps the configured interval"
+
+
+def test_train_vit_is_refused_until_the_vision_targets_are_known(monkeypatch):
+    monkeypatch.setattr(T, "validate_all", lambda **_kw: None)
+    with pytest.raises(T.TrainingError, match="train-vit"):
+        T.train(corpus_version="v1", out_version="v9", client=None, corpus_manifest={},
+                data_stats=None, train_vit=True, dry_run=True)
 
 
 # --------------------------------------------------------------------------

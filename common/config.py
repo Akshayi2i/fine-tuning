@@ -162,6 +162,47 @@ def vision_for_task(task: str) -> dict[str, Any]:
     return resolved
 
 
+def pixel_budget(tasks: Any = None) -> tuple[int, int]:
+    """``(min_pixels, max_pixels)`` for the full-resolution tasks among ``tasks``.
+
+    The ONE budget both sides resize pages to: the ms-swift processor env at
+    training (``training.train._pixel_budget``) and the vLLM engine's
+    ``mm_processor_kwargs`` at serving. Each side used to take its own — training
+    the processor default until recently, serving the processor default still —
+    so the day a budget changed, the model would be served pixels it never saw.
+
+    ``tasks`` defaults to every task a corpus builds. Raises when they disagree:
+    a trainer and an engine each take one budget.
+    """
+    from common.tasks import CORPUS_TASKS, FULL_RESOLUTION_TASKS, Task
+
+    chosen = [t for t in (tasks if tasks is not None else CORPUS_TASKS)
+              if t in FULL_RESOLUTION_TASKS] or [Task.EXTRACT]
+    budgets = {
+        (int(b["min_pixels"]), int(b["max_pixels"]))
+        for b in (vision_for_task(str(task)) for task in chosen)
+    }
+    if len(budgets) != 1:
+        raise ConfigError(
+            f"the full-resolution tasks {sorted(map(str, chosen))} disagree on their pixel "
+            f"budget {sorted(budgets)}; one model is trained and served at one budget."
+        )
+    (budget,) = budgets
+    # Whole visual tokens only. The trainer is given the budget both as pixels
+    # and as a token count (pixels // 1024); a budget that is not a multiple
+    # makes those two forms disagree, and which one a processor reads decides
+    # the resolution the model sees.
+    from data_pipeline.dataset_builder.cap_check import PIXELS_PER_VISUAL_TOKEN
+
+    uneven = [v for v in budget if v % PIXELS_PER_VISUAL_TOKEN]
+    if uneven:
+        raise ConfigError(
+            f"pixel budget {budget} is not a whole number of {PIXELS_PER_VISUAL_TOKEN}-pixel "
+            f"visual tokens ({uneven}); round it in {SHARED_VISION_CONFIG.name}."
+        )
+    return budget
+
+
 def sequence_for_task(task: str, doc_type: str | None = None) -> dict[str, Any]:
     """The sequence cap and reserved output budget for one task (arch v2.1 §7a).
 

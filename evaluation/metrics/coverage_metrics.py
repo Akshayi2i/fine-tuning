@@ -49,6 +49,9 @@ class LobReport:
     #: there is no truth value to miss.
     undetermined_total: int = 0
     undetermined_correct: int = 0
+    #: Documents that carry a line to score. Zero means the metric is not
+    #: measured at all — absent, not 0.0.
+    scored: int = 0
 
     def _cell(self, value: str) -> list[int]:
         return self.per_value.setdefault(value, [0, 0, 0])
@@ -97,6 +100,14 @@ def score_lob(documents: list[tuple[dict[str, Any], dict[str, Any]]]) -> LobRepo
 
     report = LobReport()
     for expected, got in documents:
+        if "line_of_business" not in expected:
+            # A canonical policy label carries no line_of_business: its line
+            # comes from metadata, and the model is never asked for one. Scoring
+            # it would read an empty truth and an empty prediction as a 0.0 for
+            # every policy, which blocked every policy candidate on a metric the
+            # model has no way to move.
+            continue
+        report.scored += 1
         truth = set(normalize_lob(expected.get("line_of_business")))
         prediction = set(normalize_lob(got.get("line_of_business")))
 

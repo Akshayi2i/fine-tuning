@@ -111,8 +111,13 @@ def plan_quantization(
     version: str,
     formats: list[str] | None = None,
     fp8_verified: bool = False,
+    scope: str | None = None,
 ) -> QuantizationPlan:
     """Assemble a serving-format export plan.
+
+    ``scope`` addresses the scope's own merged model and outputs. Without it a
+    scoped run quantized the unified model's path — which merge never wrote for
+    that scope — and wrote its formats where ``_is_quantized`` never looks.
 
     Defaults to bf16 alone. That is not conservatism for its own sake: FP8 is
     unverified for this model until the Phase 0 spike runs, and a serving format
@@ -147,10 +152,11 @@ def plan_quantization(
         )
 
     return QuantizationPlan(
-        merged_model=paths.staging_merged_model_dir(version, None),
+        merged_model=paths.staging_merged_model_dir(version, None, scope=scope),
         formats=resolved,
         output_dirs={
-            f: paths.staging_quantized_model_dir(version, f) for f in resolved if f != "bf16"
+            f: paths.staging_quantized_model_dir(version, f, scope=scope)
+            for f in resolved if f != "bf16"
         },
         version=version,
         fp8_verified=fp8_verified,

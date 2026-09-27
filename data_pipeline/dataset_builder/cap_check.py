@@ -166,10 +166,18 @@ class CapReport:
 
 
 def estimate_text_tokens(text: str | None) -> int:
-    """Pessimistic token count for a string."""
+    """Pessimistic token count for a string.
+
+    Digits are counted one token each, the rest at :data:`CHARS_PER_TOKEN`.
+    Qwen's tokenizer splits numbers into single digits, so a flat characters-
+    per-token rate UNDER-counts exactly the text that matters most here — a
+    target of dates, amounts and policy numbers (``"04/01/2026"`` is ten tokens,
+    not three) — which is the direction this module exists to never err in.
+    """
     if not text:
         return 0
-    return int(len(text) / CHARS_PER_TOKEN) + 1
+    digits = sum(ch.isdigit() for ch in text)
+    return digits + int((len(text) - digits) / CHARS_PER_TOKEN) + 1
 
 
 def estimate_visual_tokens(pages: int, task: str) -> int:

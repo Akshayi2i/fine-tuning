@@ -34,7 +34,7 @@ from typing import Any
 
 from common.constants import ACTIVE_DOC_TYPES
 from common.run_ids import UNIFIED_LINEAGE, build_run_id
-from common.tasks import Task, parse
+from common.tasks import CORPUS_TASKS, Task, parse
 
 #: The scope every existing artifact belongs to. Its name is load-bearing:
 #: unified renders today's paths and today's run ids exactly.
@@ -138,20 +138,30 @@ def structural_not_applicable(scope: Scope) -> frozenset[str]:
     be validated at load time without ``common`` importing ``evaluation``.
     """
     absent: set[str] = set()
+    # A task the scope declares but the corpus builds no rows for is not
+    # trained, so it cannot be scored either. The classifier metric was a
+    # required gate while no classify row existed, which blocked every candidate.
+    trained = set(scope.tasks) & CORPUS_TASKS
 
     if "lossrun" not in scope.doc_types:
         # Reconciliation reads a Loss Run's printed totals. No Loss Run, no
         # totals — that is a statement about the eval set, not a pass.
         absent.add("lossrun_totals_reconciliation_rate")
 
-    if Task.PAGE_SELECT not in scope.tasks:
+    if Task.PAGE_SELECT not in trained:
         absent.add("page_selection_recall")
 
-    if Task.CLASSIFY not in scope.tasks:
+    if Task.CLASSIFY not in trained:
         # A scope that never classifies cannot be scored on classification. Note
         # that a single-type scope SHOULD still classify: it has to recognise the
         # types it does not serve and refuse them.
         absent.add("doc_type_classifier_accuracy")
+
+    if all(doc_type == "policy" for doc_type in scope.doc_types):
+        # Every policy is canonical, and a canonical label has no line of
+        # business for the model to detect — its line comes from metadata. A
+        # policy-only scope has nothing to score LOB detection on.
+        absent.add("lob_detection_accuracy")
 
     if not _has_list_field(scope.doc_types):
         # No repeating structure in any of this scope's schemas, so row recall

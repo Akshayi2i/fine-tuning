@@ -32,6 +32,7 @@ import argparse
 import logging
 from collections.abc import Iterable
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 from artifact_registry import paths
@@ -54,7 +55,6 @@ from registry_utils.models import (
 )
 from registry_utils.write_run_manifest import capture_git_commit, is_dirty_worktree, write_manifest
 from training.base_precision import manifest_descriptor, swift_quantization_args, technique
-from training.callbacks.early_stopping import swift_early_stopping_args
 from training.corpus_view import materialize
 
 log = logging.getLogger(__name__)
@@ -106,6 +106,23 @@ class SwiftConfig:
         return argv
 
 
+#: ms-swift 3 names for the attention implementations base_model.yaml uses.
+_ATTN_IMPL = {"flash_attention_2": "flash_attn"}
+
+#: Evaluations a run should get at least, so early checkpoints are saved and
+#: checkpoint selection has several to choose between.
+MIN_EVALUATIONS = 5
+
+
+def _eval_interval(train_rows: int | None, *, configured: int, effective_batch: int) -> int:
+    """Steps between evaluations (and saves): the configured value, shrunk so a
+    run gets at least :data:`MIN_EVALUATIONS`. Unknown row counts keep it."""
+    if not train_rows:
+        return configured
+    steps = max(1, -(-train_rows // max(1, effective_batch)))
+    return max(1, min(configured, steps // MIN_EVALUATIONS or 1))
+
+
 def corpus_max_length(scope: Scope | None = None) -> int:
     """The single ``max_length`` for a mixed-task corpus.
 
@@ -154,6 +171,7 @@ def build_training_config(
     resume_from: str | None = None,
     config_name: str | None = None,
     scope: Scope | None = None,
+    train_rows: int | None = None,
 ) -> tuple[SwiftConfig, TrainingConfig]:
     """Assemble the ms-swift arguments and the manifest's record of them.
 
@@ -186,11 +204,28 @@ def build_training_config(
         target_modules.append("merger")
 
     max_length = corpus_max_length(scope)
+    interval = _eval_interval(
+        train_rows,
+        configured=int(evaluation["eval_steps"]),
+        effective_batch=int(batch["per_device_train_batch_size"])
+        * int(batch["gradient_accumulation_steps"]),
+    )
 
+    # ms-swift 3 argument names, one version, throughout (pinned in pyproject).
+    # The command used to mix 2.x names (model_id_or_path, lora_target_modules,
+    # quantization_bit) with 3.x-only ones (strict, padding_free), which no single
+    # ms-swift accepts — its parser refuses an unknown flag, so the run died at
+    # argument parsing. The Phase 0 spike parses this exact command with
+    # ms-swift's own parser (check_ms_swift) so a wrong name fails there.
     args: dict[str, Any] = {
-        "model_type": "qwen3-vl-8b-instruct",
-        "model_id_or_path": base["model"]["model_id"],
+        # No model_type: ms-swift 3 infers it from the checkpoint, and the 2.x
+        # name "qwen3-vl-8b-instruct" is not one it registers.
+        "model": base["model"]["model_id"],
         "model_revision": base["model"]["revision"],
+        # From the Hugging Face hub, not ModelScope (ms-swift's default): the
+        # pinned revision is a Hugging Face commit, and the tokenizer the
+        # pre-launch length check loads, serving and the manifest all assume it.
+        "use_hf": True,
         # The first N epoch files, read once each. Every file holds every train
         # document, in that epoch's modality draw, so the concatenation has the
         # CONTENT of an N-epoch run: each document N times, in N regimes. Not its
@@ -204,13 +239,15 @@ def build_training_config(
         "lora_rank": lora["rank"],
         "lora_alpha": lora["alpha"],
         "lora_dropout": lora["dropout"],
-        "lora_target_modules": target_modules,
+        "target_modules": target_modules,
         "use_rslora": bool(lora.get("use_rslora", False)),
         # bf16 frozen base by default; 4-bit NF4 only when the config asks for it
         # (arch §9). One helper shared with any future trainer so they cannot
         # disagree about how the base is held.
         **swift_quantization_args(base),
-        "attn_impl": base["attention"]["attn_implementation"],
+        "attn_impl": _ATTN_IMPL.get(
+            base["attention"]["attn_implementation"], base["attention"]["attn_implementation"]
+        ),
         "learning_rate": opt["learning_rate"],
         "lr_scheduler_type": opt["lr_scheduler_type"],
         # Steps, not a ratio: at pilot volume a 0.03 ratio over a handful of
@@ -229,6 +266,7 @@ def build_training_config(
         "gradient_accumulation_steps": batch["gradient_accumulation_steps"],
         "gradient_checkpointing": batch["gradient_checkpointing"],
         "bf16": batch["bf16"],
+        "torch_dtype": "bfloat16" if batch["bf16"] else "float32",
         "max_length": max_length,
         # Never "left" or "right": "left" removes the system prompt, "right" the
         # end of the target, and a clipped target trains the model to stop early.
@@ -248,25 +286,36 @@ def build_training_config(
         # activation memory on its own.
         "use_logits_to_keep": bool(memory.get("use_logits_to_keep", True)),
         "padding_free": bool(memory.get("padding_free", True)),
-        "length_grouped_sampling": bool(memory.get("length_grouped_sampling", True)),
+        # The Hugging Face TrainingArguments name. "length_grouped_sampling" is
+        # not an argument of either ms-swift or HF, and was refused at parsing.
+        "group_by_length": bool(memory.get("length_grouped_sampling", True)),
         # Frozen, both of them (arch v2.1 §9.4). `train_vit` is the §3 escalation
         # and remains LoRA-on-ViT, never a full fine-tune.
         "freeze_vit": not train_vit,
         "freeze_aligner": True,
+        # The validation file is the ONLY eval set. Without this, ms-swift
+        # carves its own eval split out of the training data as well — the
+        # leakage keeping --dataset and --val_dataset apart exists to prevent.
+        "split_dataset_ratio": 0.0,
         "eval_strategy": evaluation["eval_strategy"],
-        "eval_steps": evaluation["eval_steps"],
-        "save_steps": evaluation["save_steps"],
+        "save_strategy": evaluation.get("save_strategy", "steps"),
+        # Sized to the run, not fixed at 50: at pilot volume a whole run is ~56
+        # optimizer steps, so a fixed 50 gave one evaluation and one checkpoint,
+        # and checkpoint selection had nothing to choose between.
+        "eval_steps": interval,
+        "save_steps": interval,
         "save_total_limit": evaluation["save_total_limit"],
-        # Unpacked FIRST so the explicit keys above win. Unpacking it last
-        # silently overrode this config's metric_for_best_model and
-        # load_best_model_at_end with the helper's own defaults.
-        **swift_early_stopping_args(
-            int(evaluation.get("early_stopping_patience", 3)),
-            metric_for_best_model=evaluation["metric_for_best_model"],
-            greater_is_better=bool(evaluation.get("greater_is_better", False)),
-            load_best_model_at_end=bool(evaluation["load_best_model_at_end"]),
-        ),
+        # Standard HF TrainingArguments. There is deliberately no early-stopping
+        # patience flag: "early_stopping_patience" is not an argument ms-swift 3
+        # accepts, and what ships is chosen by generated field F1 over every
+        # saved checkpoint (checkpoint_eval), not by where loss stopped falling.
+        "load_best_model_at_end": bool(evaluation["load_best_model_at_end"]),
+        "metric_for_best_model": evaluation["metric_for_best_model"],
+        "greater_is_better": bool(evaluation.get("greater_is_better", False)),
         "logging_steps": cfg["logging"]["logging_steps"],
+        # Never a tracker nobody configured: "[]" in the YAML used to fall back
+        # to the HF default, which enables whatever tracker is installed.
+        "report_to": "none",
         "seed": cfg["seed"],
     }
 
@@ -279,7 +328,12 @@ def build_training_config(
     if val_paths:
         args["val_dataset"] = val_paths
     if resume_from:
-        args["resume_from_checkpoint"] = resume_from
+        # A NEW run that starts from the adapter's weights. resume_from_checkpoint
+        # restores the old run's optimizer, schedule and global_step: continuing
+        # v2 on a new corpus would resume mid-cosine, or run zero steps when the
+        # old step count already exceeds the new run's, and exit "trained" with
+        # the old weights.
+        args["adapters"] = [resume_from]
 
     recorded = TrainingConfig(
         # Derived from the config that actually ran, never defaulted. These three
@@ -328,26 +382,18 @@ def _pixel_budget(scope: Scope) -> dict[str, str]:
     nothing differs, but the day a render or a vision budget changes, training
     and serving would see different pixels with nothing to say so.
     """
-    from common.config import vision_for_task
-    from common.tasks import FULL_RESOLUTION_TASKS
+    from common.config import ConfigError, pixel_budget
     from data_pipeline.dataset_builder.cap_check import PIXELS_PER_VISUAL_TOKEN
 
-    tasks = [task for task in scope.tasks if task in FULL_RESOLUTION_TASKS] or [Task.EXTRACT]
-    budgets = {
-        (int(b["min_pixels"]), int(b["max_pixels"]))
-        for b in (vision_for_task(str(task)) for task in tasks)
-    }
-    # One budget for the whole run, because the trainer takes one. Every row
-    # the corpus builds today is full resolution, so they agree; the day a
-    # corpus carries rows of a task with a different budget (the thumbnail
-    # tasks), a run-wide max would train them at the wrong resolution, and
-    # training.stage_data refuses such rows rather than let that happen.
-    if len(budgets) != 1:
-        raise TrainingError(
-            f"the full-resolution tasks in scope {scope.name!r} disagree on their pixel "
-            f"budget {sorted(budgets)}; the trainer takes one budget per run."
-        )
-    (min_pixels, max_pixels), = budgets
+    # One budget for the whole run, because the trainer takes one — and the
+    # same function serving's engine takes its budget from. Every row the corpus
+    # builds today is full resolution, so the tasks agree; the day a corpus
+    # carries rows of a task with a different budget (the thumbnail tasks),
+    # training.stage_data refuses such rows rather than train them wrongly.
+    try:
+        min_pixels, max_pixels = pixel_budget(scope.tasks)
+    except ConfigError as exc:
+        raise TrainingError(f"scope {scope.name!r}: {exc}") from exc
     per_token = PIXELS_PER_VISUAL_TOKEN
     # Both forms. Qwen2/2.5-VL read MAX_PIXELS/MIN_PIXELS; ms-swift's Qwen3-VL
     # template reads a token budget. Whichever this ms-swift reads, it reads the
@@ -370,6 +416,7 @@ def build_manifest(
     staging_path: str,
     continued_from: str | None = None,
     scope: Scope | None = None,
+    tenant_id: str | None = None,
 ) -> RunManifest:
     """Build the run manifest. Written to Blob even while weights are staged."""
     base = base_model_config()["model"]
@@ -388,6 +435,9 @@ def build_manifest(
         run_type="unified" if scope.is_unified else "scoped",
         scope=None if scope.is_unified else scope.name,
         doc_types=[] if scope.is_unified else list(scope.doc_types),
+        # Whose corpus trained it. The field existed and nothing set it, so a
+        # manifest could not say which tenant's documents its weights came from.
+        tenant_id=paths._tenant(tenant_id),
         continued_from=continued_from,
         dependencies=Dependencies(
             base_model=f"{base['model_id']}@{base['revision']}",
@@ -403,6 +453,44 @@ def build_manifest(
         artifacts=Artifacts(status="staged", staging_path=staging_path),
         status="training",
     )
+
+
+#: Set to train on a GPU host that is not a RunPod pod (a workstation with its
+#: own disk). The check below exists for the case nobody meant: a laptop run.
+OFF_POD_ENV = "FIDEON_ALLOW_OFF_POD"
+
+
+def assert_on_pod() -> None:
+    """Refuse a real launch anywhere but a GPU pod with the staging volume.
+
+    ``finetune`` defaults to a real run, and off the pod ms-swift would start a
+    CPU "training" run that takes days, or download 16 GB of base weights to a
+    laptop, while the staging paths it writes to — ``/runpod-volume/...`` — do
+    not exist, so nothing it produced could be found by the stages after it.
+    """
+    import os
+
+    if os.environ.get(OFF_POD_ENV) == "1":
+        return
+    # The mount the staging paths resolve under, however it is configured.
+    mount = os.environ.get("RUNPOD_VOLUME_MOUNT", "/runpod-volume")
+
+    problems = []
+    try:
+        import torch
+
+        if not torch.cuda.is_available():
+            problems.append("no CUDA device is visible")
+    except ImportError:
+        problems.append("torch is not installed")
+    if not Path(mount).is_dir():
+        problems.append(f"the staging volume is not mounted at {mount}")
+    if problems:
+        raise TrainingError(
+            "refusing to launch training here: " + "; ".join(problems) + ". Run it on the "
+            f"RunPod pod, use --dry-run to check the plan, or set {OFF_POD_ENV}=1 on a GPU "
+            "host whose staging paths exist."
+        )
 
 
 def train(
@@ -436,6 +524,20 @@ def train(
             id, staging path and manifest shape it always did.
     """
     validate_all(require_pinned_revision=not dry_run)
+    if not dry_run:
+        assert_on_pod()
+    if train_vit:
+        # Refused, not attempted. The LoRA targets are the decoder's projection
+        # names; Qwen3-VL's vision blocks use different ones, and ms-swift only
+        # applies freeze_vit=false when expanding "all-linear". So --train-vit
+        # trained the same decoder-only adapter while the manifest recorded
+        # vit_trainable=True. The vision module names are what the spike's
+        # merger_module_names check measures; this unblocks once they are known.
+        raise TrainingError(
+            "--train-vit is not supported yet: the vision-tower LoRA target names are unconfirmed, "
+            "so the run would train the decoder only while recording a vision LoRA. Confirm the "
+            "module names with the Phase 0 spike (merger_module_names) first."
+        )
 
     # Train and val are kept apart. Passing both to `--dataset` made ms-swift
     # treat the validation split as training data and then carve its own eval
@@ -450,21 +552,34 @@ def train(
     val_paths = [view.val_path]
     staging = paths.scoped_staging_adapter_dir(scope.name, out_version)
 
+    # The rows the run actually trains on: the first N epoch files, not all four
+    # that are materialized. Counting all four overstated the data by a third,
+    # and the same count sizes the evaluation interval.
+    epochs = int(training_config(scope.training_config)["optimization"]["num_train_epochs"])
+    train_rows = (
+        sum(view.rows_by_epoch.get(e, 0) for e in range(1, epochs + 1)) if not scope.is_unified
+        else sum(_count_rows(client, key) for key in view.epoch_files[:epochs])
+    )
+    update: dict[str, Any] = {"train_examples": train_rows}
     if not scope.is_unified:
         # The caller counts the whole corpus. A scoped run trains on its view,
         # and its manifest has to say so: a lossrun run recording every policy
         # row as its training data describes a run that did not happen.
-        data_stats = data_stats.model_copy(update={
-            "train_examples": view.train_rows,
-            "val_examples": view.val_rows,
-            "test_examples": view.test_rows,
-        })
+        update |= {"val_examples": view.val_rows, "test_examples": view.test_rows}
+    data_stats = data_stats.model_copy(update=update)
+
+    # A version already trained or promoted is never overwritten — not by a
+    # re-run, and not by a dry run, which used to replace a promoted manifest
+    # with a fresh "training" one and leave that row in the index for good.
+    _refuse_existing_run(scope.run_id(out_version), client)
 
     # Every check that costs nothing runs before staging, which downloads every
     # page image the run reads. A run that is going to be refused should be
     # refused before that, not after thousands of images reach a paid pod.
     if continue_from:
-        assert_checkpoint_path(continue_from)
+        # Existence is checked on a real run only: the directory is on the pod's
+        # volume, which a dry run on an operator machine cannot see.
+        assert_checkpoint_path(continue_from, must_exist=not dry_run)
     # Counted only for a real run, where it decides anything; a dry run launches
     # nothing and would read the unified validation file for no reason.
     if not dry_run and not (
@@ -491,6 +606,7 @@ def train(
         deepspeed=deepspeed,
         resume_from=continue_from,
         scope=scope,
+        train_rows=train_rows,
     )
 
     if not dry_run:
@@ -498,9 +614,10 @@ def train(
         # the corpus's own shape — handed over as-is, the trainer finds nothing,
         # and a row that did load would fail on its mixed-type content column.
         # A dry run launches nothing, so it records the Blob keys instead.
-        from training.stage_data import stage_training_data
+        from training.stage_data import prune_image_caches, stage_training_data
 
         epochs = len(swift.args["dataset"])
+        prune_image_caches(paths.staging_train_images_dir(corpus_version, tenant_id))
         staged = stage_training_data(
             view.epoch_files[:epochs], view.val_path, client,
             paths.staging_train_data_dir(scope.name, out_version),
@@ -509,7 +626,8 @@ def train(
         )
         swift.args["dataset"] = staged.epoch_files
         swift.args["val_dataset"] = [staged.val_path]
-        _assert_rows_fit(swift, [*staged.epoch_files, staged.val_path])
+        _assert_rows_fit(swift, [*staged.epoch_files, staged.val_path], staged.output_caps)
+        _assert_masking(staged.epoch_files, swift)
 
     # Only the epochs this run uses. Four files are always materialized because
     # the §11a sweep tests up to four passes (§6.1), and a sweep that regenerates
@@ -523,6 +641,7 @@ def train(
         staging_path=staging,
         continued_from=continue_from,
         scope=scope,
+        tenant_id=tenant_id,
     )
     write_manifest(manifest, client)
 
@@ -542,7 +661,49 @@ def _token_counter():
     return tokenizer_counter(model["model_id"], model.get("revision"))
 
 
-def _assert_rows_fit(swift: SwiftConfig, files: list[str]) -> None:
+def _masking_encoder(swift: SwiftConfig):  # pragma: no cover - needs ms-swift and the tokenizer
+    """ms-swift's template encode for this model, with the budget env applied.
+
+    Returns ``(encode, assistant_header_ids, end_token_id)``. A seam, so tests
+    need neither ms-swift nor a model.
+    """
+    import os
+
+    from swift.llm import get_model_tokenizer, get_template
+
+    os.environ.update(swift.env)
+    _model, processor = get_model_tokenizer(
+        swift.args["model"], load_model=False, revision=swift.args.get("model_revision"),
+    )
+    template = get_template(processor.model_meta.template, processor)
+    template.set_mode("train")
+    tokenizer = processor.tokenizer if hasattr(processor, "tokenizer") else processor
+    header = tokenizer.encode("<|im_start|>assistant\n", add_special_tokens=False)
+    end = tokenizer.convert_tokens_to_ids("<|im_end|>")
+    return template.encode, header, end
+
+
+def _assert_masking(files: list[str], swift: SwiftConfig) -> None:
+    """Refuse the run if the trainer would supervise anything but the answer.
+
+    ``training.data_collator`` held this check and nothing called it. A masking
+    error trains the model to reproduce its prompt while the loss curve looks
+    normal; encoded here with ms-swift's own template, it is caught before launch.
+    """
+    from training.data_collator import MaskingError, verify_staged_rows
+
+    encode, header, end = _masking_encoder(swift)
+    try:
+        report = verify_staged_rows(files, encode=encode, assistant_header_ids=header,
+                                    end_token_id=end)
+    except MaskingError as exc:
+        raise TrainingError(f"label masking check failed before launch: {exc}") from exc
+    log.info("masking check: %s", report.summary())
+
+
+def _assert_rows_fit(
+    swift: SwiftConfig, files: list[str], output_caps: dict[str, list[int]] | None = None
+) -> None:
     """Refuse the run before launch if any staged row is over ``max_length``.
 
     Under strict encoding such a row stops the run when the trainer reaches it,
@@ -557,16 +718,37 @@ def _assert_rows_fit(swift: SwiftConfig, files: list[str]) -> None:
         count_tokens=_token_counter(),
         min_pixels=int(swift.env["MIN_PIXELS"]),
         max_pixels=int(swift.env["MAX_PIXELS"]),
+        output_caps=output_caps,
     )
     log.info("length check: %d row(s), longest %d tokens", report.rows, report.longest)
     if not report.ok:
         worst = sorted(report.over, key=lambda o: -int(o["tokens"]))[:5]
         raise TrainingError(
             f"{len(report.over)} staged row(s) exceed max_length "
-            f"{swift.args['max_length']} by the real tokenizer and resize rule, though the "
-            f"corpus estimate passed them: {worst}. The corpus budget estimate is wrong for "
+            f"{swift.args['max_length']} or their task's output reservation, by the real "
+            f"tokenizer and resize rule, though the corpus estimate passed them: {worst}. The corpus budget estimate is wrong for "
             "these rows — fix it (cap_check) and rebuild, rather than letting the trainer "
             "reach them."
+        )
+
+
+#: Statuses a run can be overwritten from: one that never finished.
+_REPLACEABLE = ("training", "failed")
+
+
+def _refuse_existing_run(run_id: str, client: BlobClient) -> None:
+    """Refuse to overwrite a run that trained, was evaluated or promoted."""
+    from registry_utils.query_registry import RegistryQueryError
+    from registry_utils.query_registry import get as get_manifest
+
+    try:
+        existing = get_manifest(run_id, client)
+    except (RegistryQueryError, KeyError, FileNotFoundError):
+        return
+    if existing.status not in _REPLACEABLE:
+        raise TrainingError(
+            f"{run_id} already exists with status {existing.status!r}. A trained, evaluated or "
+            "promoted run is never overwritten — choose a new --out-version."
         )
 
 
@@ -577,7 +759,7 @@ def _count_rows(client: BlobClient, key: str) -> int:
     return sum(1 for line in client.read_text(key).splitlines() if line.strip())
 
 
-def assert_checkpoint_path(continue_from: str) -> None:
+def assert_checkpoint_path(continue_from: str, *, must_exist: bool = False) -> None:
     """Refuse a registry run-id where a checkpoint directory is required.
 
     ms-swift's ``resume_from_checkpoint`` reads a directory. Handed a run-id it
@@ -589,13 +771,27 @@ def assert_checkpoint_path(continue_from: str) -> None:
     this replaced listed the lineages v1 happened to mint, and would have waved
     every scoped id straight through.
     """
-    if is_valid_run_id(continue_from.strip().rstrip("/").split("/")[-1]) and "/" not in continue_from:
+    stripped = continue_from.strip().rstrip("/\\")
+    # A bare run-id, with or without a trailing slash or a "./" prefix, is still
+    # a run-id: "extractor-v3/" slipped through the old check.
+    bare = stripped[2:] if stripped.startswith(("./", ".\\")) else stripped
+    if is_valid_run_id(bare) and not any(sep in bare for sep in "/\\"):
         raise TrainingError(
             f"--continue-from got {continue_from!r}, which is a registry run-id, not a "
             "checkpoint path. ms-swift resumes from a DIRECTORY; given a run-id it silently "
             "trains from base while the manifest records a lineage that never happened. "
             "Pass the staged checkpoint directory instead."
         )
+    if must_exist:
+        from pathlib import Path
+
+        directory = Path(stripped)
+        if not (directory / "adapter_config.json").is_file():
+            raise TrainingError(
+                f"--continue-from {continue_from!r} is not an adapter directory (no "
+                "adapter_config.json there). Pass the checkpoint directory itself, e.g. "
+                ".../checkpoint-150."
+            )
 
 
 def count_examples(bucket: Any) -> int:
@@ -657,7 +853,26 @@ def launch(config: SwiftConfig) -> None:
 
     argv = config.to_cli()
     log.info("launching: %s (env %s)", " ".join(argv), config.env)
-    subprocess.run(argv, check=True, env={**os.environ, **config.env})
+    subprocess.run(argv, check=True, env={**trainer_environment(os.environ), **config.env})
+
+
+#: Environment names the trainer never needs and must never hold. ms-swift runs
+#: third-party code (the model's remote code, report integrations) and writes its
+#: environment into run logs; the Blob connection string rode along into both.
+_SECRET_MARKERS = (
+    "AZURE", "CONNECTION_STRING", "SECRET", "PASSWORD", "API_KEY", "ACCESS_KEY",
+    "SAS", "RUNPOD", "CREDENTIAL",
+)
+#: Secrets the trainer does need: pulling the pinned base from the Hub.
+_TRAINER_SECRETS = frozenset({"HF_TOKEN", "HUGGING_FACE_HUB_TOKEN"})
+
+
+def trainer_environment(environ: Any) -> dict[str, str]:
+    """``environ`` without the credentials the training subprocess has no use for."""
+    return {
+        key: value for key, value in environ.items()
+        if key in _TRAINER_SECRETS or not any(m in key.upper() for m in _SECRET_MARKERS)
+    }
 
 
 def main(argv: Iterable[str] | None = None) -> int:  # pragma: no cover - thin CLI

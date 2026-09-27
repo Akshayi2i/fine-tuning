@@ -32,8 +32,8 @@ data = [
 # RunPod only. flash-attn needs a CUDA toolchain and is the usual install
 # failure - the Phase 0 spike exists partly to find that out early.
 train = [
-    "torch>=2.3", "transformers>=4.45", "peft>=0.11", "bitsandbytes>=0.43",
-    "accelerate>=0.30", "deepspeed>=0.14", "trl>=0.9", "ms-swift>=2.3",
+    "torch>=2.3", "transformers>=4.57", "peft>=0.11", "bitsandbytes>=0.43",
+    "accelerate>=0.30", "deepspeed>=0.14", "trl>=0.9", "ms-swift>=3.9,<4",
     "flash-attn>=2.5; platform_system=='Linux'",
 ]
 # RunPod serving pod. llm-compressor produces the FP8 and AWQ INT4 weights vLLM

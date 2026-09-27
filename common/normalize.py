@@ -204,14 +204,51 @@ def normalize_entity_name(value: Any) -> str | None:
     return " ".join(tokens) or None
 
 
+#: Words that name what kind of insurer a company is, not which one. Trailing
+#: runs of them are dropped by :func:`normalize_carrier`.
+_CARRIER_TRAILING = frozenset({
+    "insurance", "ins", "company", "co", "companies", "indemnity", "casualty",
+    "surety", "assurance", "underwriters", "group", "mutual", "fire", "and", "of",
+    "america", "corp", "corporation", "exchange",
+})
+
+
+def normalize_carrier(value: Any) -> str | None:
+    """One key per insurer, for the held-out-carrier split and family grouping.
+
+    ``The Travelers Indemnity Company``, ``Travelers Casualty and Surety Company
+    of America`` and ``TRAVELERS`` are one carrier. Compared as written they were
+    three, so holding one out of train left the other two in it — the carrier's
+    templates leaked across the split the hold-out exists to keep clean — and
+    each variant looked like a small carrier, skewing which ones were chosen.
+
+    Conservative past that: only a TRAILING run of insurer words goes, so
+    ``Great American`` and ``Great Northern`` stay apart.
+    """
+    tokens = (normalize_entity_name(value) or "").split()
+    if tokens and tokens[0] == "the":
+        tokens = tokens[1:]
+    while len(tokens) > 1 and tokens[-1] in _CARRIER_TRAILING:
+        tokens.pop()
+    return " ".join(tokens) or None
+
+
 #: Field-name suffixes mapped to the normalizer they should use.
 _FIELD_KIND_SUFFIXES: tuple[tuple[tuple[str, ...], str], ...] = (
-    (("_date", "date"), "date"),
+    # Dates are matched by word in infer_field_kind: a suffix "date" also
+    # matched `candidate` and `update`.
     (("_number", "_no", "_num", "number"), "identifier"),
     (("premium", "limit", "deductible", "paid", "reserved", "incurred",
       "amount", "revenue", "footage"), "currency"),
     (("_name", "name", "carrier", "producer", "insured", "holder"), "entity"),
 )
+
+
+_DATE_WORDS = frozenset({"date", "dates", "dated", "dob"})
+#: A list index anywhere in a path segment: `report_due_dates[0]`. The old
+#: `rstrip("[]")` stripped brackets but not the digit between them, so an
+#: element of a list of dates was never recognised as one.
+_INDEX = re.compile(r"\[\d*\]")
 
 
 def infer_field_kind(field_path: str) -> str:
@@ -220,7 +257,14 @@ def infer_field_kind(field_path: str) -> str:
     Deliberately name-based: the alternative is a hand-maintained per-field map
     that silently goes stale when the schema gains a field.
     """
-    leaf = field_path.rsplit(".", 1)[-1].rstrip("[]").casefold()
+    leaf = _INDEX.sub("", field_path.rsplit(".", 1)[-1]).casefold()
+    # A date by any word of its name, not by suffix: the canonical schemas name
+    # dates `date_of_birth`, `date_licensed`, `replaces_prior_declaration_dated`
+    # and `report_due_dates`, and a suffix rule left all of them unformatted —
+    # MM/DD/YYYY was a guarantee for most dates and not for these. Whole words,
+    # so `update_reason` or `candidate` is not a date.
+    if _DATE_WORDS & set(leaf.split("_")):
+        return "date"
     for suffixes, kind in _FIELD_KIND_SUFFIXES:
         if any(leaf.endswith(s) or leaf == s for s in suffixes):
             return kind

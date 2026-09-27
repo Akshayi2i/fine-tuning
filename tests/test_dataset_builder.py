@@ -913,7 +913,7 @@ def test_a_long_policy_keeps_its_schedules_and_endorsements():
     selected = select_policy_pages(found, 200)
     assert set(found) <= set(selected), f"dropped {sorted(set(found) - set(selected))}"
 
-    windows = plan_policy_windows(selected, pages_per_window=5)
+    windows = plan_policy_windows(selected, pages_per_window=5, leading=[1, 2, 3])
     assert [p for w in windows for p in w] == selected, "windowing lost a page"
     assert windows[0] == [1, 2, 3], "the declarations lead their own window"
     assert all(len(w) <= 5 for w in windows)
@@ -929,13 +929,13 @@ def test_a_run_of_pages_is_not_split_until_it_has_to_be():
     arbitrary boundary hands the model half a table with no header."""
     from data_pipeline.dataset_builder.expand_tasks import plan_policy_windows
 
-    assert plan_policy_windows([1, 2, 3, 10, 11, 12, 40], pages_per_window=4) == [
-        [1, 2, 3], [10, 11, 12, 40],
-    ]
+    assert plan_policy_windows(
+        [1, 2, 3, 10, 11, 12, 40], pages_per_window=4, leading=[1, 2, 3]
+    ) == [[1, 2, 3], [10, 11, 12, 40]]
     # A run too long for one window gets windows of its own, never mixed.
-    assert plan_policy_windows([1, 10, 11, 12, 13, 14, 40], pages_per_window=3) == [
-        [1], [10, 11, 12], [13, 14], [40],
-    ]
+    assert plan_policy_windows(
+        [1, 10, 11, 12, 13, 14, 40], pages_per_window=3, leading=[1]
+    ) == [[1], [10, 11, 12], [13, 14], [40]]
 
 
 def test_scattered_pages_share_a_window_rather_than_each_paying_a_prompt():
@@ -944,7 +944,7 @@ def test_scattered_pages_share_a_window_rather_than_each_paying_a_prompt():
     from data_pipeline.dataset_builder.expand_tasks import plan_policy_windows
 
     windows = plan_policy_windows([1, 7, 12, 19, 25, 31], pages_per_window=5)
-    assert windows == [[1], [7, 12, 19, 25, 31]]
+    assert windows == [[1, 7, 12, 19, 25], [31]]
 
 
 def test_how_many_pages_a_call_holds_depends_on_the_line():
@@ -992,3 +992,21 @@ def test_every_acord_form_in_the_corpus_is_pinned_not_just_form_25():
     assert {"acord:25", "acord:125", "acord:140", "policy"} <= set(pins)
     assert all(version for version in pins.values())
     assert "lossrun" not in pins, "a type the corpus does not hold is not pinned"
+
+
+def test_a_routed_group_does_not_set_the_first_pages_apart():
+    """Only the declarations group leads with pages 1-3. A routed group packing
+    them apart spent a whole call on pages that may hold none of its tables."""
+    from data_pipeline.dataset_builder.expand_tasks import plan_policy_windows
+
+    assert plan_policy_windows([1, 2, 3, 10, 11], pages_per_window=5) == [[1, 2, 3, 10, 11]]
+
+
+def test_the_declarations_page_is_read_with_the_leading_pages():
+    """A policy behind a fax cover sheet has its declarations on page 5; that page
+    is read in the same window as pages 1-3, not in a window of its own."""
+    from data_pipeline.dataset_builder.policy_windows import plan_windows
+
+    plans = plan_windows("homeowners", [1, 2, 3, 5, 9, 10], declarations_page=5)
+    decl = [p for p in plans if p.group == "decl"]
+    assert [list(p.pages) for p in decl] == [[1, 2, 3, 5]]

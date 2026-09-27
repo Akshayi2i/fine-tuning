@@ -45,23 +45,24 @@ def technique(base: dict[str, Any]) -> Technique:
 def swift_quantization_args(base: dict[str, Any]) -> dict[str, Any]:
     """ms-swift arguments for base-weight precision.
 
-    ``quantization_bit`` is passed **explicitly as 0** in the bf16 case rather
-    than omitted. Leaving it out would make the run depend on ms-swift's own
-    default staying 0 across versions, and this file already carries one scar
-    from exactly that class of assumption — see ``SwiftConfig.BOOL_FLAGS``, where
-    dropped ``False`` values silently disabled options whose correct value is
-    ``False``.
+    ms-swift 3 names: ``quant_method`` + ``quant_bits``. The 2.x
+    ``quantization_bit`` is not an ms-swift 3 argument, and its parser refuses an
+    unknown flag, so passing it killed every run at argument parsing.
 
-    The ``bnb_4bit_*`` arguments are emitted **only** under 4-bit. Passing them
-    alongside ``quantization_bit=0`` would put settings in the rendered command
-    line, and therefore in the run log, that describe nothing the run did.
+    bf16 emits NOTHING. ms-swift 3's ``quant_bits`` defaults to None — no
+    quantization — and has no "0" value to state it explicitly with.
+
+    The ``bnb_4bit_*`` arguments are emitted **only** under 4-bit, so the rendered
+    command, and therefore the run log, never carries settings that describe
+    nothing the run did.
     """
     if not loads_in_4bit(base):
-        return {"quantization_bit": 0}
+        return {}
 
     quant = base["quantization"]
     return {
-        "quantization_bit": 4,
+        "quant_method": "bnb",
+        "quant_bits": 4,
         "bnb_4bit_quant_type": quant["bnb_4bit_quant_type"],
         "bnb_4bit_use_double_quant": quant["bnb_4bit_use_double_quant"],
         "bnb_4bit_compute_dtype": quant["bnb_4bit_compute_dtype"],

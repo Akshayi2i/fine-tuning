@@ -223,6 +223,48 @@ def find_assistant_span(
     )
 
 
+def verify_staged_rows(
+    files: Sequence[str],
+    *,
+    encode: Any,
+    assistant_header_ids: Sequence[int],
+    end_token_id: int | None,
+    sample: int = 4,
+) -> MaskingReport:
+    """Verify masking on real staged rows, encoded the way the trainer encodes them.
+
+    ``encode(row) -> {"input_ids": [...], "labels": [...]}`` is ms-swift's own
+    template encode on the pod. The first ``sample`` rows are checked: masking is
+    a property of the template, not of any one row, so a handful proves it — and
+    this is the last point at which a masking error costs minutes, not a run.
+    """
+    import json
+    from pathlib import Path
+
+    rows: list[dict[str, Any]] = []
+    for path in files:
+        for line in Path(path).read_text(encoding="utf-8").splitlines():
+            if line.strip():
+                rows.append(json.loads(line))
+            if len(rows) >= sample:
+                break
+        if len(rows) >= sample:
+            break
+    if not rows:
+        raise MaskingError(f"no staged rows in {list(files)} to verify masking on")
+
+    combined = MaskingReport()
+    for index, row in enumerate(rows):
+        encoded = encode(row)
+        span = find_assistant_span(encoded["input_ids"], assistant_header_ids, end_token_id)
+        report = verify_batch({"labels": [list(encoded["labels"])]}, [span],
+                              context=f"staged row {index}")
+        combined.total_tokens += report.total_tokens
+        combined.supervised_tokens += report.supervised_tokens
+        combined.masked_tokens += report.masked_tokens
+    return combined
+
+
 # --------------------------------------------------------------------------
 # Override hook
 # --------------------------------------------------------------------------

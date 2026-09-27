@@ -52,9 +52,21 @@ class CoverageReport:
             log.warning("%s", warning)
 
 
-def compute_lob_coverage(golden_labels: list[dict[str, Any]]) -> tuple[dict[str, float], list[str]]:
-    """Per-LoB-value share, against the ≥20% target (arch §0b)."""
-    coverage = compute_coverage(label.get("line_of_business") for label in golden_labels)
+def compute_lob_coverage(
+    golden_labels: list[dict[str, Any]], lobs: list[Any] | None = None,
+) -> tuple[dict[str, float], list[str]]:
+    """Per-LoB-value share, against the ≥20% target (arch §0b).
+
+    ``lobs`` — one per label, from the document's metadata — wins where given. A
+    canonical policy label carries no ``line_of_business`` (its line selects the
+    schema, and lives in the label metadata), so reading the label alone counted
+    every policy as having no line and reported coverage from ACORDs only.
+    """
+    values = [
+        (lobs[i] if lobs is not None and lobs[i] else None) or label.get("line_of_business")
+        for i, label in enumerate(golden_labels)
+    ]
+    coverage = compute_coverage(values)
     warnings: list[str] = []
     if message := coverage.warning():
         warnings.append(message)
@@ -157,6 +169,7 @@ def build_manifest(
     seed: int = 42,
     git_commit: str = "unknown",
     edge_case_counts: dict[str, int] | None = None,
+    lob_by_source: dict[str, Any] | None = None,
 ) -> tuple[dict[str, Any], CoverageReport]:
     """Assemble the manifest and run every coverage check."""
     report = CoverageReport()
@@ -169,13 +182,20 @@ def build_manifest(
             by_type[row["doc_type"]][row["modality_mode"]] += 1
         counts[split] = {dt: dict(modes) for dt, modes in sorted(by_type.items())}
 
-    modality_totals = Counter(
-        row["modality_mode"] for rows in rows_by_split.values() for row in rows
-    )
-    total_rows = sum(modality_totals.values())
+    total_rows = sum(len(rows) for rows in rows_by_split.values())
+    # The mix is a TRAINING property (arch v2.1 §6.1): each train document draws
+    # one mode per epoch. Val and test rows carry all three modes for every
+    # document by design, so counting them pulled the reported mix toward a
+    # third each and hid a sampler that drifted off its 50/30/20 target.
+    modality_totals = Counter(row["modality_mode"] for row in rows_by_split.get("train", []))
+    train_rows = sum(modality_totals.values())
 
     # ---- coverage ----
-    lob_shares, lob_warnings = compute_lob_coverage(list(golden_labels_by_source.values()))
+    sources = list(golden_labels_by_source)
+    lob_shares, lob_warnings = compute_lob_coverage(
+        [golden_labels_by_source[s] for s in sources],
+        [(lob_by_source or {}).get(s) for s in sources],
+    )
     alias_counts, alias_warnings = compute_alias_coverage(provenance_by_source)
     report.warnings.extend(lob_warnings + alias_warnings)
     report.lob_shares = lob_shares
@@ -216,9 +236,10 @@ def build_manifest(
         "example_counts": counts,
         "total_rows": total_rows,
         "modality_mix": {
-            mode: round(modality_totals.get(mode, 0) / total_rows, 4) if total_rows else 0.0
+            mode: round(modality_totals.get(mode, 0) / train_rows, 4) if train_rows else 0.0
             for mode in MODALITY_MODES
         },
+        "modality_mix_basis": "train rows",
         "source_ids_by_split": {
             split: sorted({row["source_id"] for row in rows})
             for split, rows in sorted(rows_by_split.items())

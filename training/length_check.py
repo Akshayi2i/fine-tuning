@@ -104,10 +104,29 @@ def measure(
     min_pixels: int,
     max_pixels: int,
     batch: int = 256,
+    output_caps: dict[str, list[int]] | None = None,
 ) -> LengthReport:
-    """Measure every row of the staged (ms-swift format) files against ``max_length``."""
+    """Measure every row of the staged (ms-swift format) files.
+
+    Against ``max_length``, and — when ``output_caps`` gives each row's task
+    reservation — the target (assistant turn) against its own cap too. A target
+    past its reservation is the case that clips an answer, and the corpus
+    estimate under-counts exactly that text (digits tokenize one apiece).
+    """
     report = LengthReport()
+    caps_by_file = output_caps or {}
+    # One header read per image. Every epoch file names the same pages, so an
+    # uncached pass read each page's header once per epoch — thousands of
+    # small reads off a network volume before a launch.
+    sizes: dict[str, tuple[int, int]] = {}
+
+    def size_of(image: str) -> tuple[int, int]:
+        if image not in sizes:
+            sizes[image] = png_size(image)
+        return sizes[image]
+
     for path in files:
+        caps = caps_by_file.get(str(path)) or caps_by_file.get(str(Path(path).resolve()))
         rows = [
             json.loads(line)
             for line in Path(path).read_text(encoding="utf-8").splitlines() if line.strip()
@@ -118,18 +137,29 @@ def measure(
                 "".join(m["content"].replace("<image>", "") for m in row["messages"])
                 for row in chunk
             ]
-            for index, (row, text_tokens) in enumerate(
-                zip(chunk, count_tokens(texts), strict=True)
+            targets = [
+                row["messages"][-1]["content"] if row["messages"][-1]["role"] == "assistant" else ""
+                for row in chunk
+            ]
+            target_tokens = count_tokens(targets) if caps else [0] * len(chunk)
+            for index, (row, text_tokens, output_tokens) in enumerate(
+                zip(chunk, count_tokens(texts), target_tokens, strict=True)
             ):
                 visual = sum(
-                    image_tokens(*png_size(image), min_pixels=min_pixels, max_pixels=max_pixels)
+                    image_tokens(*size_of(image), min_pixels=min_pixels, max_pixels=max_pixels)
                     + TOKENS_PER_IMAGE_WRAPPER
                     for image in row["images"]
                 )
                 total = text_tokens + visual + TOKENS_PER_MESSAGE * len(row["messages"])
                 report.rows += 1
                 report.longest = max(report.longest, total)
-                if total > max_length:
+                cap = caps[start + index] if caps else None
+                if cap is not None and output_tokens > cap:
+                    report.over.append({
+                        "file": str(path), "row": start + index, "output_tokens": output_tokens,
+                        "output_cap": cap, "tokens": total,
+                    })
+                elif total > max_length:
                     report.over.append({
                         "file": str(path), "row": start + index, "tokens": total,
                         "text_tokens": text_tokens, "visual_tokens": visual,

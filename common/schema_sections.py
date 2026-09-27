@@ -103,6 +103,11 @@ def groups_for(lob: str | list[str] | None = None) -> tuple[str, ...]:
     return tuple(name for name in group_names() if sections_for(name, lob))
 
 
+def reads_declarations(group: str) -> bool:
+    """Whether ``group`` reads the declarations pages rather than the routed set."""
+    return str(_declared(group)["pages"]) == "declarations"
+
+
 def pages_for(
     group: str,
     routed_pages: list[int],

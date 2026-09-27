@@ -63,6 +63,17 @@ def push_adapter(
     return prefix
 
 
+def push_scoped_adapter(
+    local_dir: str | Path, scope: str | None, version: str, *, client: BlobClient
+) -> str:
+    """Push one scope's adapter to :func:`paths.scoped_adapter_dir` — where the
+    run manifest and the release bundle say it is."""
+    prefix = paths.scoped_adapter_dir(scope, version)
+    count = client.upload_dir(_require_dir(local_dir, "adapter"), prefix)
+    log.info("pushed %d adapter file(s) -> %s", count, prefix)
+    return prefix
+
+
 def pull_adapter(
     kind: paths.AdapterKind,
     version: str,
@@ -82,11 +93,13 @@ def pull_adapter(
 
 
 def push_merged_model(
-    local_dir: str | Path, version: str, doc_type: str | None = None, *, client: BlobClient
+    local_dir: str | Path, version: str, doc_type: str | None = None, *, client: BlobClient,
+    scope: str | None = None,
 ) -> str:
     """Push a merged model. ``doc_type=None`` is the **unified** model, which only
-    exists when the cycle was built ``--foundation-only``."""
-    prefix = paths.merged_model_dir(version, doc_type)
+    exists when the cycle was built ``--foundation-only``. ``scope`` addresses a
+    scoped run's own model."""
+    prefix = paths.merged_model_dir(version, doc_type, scope=scope)
     count = client.upload_dir(_require_dir(local_dir, "merged model"), prefix)
     log.info("pushed %d merged-model file(s) -> %s", count, prefix)
     return prefix
@@ -101,9 +114,9 @@ def pull_merged_model(
 
 def push_quantized(
     local_dir: str | Path, version: str, fmt: str, doc_type: str | None = None, *,
-    client: BlobClient,
+    client: BlobClient, scope: str | None = None,
 ) -> str:
-    prefix = paths.quantized_model_dir(version, fmt, doc_type)
+    prefix = paths.quantized_model_dir(version, fmt, doc_type, scope=scope)
     count = client.upload_dir(_require_dir(local_dir, "quantized model"), prefix)
     log.info("pushed %d %s file(s) -> %s", count, fmt, prefix)
     return prefix

@@ -100,3 +100,14 @@ def parse(value: str | Task) -> Task:
         raise ValueError(
             f"unknown task {value!r}; expected one of {[t.value for t in Task]}"
         ) from exc
+
+
+#: The tasks the corpus build actually emits training rows for: whole-document
+#: ``extract`` for the flat types, and the three section-window tasks for
+#: canonical policies. A scope may DECLARE more (classify, page_select), but a
+#: task with no rows is not trained, and a metric scoring an untrained task is
+#: not a measurement of this model. ``tests/test_policy_windows`` pins this to
+#: what the build produces, so the day classify rows are built this changes too.
+CORPUS_TASKS: frozenset[Task] = frozenset({
+    Task.EXTRACT, Task.POLICY_DECLARATIONS, Task.POLICY_SCHEDULE, Task.POLICY_ENDORSEMENTS,
+})

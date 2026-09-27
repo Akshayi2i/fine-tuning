@@ -124,6 +124,12 @@ def score_fields(
     List rows are excluded by default and scored by :func:`score_list_field`
     instead — mixing them would let a 40-row Loss Run dominate the document's
     accuracy over its half-dozen header fields.
+
+    **A value the golden label does not state is scored as wrong.** Canonical
+    targets are sparse — a field the document does not state is omitted — so a
+    loop over the golden paths alone never saw an invented value: a checkpoint
+    that hallucinated fields lost nothing, and checkpoint selection could prefer
+    it. Flat schemas emit every key, so for them this changes nothing.
     """
     expected_flat = flatten_scalars(expected)
     got_flat = flatten_scalars(got)
@@ -142,7 +148,17 @@ def score_fields(
                 exact=expected_value == got_value,
             )
         )
+    for path, got_value in sorted(got_flat.items()):
+        if path in expected_flat or (skip_lists and "[" in path) or _is_empty(got_value):
+            continue
+        report.results.append(
+            FieldResult(field_path=path, expected=None, got=got_value, correct=False, exact=False)
+        )
     return report
+
+
+def _is_empty(value: Any) -> bool:
+    return value is None or value == "" or value == [] or value == {}
 
 
 def _rows_at(flat: dict[str, Any], path: str) -> list[dict[str, Any]] | None:
@@ -292,21 +308,46 @@ def _infer_key_fields(rows: list[Any]) -> list[str]:
     return sorted(k for k, v in first.items() if not isinstance(v, _CONTAINER_TYPES))
 
 
-def find_list_fields(obj: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
-    """Every repeating structure in a document."""
-    return {
-        key: value
-        for key, value in obj.items()
-        if isinstance(value, list) and value and isinstance(value[0], dict)
-    }
+def find_list_fields(obj: dict[str, Any], prefix: str = "") -> dict[str, list[dict[str, Any]]]:
+    """Every repeating structure in a document, nested ones included.
+
+    Keyed by dotted path (``auto.vehicles``, ``premium.taxes_and_fees``). A
+    canonical policy keeps most of its tables inside sections, and a top-level
+    scan found none of them — they were never scored at all.
+    """
+    found: dict[str, list[dict[str, Any]]] = {}
+    for key, value in obj.items():
+        path = f"{prefix}{key}"
+        if isinstance(value, list) and value and isinstance(value[0], dict):
+            found[path] = value
+        elif isinstance(value, dict):
+            found.update(find_list_fields(value, f"{path}."))
+    return found
+
+
+def _at(obj: dict[str, Any], dotted: str) -> Any:
+    node: Any = obj
+    for part in dotted.split("."):
+        node = node.get(part) if isinstance(node, dict) else None
+    return node
 
 
 def score_all_list_fields(
     expected: dict[str, Any], got: dict[str, Any]
 ) -> dict[str, ListFieldReport]:
     """Score every list field. Fields absent from the output score zero recall,
-    which is the correct reading: the rows were expected and not produced."""
+    which is the correct reading: the rows were expected and not produced.
+
+    Both sides are compared on VALUES (``values_view``). A canonical row is a
+    dict of envelopes, and keying rows on the envelope made two readings of one
+    claim match only when raw text and page_ref were byte-identical — and never
+    against a stored golden, which also carries confidence and flagged — while
+    unkeyed tables matched on nothing, so any rows counted as the right rows.
+    """
+    from common.canonical import values_view
+
+    expected, got = values_view(expected), values_view(got)
     return {
-        name: score_list_field(rows, got.get(name) or [], name)
+        name: score_list_field(rows, _at(got, name) or [], name)
         for name, rows in find_list_fields(expected).items()
     }

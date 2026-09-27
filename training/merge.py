@@ -87,24 +87,72 @@ def plan_merge(
     )
 
 
+def _split_ref(base_model: str) -> tuple[str, str | None]:
+    """``Qwen/Qwen3-VL-8B-Instruct@<sha>`` -> ``(id, sha)``."""
+    model_id, _, revision = base_model.partition("@")
+    return model_id, revision or None
+
+
 def merge(plan: MergePlan, *, dry_run: bool = False) -> str:
-    """Execute a merge. Returns the output directory."""
+    """Execute a merge. Returns the output directory.
+
+    Written to ``<output>.partial`` and renamed into place only once the saved
+    model has its config and weights, so an interrupted merge never leaves a
+    directory that ``_is_merged`` counts as done.
+    """
     log.info("merging %s", plan.describe())
     if dry_run:
         return plan.output_dir
 
+    import shutil
+    from pathlib import Path
+
+    adapter = Path(plan.adapter)
+    if not (adapter / "adapter_config.json").is_file():
+        raise MergeError(
+            f"{adapter} holds no adapter_config.json, so there is no adapter to merge. Point "
+            "the merge at a checkpoint directory ms-swift wrote (checkpoint-N), not its root."
+        )
+    model_id, revision = _split_ref(plan.base_model)
+    if revision in (None, "", "PIN_ME"):
+        raise MergeError(
+            f"the base model revision is {revision!r}. Merging into a floating revision folds "
+            "the adapter into weights that may not be the ones it trained against; pin "
+            "configs/base_model.yaml to a commit SHA first."
+        )
+
     try:
-        import peft  # noqa: F401
-        import torch  # noqa: F401
+        import torch
+        from peft import PeftModel
+        from transformers import AutoModelForImageTextToText, AutoProcessor
     except ImportError as exc:  # pragma: no cover - optional heavy dep
         raise MergeError(
-            'PEFT and torch are required to merge. Install the [train] extra on the pod: '
-            'pip install -e ".[train]"'
+            'PEFT, torch and transformers are required to merge. Install the [train] extra on '
+            'the pod: pip install -e ".[train]"'
         ) from exc
 
-    raise NotImplementedError(  # pragma: no cover - Phase 8 GPU milestone
-        "Wire PEFT merge_and_unload() here in the Phase 8 GPU milestone. Load the base in "
-        f"{plan.dtype} — NOT 4-bit, which would lose the precision the adapter was trained to "
-        "add — apply the adapter, merge_and_unload(), and save. One adapter, one merge: the v1 "
-        "Foundation-then-per-type ordering does not apply (arch v2.1 §4.1)."
+    output = Path(plan.output_dir)
+    partial = output.with_name(output.name + ".partial")
+    if partial.exists():
+        shutil.rmtree(partial)
+
+    # The base in the merge dtype, never 4-bit: merging into quantized weights
+    # loses the precision the adapter was trained to add. On the CPU, because a
+    # merge is arithmetic, not inference, and the GPU may still hold an engine.
+    dtype = torch.bfloat16 if plan.dtype == "bf16" else torch.float16
+    base = AutoModelForImageTextToText.from_pretrained(  # pragma: no cover - needs weights
+        model_id, revision=revision, torch_dtype=dtype, device_map="cpu",
     )
+    merged = PeftModel.from_pretrained(base, str(adapter)).merge_and_unload()
+    merged.save_pretrained(str(partial), safe_serialization=True, max_shard_size="5GB")
+    # The processor travels with the weights: vLLM reads the chat template and the
+    # image processor config from the model directory it is pointed at.
+    AutoProcessor.from_pretrained(model_id, revision=revision).save_pretrained(str(partial))
+
+    if not (partial / "config.json").is_file() or not any(partial.glob("*.safetensors")):
+        raise MergeError(f"the merge wrote no config or weights to {partial}")
+    if output.exists():
+        shutil.rmtree(output)
+    partial.rename(output)
+    log.info("merged model saved to %s", output)
+    return str(output)

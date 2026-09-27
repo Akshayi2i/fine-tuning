@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import logging
 import re
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -281,7 +282,9 @@ def select_policy_pages(
     return sorted(selected)
 
 
-def plan_policy_windows(pages: list[int], *, pages_per_window: int) -> list[list[int]]:
+def plan_policy_windows(
+    pages: list[int], *, pages_per_window: int, leading: Sequence[int] = (),
+) -> list[list[int]]:
     """Split a routed page set into calls, dropping nothing.
 
     ``pages_per_window`` is how many pages one extraction call can carry, which
@@ -291,9 +294,12 @@ def plan_policy_windows(pages: list[int], *, pages_per_window: int) -> list[list
 
     Two rules, both about keeping a window readable rather than merely legal:
 
-    * **The declarations lead.** Pages 1-3 go in the first window, so the window
-      that carries the policy-level fields is the one holding the page they are
-      printed on.
+    * **The declarations lead — where the group reads them.** ``leading`` pages
+      (the declarations group's: pages 1-3 plus the page the declarations were
+      found on) open the windows, together. Every group used to set pages 1-3
+      apart, so a routed group spent a call on them alone even when they held
+      none of its tables, and a declarations page found on page 5 was read in a
+      window apart from the leading pages it continues.
     * **Runs stay whole where they fit.** A vehicle schedule printed across
       pp.140-146 is one table; splitting it at an arbitrary page boundary hands
       the model half a table with no header. Consecutive pages are grouped first
@@ -305,12 +311,12 @@ def plan_policy_windows(pages: list[int], *, pages_per_window: int) -> list[list
         return []
 
     ordered = sorted(set(pages))
-    declarations = [p for p in ordered if p <= DECLARATIONS_PAGES]
-    rest = [p for p in ordered if p > DECLARATIONS_PAGES]
+    lead = sorted(set(leading) & set(ordered))
+    rest = [p for p in ordered if p not in lead]
 
     windows: list[list[int]] = []
-    if declarations:
-        windows.extend(_split_evenly(declarations, pages_per_window))
+    if lead:
+        windows.extend(_split_evenly(lead, pages_per_window))
 
     # Whole runs are packed together while they fit, so scattered single pages —
     # the usual output of keyword routing — share a call rather than each paying

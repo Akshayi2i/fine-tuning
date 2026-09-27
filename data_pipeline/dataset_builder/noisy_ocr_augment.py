@@ -70,7 +70,11 @@ def _corrupt_characters(text: str, rng: random.Random, rate: float = 0.02) -> tu
 
     changed: list[str] = []
     edits: list[tuple[int, int, str]] = []
-    for start, end, token in spans:
+    # Visited in a random order, not reading order. Walking top to bottom and
+    # stopping at the third hit put nearly every corruption in the page header —
+    # the carrier name and the form title — and almost never in the schedule
+    # values below, which are what arbitration has to learn to check.
+    for start, end, token in rng.sample(spans, len(spans)):
         if rng.random() > rate * 10:      # most tokens untouched
             continue
         candidates = _confusable_positions(token)
@@ -84,7 +88,7 @@ def _corrupt_characters(text: str, rng: random.Random, rate: float = 0.02) -> tu
             break
 
     result = text
-    for start, end, corrupted in reversed(edits):   # right to left, so offsets hold
+    for start, end, corrupted in sorted(edits, reverse=True):   # right to left, so offsets hold
         result = result[:start] + corrupted + result[end:]
     return result, ("; ".join(changed) if changed else None)
 

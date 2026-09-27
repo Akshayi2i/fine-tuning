@@ -94,7 +94,7 @@ def plan_windows(
     declarations_page: int | None = None,
 ) -> list[PolicyWindowPlan]:
     """Every window a policy is read with, in group order then page order."""
-    from common.schema_sections import groups_for, pages_for
+    from common.schema_sections import groups_for, pages_for, reads_declarations
     from data_pipeline.dataset_builder.expand_tasks import (
         pages_per_extraction_call,
         plan_policy_windows,
@@ -104,7 +104,13 @@ def plan_windows(
     for group in groups_for(lob):
         pages = pages_for(group, list(routed), declarations_page=declarations_page)
         capacity = pages_per_extraction_call("policy", None, lob, group)
-        windows = plan_policy_windows(pages, pages_per_window=capacity)
+        # A declarations group's pages all lead — pages 1-3 and the page the
+        # declarations were found on, read together. A routed group packs by
+        # runs alone.
+        windows = plan_policy_windows(
+            pages, pages_per_window=capacity,
+            leading=pages if reads_declarations(group) else (),
+        )
         plans.extend(
             PolicyWindowPlan(group, index, tuple(window), single=len(windows) == 1)
             for index, window in enumerate(windows)

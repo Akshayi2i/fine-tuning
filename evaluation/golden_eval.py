@@ -1,0 +1,225 @@
+"""Evaluate a model on the frozen golden eval set, through the serving pipeline.
+
+The promotion gate's numbers come from here. Every document goes through
+:func:`serving.pipeline.extract` — never a bespoke inference path — so the gate
+measures what production serves: the same routing, the same policy windows and
+merge, the same date post-process, the same calibrated confidence. Validation
+scoring reads the corpus rows' own prompts, which is right for checkpoint
+selection and wrong for a gate: the serving-only steps would be invisible to it.
+
+Layout of the frozen set in Blob (``paths.golden_eval_set_dir()``), one
+directory per document::
+
+    golden-eval-set/{source_id}/golden.json      the golden label
+    golden-eval-set/{source_id}/metadata.json    doc_type, acord_form, lob, is_scanned
+    golden-eval-set/{source_id}/page_N.png       page images, 1-based
+    golden-eval-set/{source_id}/page_N.md        OCR text per page (optional)
+
+Each document is run in all three input modes. ``noisy_ocr_image`` uses the
+corpus build's own seeded corruption, and renders the same prompt serving sends
+for clean OCR: the noise lives in the data, never in the instruction.
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+import re
+from collections.abc import Sequence
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any
+
+from artifact_registry import paths
+from artifact_registry.blob_client import BlobClient
+
+log = logging.getLogger(__name__)
+
+#: The modes every golden document is evaluated in.
+GOLDEN_MODES: tuple[str, ...] = ("ocr_plus_image", "noisy_ocr_image", "image_only")
+
+_PAGE = re.compile(r"page_(\d+)\.(png|md)$")
+
+
+class GoldenEvalError(RuntimeError):
+    """Raised when the frozen eval set cannot be read or evaluated."""
+
+
+@dataclass
+class GoldenDocument:
+    """One frozen eval document: its label, its pages, and what selects its schema."""
+
+    source_id: str
+    doc_type: str
+    golden: dict[str, Any]
+    image_keys: list[str]
+    page_texts: dict[int, str] = field(default_factory=dict)
+    acord_form: str | None = None
+    lob: str | list[str] | None = None
+    is_scanned: bool = False
+
+
+def load_golden_set(
+    client: BlobClient, doc_types: Sequence[str] | None = None
+) -> list[GoldenDocument]:
+    """Every document in the frozen set, optionally narrowed to ``doc_types``."""
+    prefix = paths.golden_eval_set_dir()
+    by_source: dict[str, list[str]] = {}
+    for key in client.list(prefix):
+        rest = key[len(prefix):].strip("/")
+        if "/" in rest:
+            by_source.setdefault(rest.split("/", 1)[0], []).append(key)
+
+    documents = []
+    for source_id, keys in sorted(by_source.items()):
+        base = f"{prefix}/{source_id}"
+        if f"{base}/golden.json" not in keys:
+            continue
+        metadata = (
+            client.read_json(f"{base}/metadata.json") if f"{base}/metadata.json" in keys else {}
+        )
+        doc_type = metadata.get("doc_type")
+        if not doc_type:
+            raise GoldenEvalError(
+                f"{source_id} has no doc_type in metadata.json, so no schema can be selected"
+            )
+        if doc_types and doc_type not in doc_types:
+            continue
+        images: dict[int, str] = {}
+        texts: dict[int, str] = {}
+        for key in keys:
+            match = _PAGE.search(key)
+            if not match:
+                continue
+            page = int(match.group(1))
+            if match.group(2) == "png":
+                images[page] = key
+            else:
+                texts[page] = client.read_text(key)
+        if not images:
+            raise GoldenEvalError(f"{source_id} has no page images")
+        if sorted(images) != list(range(1, len(images) + 1)):
+            raise GoldenEvalError(f"{source_id}: page images are not numbered 1..n")
+        documents.append(GoldenDocument(
+            source_id=source_id,
+            doc_type=doc_type,
+            golden=client.read_json(f"{base}/golden.json"),
+            image_keys=[images[p] for p in sorted(images)],
+            page_texts={p: texts.get(p, "") for p in sorted(images)},
+            acord_form=metadata.get("acord_form"),
+            lob=metadata.get("lob"),
+            is_scanned=bool(metadata.get("is_scanned", False)),
+        ))
+    return documents
+
+
+def evaluate(
+    documents: Sequence[GoldenDocument],
+    model: Any,
+    client: BlobClient,
+    images_root: str | Path,
+    *,
+    calibrators: Any = None,
+    thresholds: Any = None,
+    modes: Sequence[str] = GOLDEN_MODES,
+    seed: int = 42,
+) -> list[tuple[dict[str, Any], dict[str, Any], dict[str, Any]]]:
+    """``(expected, got, metadata)`` triples for :func:`run_eval.build_report`.
+
+    A document that fails to extract is scored as an empty answer, never
+    dropped: dropping it would score the model on the documents it managed.
+    """
+    from calibration.fit_calibration import CalibrationParams
+    from data_pipeline.dataset_builder.noisy_ocr_augment import corrupt_ocr_pages
+    from serving.doc_type_classifier import StaticClassifier
+    from serving.pipeline import ExtractionRequest, extract
+    from training.stage_data import localize_keys
+
+    local = localize_keys(
+        client, sorted({key for doc in documents for key in doc.image_keys}), images_root
+    )
+    triples = []
+    for doc in documents:
+        calibration = CalibrationParams(
+            method="temperature", doc_type=doc.doc_type,
+            model_version=getattr(model, "tag", "eval"), temperature=1.0,
+        )
+        for mode in modes:
+            texts = dict(doc.page_texts)
+            if mode == "noisy_ocr_image":
+                corrupted, _details = corrupt_ocr_pages(
+                    [texts[p] for p in sorted(texts)], doc.source_id, seed=seed
+                )
+                texts = dict(zip(sorted(texts), corrupted, strict=True))
+            request = ExtractionRequest(
+                source_id=doc.source_id,
+                image_paths=[local[key] for key in doc.image_keys],
+                page_texts={} if mode == "image_only" else texts,
+                modality_mode=mode,
+                known_doc_type=doc.doc_type,
+                known_acord_form=doc.acord_form,
+                known_lob=doc.lob,
+            )
+            metadata: dict[str, Any] = {
+                "source_id": doc.source_id,
+                "doc_type": doc.doc_type,
+                "acord_form": doc.acord_form,
+                "lob": doc.lob,
+                "modality_mode": mode,
+                "is_scanned": doc.is_scanned,
+                "page_count": len(doc.image_keys),
+            }
+            try:
+                result = extract(
+                    request, model, StaticClassifier(doc.doc_type, doc.acord_form), calibration,
+                    calibrators=calibrators, thresholds=thresholds, strict_schema=False,
+                )
+            except Exception as exc:  # noqa: BLE001 - scored as a miss, not dropped
+                log.warning("golden eval: %s (%s) failed: %s", doc.source_id, mode, exc)
+                metadata["error"] = f"{type(exc).__name__}: {exc}"
+                triples.append((doc.golden, {}, metadata))
+                continue
+            metadata["field_confidence"] = {
+                path: body["confidence"] for path, body in result.fields.items()
+            }
+            triples.append((doc.golden, result.extraction, metadata))
+    return triples
+
+
+def evaluate_version(
+    client: BlobClient,
+    model: Any,
+    *,
+    version: str,
+    corpus_version: str,
+    scope: Any,
+    tenant_id: str | None = None,
+    calibrators: Any = None,
+    thresholds: Any = None,
+) -> dict[str, Any]:
+    """Evaluate, write the eval report where the gate reads it, return its dict."""
+    from evaluation.run_eval import assert_eval_set_disjoint, build_report
+
+    # Before anything is evaluated: a leaked eval set makes every number meaningless.
+    assert_eval_set_disjoint(client, corpus_version, tenant_id)
+    documents = load_golden_set(client, scope.doc_types)
+    if not documents:
+        raise GoldenEvalError(
+            f"the frozen eval set holds no {list(scope.doc_types)} documents, so there is "
+            "nothing to gate on"
+        )
+    triples = evaluate(
+        documents, model, client, paths.staging_train_images_dir(f"golden-{corpus_version}"),
+        calibrators=calibrators, thresholds=thresholds,
+    )
+    failed = sum(1 for _e, _g, meta in triples if meta.get("error"))
+    report = build_report(version, triples, corpus_version=corpus_version, scope=scope)
+    body = report.as_dict()
+    body["documents_failed"] = failed
+    client.write_json(paths.eval_report(version, scope=scope.name), body)
+    log.info("golden eval of %s: %d document-mode run(s), %d failed", version, len(triples), failed)
+    return body
+
+
+def dumps(body: dict[str, Any]) -> str:  # pragma: no cover - CLI helper
+    return json.dumps(body, indent=2, sort_keys=True)

@@ -39,6 +39,30 @@ def _png(width: int, height: int) -> bytes:
 PNG = _png(1275, 1650)
 
 
+@pytest.fixture(autouse=True)
+def _as_if_on_the_pod(monkeypatch):
+    """A real-run test runs here, not on a pod: no CUDA, and ms-swift's template
+    is not installed. The guard and the masking check each have their own tests."""
+    from training import train as T
+
+    monkeypatch.setenv(T.OFF_POD_ENV, "1")
+    monkeypatch.setattr(T, "_masking_encoder", lambda swift: _stub_masking_encoder())
+
+
+def _stub_masking_encoder():
+    """Encodes a row as [prompt..., HEADER, answer..., END] with the answer supervised."""
+    header, end = [900, 901], 999
+
+    def encode(row):
+        prompt = [1] * 5
+        answer = [7] * 3
+        ids = prompt + header + answer + [end]
+        labels = [-100] * (len(prompt) + len(header)) + answer + [end]
+        return {"input_ids": ids, "labels": labels}
+
+    return encode, header, end
+
+
 def _stub_tokens(texts):
     """A stand-in for the model tokenizer: roughly four characters a token."""
     return [len(t) // 4 + 1 for t in texts]
@@ -290,11 +314,15 @@ def test_a_scoped_run_records_its_own_counts_not_the_corpus(client, tmp_path, mo
     client.write_text(paths.corpus_eval_split("v1", "test"), write_jsonl(built.rows_by_split["test"]))
     manifest, _ = _train(client, monkeypatch, tmp_path, dry_run=True, scope=get_scope("lossrun"))
 
-    def lossrun_rows(split):
-        return sum(1 for r in built.rows_by_split[split] if r["doc_type"] == "lossrun")
+    def lossrun_rows(split, epochs=None):
+        return sum(
+            1 for r in built.rows_by_split[split]
+            if r["doc_type"] == "lossrun" and (epochs is None or r.get("epoch") in epochs)
+        )
 
     stats = manifest.data_stats
-    assert stats.train_examples == lossrun_rows("train")
+    # Only the epochs the run trains (3 of the 4 materialized).
+    assert stats.train_examples == lossrun_rows("train", epochs={1, 2, 3})
     assert stats.val_examples == lossrun_rows("val")
     assert stats.test_examples == lossrun_rows("test")
 
@@ -506,3 +534,73 @@ def test_the_build_counts_every_document_it_set_aside_by_reason():
     assert built.set_aside["trainer_tag"] == 1
     assert built.set_aside["budget"] == 1
     assert built.cap_report.rejection_rate == pytest.approx(1 / 19)
+
+
+# --------------------------------------------------------------------------
+# Phase 1: registry safety, output reservation
+# --------------------------------------------------------------------------
+
+def test_a_trained_run_is_never_overwritten(client, tmp_path, monkeypatch):
+    """Not by a re-run, and not by a dry run, which used to replace a promoted
+    manifest with a fresh "training" one."""
+    from registry_utils.query_registry import get
+    from registry_utils.write_run_manifest import write_manifest
+    from training.train import TrainingError
+
+    _seed(client)
+    manifest, _ = _train(client, monkeypatch, tmp_path, dry_run=True)
+    manifest.status = "trained"
+    write_manifest(manifest, client)
+
+    with pytest.raises(TrainingError, match="never overwritten"):
+        _train(client, monkeypatch, tmp_path, dry_run=True)
+    assert get(manifest.run_id, client).status == "trained"
+
+
+def test_a_target_over_its_output_reservation_is_caught_before_launch(tmp_path):
+    """The corpus estimate under-counts digits — exactly the text a target is
+    full of — so the pod re-checks each target against its own task cap."""
+    from training.length_check import measure
+
+    image = tmp_path / "p.png"
+    image.write_bytes(PNG)
+    row = {"messages": [{"role": "system", "content": "s"},
+                        {"role": "user", "content": "<image>t"},
+                        {"role": "assistant", "content": "1234567890" * 50}],
+           "images": [str(image)]}
+    staged = tmp_path / "e.jsonl"
+    staged.write_text(json.dumps(row) + "\n", encoding="utf-8")
+
+    over = measure([staged], max_length=10**6, count_tokens=_stub_tokens,
+                   min_pixels=200_704, max_pixels=2_483_712,
+                   output_caps={str(staged): [16]})
+    assert not over.ok and over.over[0]["output_cap"] == 16
+    fine = measure([staged], max_length=10**6, count_tokens=_stub_tokens,
+                   min_pixels=200_704, max_pixels=2_483_712,
+                   output_caps={str(staged): [10**4]})
+    assert fine.ok
+
+
+def test_a_run_whose_masking_supervises_the_prompt_is_refused(client, tmp_path, monkeypatch):
+    """The masking check held in training.data_collator now runs before launch."""
+    from registry_utils.models import DataStats
+    from training import train as T
+
+    _seed(client)
+    monkeypatch.setenv("RUNPOD_VOLUME_MOUNT", str(tmp_path))
+    monkeypatch.setattr(T, "validate_all", lambda **_kw: None)
+    monkeypatch.setattr(T, "_token_counter", lambda: _stub_tokens)
+    header, end = [900, 901], 999
+
+    def leaky(row):
+        ids = [1] * 5 + header + [7, 7, 7, end]
+        return {"input_ids": ids, "labels": list(ids)}   # the prompt is supervised too
+
+    monkeypatch.setattr(T, "_masking_encoder", lambda swift: (leaky, header, end))
+    launched = []
+    monkeypatch.setattr(T, "launch", lambda config: launched.append(config))
+    with pytest.raises(T.TrainingError, match="masking"):
+        T.train(corpus_version="v1", out_version="v9", client=client, corpus_manifest={},
+                data_stats=DataStats(train_examples=0, val_examples=0, test_examples=0),
+                dry_run=False)
+    assert not launched

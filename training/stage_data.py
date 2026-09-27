@@ -66,6 +66,11 @@ class StagedData:
     images: int = 0
     #: Images actually downloaded; the rest came from the version's shared cache.
     fetched: int = 0
+    #: Per staged file, each row's output reservation (its task's
+    #: max_output_tokens), in row order — what the pre-launch length check
+    #: measures each row's target against. Kept beside the file, not in it:
+    #: the trainer reads only messages and images.
+    output_caps: dict[str, list[int]] = field(default_factory=dict)
 
 
 def to_swift_row(row: dict[str, Any], local_image: Callable[[str], str]) -> dict[str, Any]:
@@ -158,7 +163,7 @@ def stage_training_data(
 
     # Convert first. The local path of every image is known before it exists, so
     # the conversion — and every refusal in it — runs before any download.
-    converted: list[tuple[str, list[dict[str, Any]]]] = []
+    converted: list[tuple[str, list[dict[str, Any]], list[int]]] = []
     keys: set[str] = set()
 
     def local_image(key: str) -> str:
@@ -169,12 +174,14 @@ def stage_training_data(
         rows = _read_rows(client, key)
         if max_pixels is not None:
             _refuse_other_budgets(rows, max_pixels)
-        converted.append((name, [to_swift_row(row, local_image) for row in rows]))
+        converted.append((
+            name, [to_swift_row(row, local_image) for row in rows], [_output_cap(r) for r in rows],
+        ))
 
     missing = sorted(key for key in keys if not (cache / key).exists())
     _download_all(client, missing, cache, workers)
 
-    for name, rows in converted:
+    for name, rows, caps in converted:
         target = root / name
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(
@@ -182,6 +189,7 @@ def stage_training_data(
             encoding="utf-8",
         )
         staged.rows += len(rows)
+        staged.output_caps[str(target.resolve())] = caps
         if name.startswith("val/"):
             staged.val_path, staged.val_rows = str(target.resolve()), len(rows)
         else:
@@ -194,6 +202,14 @@ def stage_training_data(
         staged.rows, root, len(keys), len(missing), cache,
     )
     return staged
+
+
+def _output_cap(row: dict[str, Any]) -> int:
+    """The row's task output reservation — how long its target may be."""
+    from common.config import sequence_for_task
+
+    task = row.get("task") or "extract"
+    return int(sequence_for_task(task, row.get("doc_type"))["max_output_tokens"])
 
 
 def _refuse_other_budgets(rows: list[dict[str, Any]], max_pixels: int) -> None:
@@ -259,3 +275,91 @@ def _download(client: BlobClient, key: str, target: Path) -> None:
         partial.unlink(missing_ok=True)
         if not target.exists():
             raise StagingError(f"could not place page image {key}: {exc}") from exc
+
+
+def localize_rows(
+    rows: list[dict[str, Any]],
+    client: BlobClient,
+    images_root: str | Path,
+    *,
+    workers: int = DOWNLOAD_WORKERS,
+) -> list[dict[str, Any]]:
+    """Corpus rows with every image Blob key replaced by a local cached file.
+
+    For the GENERATION paths — checkpoint selection and calibration — which send
+    rows to vLLM in the corpus's own message shape. vLLM opens an image by path;
+    handed a Blob key it opens nothing, every row failed, and each failure was
+    scored as an empty answer: every checkpoint 0.0, calibration skipped, and no
+    error anywhere. Shares the training image cache, so a page is fetched once
+    per corpus version whichever path asks first.
+    """
+    import copy
+
+    keys = sorted({
+        block["image"]
+        for row in rows
+        for message in row.get("messages") or []
+        if isinstance(message.get("content"), list)
+        for block in message["content"]
+        if block.get("type") == "image" and isinstance(block.get("image"), str)
+    })
+    local = localize_keys(client, keys, images_root, workers=workers)
+
+    localized = []
+    for row in rows:
+        row = copy.deepcopy(row)
+        for message in row.get("messages") or []:
+            if isinstance(message.get("content"), list):
+                for block in message["content"]:
+                    if block.get("type") == "image" and isinstance(block.get("image"), str):
+                        block["image"] = local[block["image"]]
+        localized.append(row)
+    return localized
+
+
+def localize_keys(
+    client: BlobClient, keys: Sequence[str], images_root: str | Path,
+    *, workers: int = DOWNLOAD_WORKERS,
+) -> dict[str, str]:
+    """``{blob key: local absolute path}``, fetching what the cache lacks.
+
+    The one download path every consumer shares — training staging, checkpoint
+    selection, calibration, the golden eval — so a page is fetched once per
+    cache, atomically, whichever asks first.
+    """
+    cache = Path(images_root)
+    _download_all(client, [k for k in keys if not (cache / k).exists()], cache, workers)
+    return {key: str((cache / key).resolve()) for key in keys}
+
+
+#: Corpus versions whose image cache is kept besides the one being staged: the
+#: previous version, which a comparison or a resumed run may still read.
+KEEP_OTHER_IMAGE_CACHES = 1
+
+
+def prune_image_caches(images_root: str | Path, *, keep: int = KEEP_OTHER_IMAGE_CACHES) -> list[str]:
+    """Delete the page-image caches of older corpus versions. Returns what went.
+
+    The cache is per corpus version (``paths.staging_train_images_dir``), and
+    nothing ever removed one: every rebuild left a full copy of the corpus's
+    pages on the volume until it filled and a staging download failed mid-run.
+    The current version is never touched; of the others the ``keep`` most
+    recently used survive.
+    """
+    import shutil
+
+    current = Path(images_root).resolve()
+    parent = current.parent
+    if not parent.is_dir():
+        return []
+    others = sorted(
+        (d for d in parent.iterdir() if d.is_dir() and d.resolve() != current),
+        key=lambda d: d.stat().st_mtime, reverse=True,
+    )
+    removed = []
+    for stale in others[keep:]:
+        shutil.rmtree(stale, ignore_errors=True)
+        removed.append(str(stale))
+    if removed:
+        log.info("pruned %d old image cache(s): %s", len(removed), removed)
+    return removed
