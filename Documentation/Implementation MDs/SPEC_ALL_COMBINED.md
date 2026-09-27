@@ -1272,6 +1272,16 @@ Once a model version exists (arch §7 step 6, §13 step 11):
 (`common.scopes.known_lines`, schema spellings and enum spellings both accepted) — not against the 13-value
 LOB enum, which rejected `flood`, `cyber`, `professional_eo`, `gl`, `wc` and failed real labels.
 
+**Pre-upload data audit** (`python -m data_pipeline.audit [--input <folder>] [--scope personal_lines]`, default
+input `data/training data`): read-only, on the laptop, before anything is uploaded. Five layers — structure
+(one PDF + `golden.json` + `metadata.json` per folder, PDF opens, no duplicate PDFs), label shape (the
+importer's own `check_bundle`, `lob` has a schema and is in scope, `page_ref` inside the PDF), values against
+the PDF (each `raw` found on the page its `page_ref` names; wrong page / not found / needs OCR for scans),
+formats (readable dates — the build rewrites them MM/DD/YYYY — amounts agreeing with `raw`, period order) and
+totals (documents per line, digital vs scanned, page spread, lines under 5, whether the test split reaches the
+150 needed to freeze), plus a 5%-per-line spot-check sample. Output in `data/audit_report/` (git-ignored: the
+CSVs quote label values); the command exits non-zero while blockers remain.
+
 ---
 
 # SPEC_05_dataset_builder
@@ -1883,6 +1893,11 @@ remains a manual step before the first production gate.
 
 **Freeze guard covers every corpus type**: a document type the corpus holds but the test split drew none
 of counts as 0 and blocks the freeze (it used to pass unchecked and be missing from the frozen set for good).
+
+**Leakage check reads train and val, not test** (`run_eval.corpus_source_ids`): the frozen set is compared
+with the splits a model learns from and is selected on. The test split is what it is frozen FROM, so the
+sequence *build v1 → freeze v1's test → gate the model trained on v1* is valid; counting test made it fail as
+leakage for every frozen document. The family split keeps a frozen document's relatives out of train and val.
 
 ---
 
@@ -2895,6 +2910,7 @@ failure that was real:
 | `test_personal_lines_scope.py` | a scope narrowed by line: coverage rules, corpus view, golden eval and serving route by line and refuse other lines |
 | `test_mineru_engine.py` | one markdown string per page from MinerU's content list; HTML table rows counted; OCR vs text mode; GPU only |
 | `test_review_fixes.py` | serving through the chosen release (adapter + calibrators, LoRA when several), rollback pin, freeze guard on types with no test documents, scanned from MinerU's classification, HTML row headers and nested tables, explicit threshold targets, scoped pulls, classify in every scope |
+| `test_data_audit.py` | the pre-upload audit on real synthetic PDFs: every blocker, wrong-page and missing values, scans left for OCR, format and period checks, totals, report files, audit output git-ignored |
 | `test_gpu_only.py` | model loaders require CUDA; no `device_map="cpu"`/`"auto"`; OCR refuses CPU; pod detection without `RUNPOD_POD_ID`, and look-alikes rejected |
 
 Contract tests also check that `.env.example` documents every variable the code reads (and nothing it

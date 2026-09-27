@@ -61,13 +61,26 @@ class EvalSetLeakage(EvalError):
 
 
 def corpus_source_ids(
-    client: BlobClient, corpus_version: str, tenant_id: str | None = None
+    client: BlobClient, corpus_version: str, tenant_id: str | None = None,
+    *, include_test: bool = False,
 ) -> set[str]:
-    """Every ``source_id`` in any split of a corpus version."""
+    """Every ``source_id`` a model built from this corpus LEARNED from or was
+    SELECTED on — its train and val splits (and their scope views).
+
+    The test split is excluded unless ``include_test``: no model trains or
+    selects on it, and it is exactly what the golden eval set is frozen FROM
+    (``freeze-eval-set``). Counting it made the natural sequence — build v1,
+    freeze v1's test split, gate the model trained on v1 — fail as "leakage"
+    for every frozen document. The group split keeps a frozen document's
+    family out of train and val, so this is not a way around the guarantee.
+    """
     found: set[str] = set()
     prefix = paths.corpus_dir(corpus_version, tenant_id)
     for key in client.list(prefix):
         if not key.endswith(".jsonl"):
+            continue
+        parts = key[len(prefix):].strip("/").split("/")
+        if not include_test and ("test" in parts[:-1] or parts[-1].startswith("test")):
             continue
         for line in client.read_text(key).splitlines():
             if not line.strip():

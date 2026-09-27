@@ -190,3 +190,13 @@ Once a model version exists (arch §7 step 6, §13 step 11):
 **A policy's line** (`label_metadata.lob`) is validated against the lines that have a canonical schema
 (`common.scopes.known_lines`, schema spellings and enum spellings both accepted) — not against the 13-value
 LOB enum, which rejected `flood`, `cyber`, `professional_eo`, `gl`, `wc` and failed real labels.
+
+**Pre-upload data audit** (`python -m data_pipeline.audit [--input <folder>] [--scope personal_lines]`, default
+input `data/training data`): read-only, on the laptop, before anything is uploaded. Five layers — structure
+(one PDF + `golden.json` + `metadata.json` per folder, PDF opens, no duplicate PDFs), label shape (the
+importer's own `check_bundle`, `lob` has a schema and is in scope, `page_ref` inside the PDF), values against
+the PDF (each `raw` found on the page its `page_ref` names; wrong page / not found / needs OCR for scans),
+formats (readable dates — the build rewrites them MM/DD/YYYY — amounts agreeing with `raw`, period order) and
+totals (documents per line, digital vs scanned, page spread, lines under 5, whether the test split reaches the
+150 needed to freeze), plus a 5%-per-line spot-check sample. Output in `data/audit_report/` (git-ignored: the
+CSVs quote label values); the command exits non-zero while blockers remain.

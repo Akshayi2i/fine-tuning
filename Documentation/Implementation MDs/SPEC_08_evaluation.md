@@ -140,3 +140,8 @@ remains a manual step before the first production gate.
 
 **Freeze guard covers every corpus type**: a document type the corpus holds but the test split drew none
 of counts as 0 and blocks the freeze (it used to pass unchecked and be missing from the frozen set for good).
+
+**Leakage check reads train and val, not test** (`run_eval.corpus_source_ids`): the frozen set is compared
+with the splits a model learns from and is selected on. The test split is what it is frozen FROM, so the
+sequence *build v1 → freeze v1's test → gate the model trained on v1* is valid; counting test made it fail as
+leakage for every frozen document. The family split keeps a frozen document's relatives out of train and val.

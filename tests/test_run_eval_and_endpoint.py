@@ -100,6 +100,25 @@ def test_leakage_is_its_own_error_type():
     assert issubclass(EvalSetLeakage, EvalError)
 
 
+def test_an_eval_set_frozen_from_the_corpus_test_split_is_not_leakage(client):
+    """Build v1, freeze v1's test split, gate the model trained on v1: the frozen
+    documents are in v1's TEST split, which no model trains or selects on."""
+    seed_corpus_rows(client, "v1", ["policy_0001"])
+    client.write_text(paths.corpus_eval_split("v1", "test"),
+                      json.dumps({"source_id": "policy_9001", "doc_type": "policy"}) + "\n")
+    seed_eval_set(client, ["policy_9001"])
+    assert_eval_set_disjoint(client, "v1")  # does not raise
+
+
+def test_an_eval_document_in_the_validation_split_is_leakage(client):
+    """Validation selects the checkpoint and fits calibration: overlap there is real."""
+    client.write_text(paths.corpus_eval_split("v1", "val"),
+                      json.dumps({"source_id": "policy_9001", "doc_type": "policy"}) + "\n")
+    seed_eval_set(client, ["policy_9001"])
+    with pytest.raises(EvalSetLeakage, match="policy_9001"):
+        assert_eval_set_disjoint(client, "v1")
+
+
 def test_an_empty_eval_set_does_not_pass_by_being_empty(client):
     """Nothing to overlap is not the same as verified disjoint — but it is also
     not a leak, so this stays quiet and the coverage warning lives elsewhere."""

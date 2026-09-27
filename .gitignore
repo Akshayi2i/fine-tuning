@@ -29,3 +29,6 @@ testing/ocr_cache/
 testing/test_data/
 calibration/calibration_store/
 pilot/reports/
+
+# Data audit output quotes label values (personal data). Never commit it.
+data/audit_report/

@@ -145,6 +145,19 @@ frozen documents and their families out, and splits new documents into train
 and val only. Freezing again is refused; replacing the set is a deliberate delete
 followed by a new freeze, after which older scores are not comparable.
 
+## Check the data before training
+
+Before uploading a training folder, audit it on the laptop (read-only):
+
+```bash
+python -m data_pipeline.audit                      # default: data/training data, scope personal_lines
+```
+
+It reports blockers (one PDF + `golden.json` + `metadata.json` per folder, PDF readable, `lob` valid and in
+scope, `page_ref` inside the PDF), checks each labelled value against the text on its page, checks formats and
+totals, and draws a 5% spot-check sample per line. Fix and re-run until it exits 0. The report and CSVs go to
+`data/audit_report/`, which is git-ignored: they quote label values.
+
 ## Scopes
 
 A training run covers a **scope** (`configs/scopes.yaml`): `unified` (every type), `policy`, `lossrun`, and
