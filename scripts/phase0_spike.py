@@ -751,6 +751,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--out", type=Path, default=Path("spike_report.json"))
     parser.add_argument("--skip-mineru", action="store_true")
     args = parser.parse_args(argv)
+    # On the pod, run detached in tmux: a closed laptop must not stop the spike.
+    try:
+        from orchestration.detach import detach_script_if_needed
+    except ImportError:   # run from outside the repo: nothing to detach through
+        detach_script_if_needed = None
+    if detach_script_if_needed and detach_script_if_needed(__file__, argv, "spike"):
+        return 0
 
     print("Phase 0 spike — every check is independent; none aborts the run.\n")
     results = [

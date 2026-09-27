@@ -900,6 +900,11 @@ def main(argv: Iterable[str] | None = None) -> int:  # pragma: no cover - thin C
     parser.add_argument("--scope", default=None,
                         help="what this run covers (configs/scopes.yaml); defaults to unified")
     args = parser.parse_args(list(argv) if argv is not None else None)
+    # On the pod, run detached in tmux: a closed laptop must not stop this job.
+    from orchestration.detach import detach_module_if_needed
+
+    if detach_module_if_needed('training.train', argv):
+        return 0
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
     client = BlobClient()

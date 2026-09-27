@@ -323,6 +323,11 @@ def main(argv: Iterable[str] | None = None) -> int:  # pragma: no cover - thin C
                         help="phase 3; run only if field F1 has plateaued after phases 1 and 2")
     parser.add_argument("--out", type=Path, default=Path("sweep_result.json"))
     args = parser.parse_args(list(argv) if argv is not None else None)
+    # On the pod, run detached in tmux: a closed laptop must not stop this job.
+    from orchestration.detach import detach_module_if_needed
+
+    if detach_module_if_needed('training.sweep', argv):
+        return 0
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
     raise SystemExit(

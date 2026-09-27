@@ -18,6 +18,23 @@ case "$role" in
 esac
 
 cd "$(dirname "$0")/.."
+
+# On the pod, run detached in tmux: an install cut off halfway by a closed laptop
+# leaves a broken environment. pod_run.sh installs tmux itself if it is missing.
+if [ -n "${RUNPOD_POD_ID:-}" ] && [ -z "${TMUX:-}" ] && [ "${FIDEON_DETACHED:-}" != "1" ] \
+   && [ "${FIDEON_NO_DETACH:-}" != "1" ]; then
+  name="setup-${role}-$(date -u +%Y%m%d-%H%M%S)"
+  bash scripts/pod_run.sh start "$name" -- bash scripts/setup_pod.sh "$role"
+  echo "Setup is running in tmux as '$name'; closing the laptop will not stop it."
+  echo "  status: bash scripts/pod_run.sh status $name"
+  echo "  watch:  bash scripts/pod_run.sh attach $name   (Ctrl-b then d to leave it running)"
+  exit 0
+fi
+
+# tmux, for scripts/pod_run.sh: a run inside it survives the SSH session ending.
+if ! command -v tmux >/dev/null 2>&1 && [ "$(id -u)" = "0" ] && command -v apt-get >/dev/null 2>&1; then
+  apt-get update -qq && apt-get install -y -qq tmux >/dev/null
+fi
 python -m pip install --upgrade pip wheel setuptools packaging ninja
 python -m pip install -r "$requirements"
 
@@ -64,5 +81,6 @@ fi
 if [ "$role" = "train" ] || [ "$role" = "serve" ]; then
   echo "Next: put the base model under /workspace/models (or set FIDEON_BASE_MODEL_DIR),"
   echo "pin its revision in configs/base_model.yaml, and run: python scripts/phase0_spike.py"
+  echo "Start long runs with: bash scripts/pod_run.sh start <name> <command...> (survives disconnects)"
 fi
 echo "setup_pod: $role ready"

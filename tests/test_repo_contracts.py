@@ -82,6 +82,12 @@ LIBRARY_OWNED_VARS = frozenset({
 })
 
 
+#: Set by the runtime around the code, never by an operator: tmux sets TMUX in
+#: every session it runs. Documenting them in .env.example would invite setting
+#: them by hand, which would make a foreground job believe it was detached.
+RUNTIME_SET_VARS = frozenset({"TMUX"})
+
+
 def env_vars_in_code() -> set[str]:
     """Every environment-variable name the code names.
 
@@ -120,7 +126,7 @@ def test_every_env_var_the_code_reads_is_documented():
             for a, b in read_at_a_call_site.findall(path.read_text(encoding="utf-8")):
                 called.add(a or b)
 
-    undocumented = called - env_vars_in_template()
+    undocumented = called - env_vars_in_template() - RUNTIME_SET_VARS
     assert not undocumented, (
         f"read by the code but absent from .env.example: {sorted(undocumented)}"
     )

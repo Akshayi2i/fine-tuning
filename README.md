@@ -85,6 +85,35 @@ Versions are declared once, in `pyproject.toml`; the requirements files only
 choose dependency groups. `tests/test_dependencies.py` fails if the code imports
 a package no group installs.
 
+## Running on the pod: closing the laptop does not stop it
+
+On the pod, every long job runs inside tmux automatically - the pipeline
+(`python -m orchestration.run ...`), training, sweeps, evaluation, OCR,
+ingestion, pre-annotation, the Phase 0 spike and `setup_pod.sh`. Type the
+command as usual; it starts itself in a tmux session and returns at once with
+the session's name. The job belongs to the pod, not to your SSH connection:
+shutting the laptop, letting it sleep or losing Wi-Fi does not stop it.
+
+```bash
+python -m orchestration.run finetune --corpus-version v1 --out-version v1
+#   -> "This one is running as 'finetune-20261003-141502'."
+
+bash scripts/pod_run.sh list                  # every job on this pod
+bash scripts/pod_run.sh status <name>         # running / finished + exit code + last log lines
+bash scripts/pod_run.sh attach <name>         # watch live; Ctrl-b then d to leave it running
+bash scripts/pod_run.sh tail <name>           # follow the log on the volume (/workspace/logs)
+```
+
+How it decides: on a RunPod pod (`RUNPOD_POD_ID` is set) a command not already
+inside tmux re-launches itself through `scripts/pod_run.sh`; inside tmux, or on a
+laptop or CI, it runs in the foreground as before. `tests/test_detach.py` fails
+if a new long-running entry point is added without this guard.
+
+Nothing stops a run except `pod_run.sh stop <name>`, which asks you to type the
+name to confirm. The session stays open after the run ends so its output can be
+read. What a run does not survive is the pod itself stopping or restarting;
+then `status` says so, and `--from-stage` resumes from the last completed stage.
+
 ## The eval set: freeze it once
 
 Train and val come from each corpus build. The promotion gate does NOT score the

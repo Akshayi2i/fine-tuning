@@ -298,6 +298,11 @@ def main(argv: list[str] | None = None) -> int:  # pragma: no cover - thin CLI
     parser.add_argument("--validate-only", action="store_true",
                         help="check every bundle and write nothing")
     args = parser.parse_args(argv)
+    # On the pod, run detached in tmux: a closed laptop must not stop this job.
+    from orchestration.detach import detach_module_if_needed
+
+    if detach_module_if_needed('data_pipeline.ingestion.import_labeled_pdfs', argv):
+        return 0
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
     report = import_batch(

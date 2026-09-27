@@ -311,6 +311,11 @@ def main(argv: list[str] | None = None) -> int:  # pragma: no cover - thin CLI
                         help="the MinerU version that produced the markdown (arch §8a)")
     parser.add_argument("--tenant", default=None)
     args = parser.parse_args(argv)
+    # On the pod, run detached in tmux: a closed laptop must not stop this job.
+    from orchestration.detach import detach_module_if_needed
+
+    if detach_module_if_needed('data_pipeline.ingestion.import_prepared', argv):
+        return 0
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
     report = import_batch(

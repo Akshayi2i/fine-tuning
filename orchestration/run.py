@@ -302,12 +302,24 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+#: Commands that finish in seconds and so run in the foreground even on the pod.
+QUICK_COMMANDS = frozenset({"deploy-endpoint", "rollback-endpoint"})
+
+
 def main(argv: Iterable[str] | None = None) -> int:
     args = build_parser().parse_args(list(argv) if argv is not None else None)
     logging.basicConfig(
         level=logging.DEBUG if args.verbose else logging.INFO,
         format="%(levelname)s %(name)s %(message)s",
     )
+
+    # On the pod, every long command runs detached in tmux, so shutting the laptop
+    # or losing Wi-Fi cannot stop it. Flipping the endpoint takes seconds.
+    if args.command not in QUICK_COMMANDS:
+        from orchestration.detach import detach_module_if_needed
+
+        if detach_module_if_needed("orchestration.run", argv, hint=args.command):
+            return 0
 
     if args.command == "extract":
         return run_extract(args)
