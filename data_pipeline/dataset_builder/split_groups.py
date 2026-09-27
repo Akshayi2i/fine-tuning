@@ -26,13 +26,32 @@ Three things this adds beyond the group unit:
 * **Synthetic documents are train-only.** A synthetic ACORD has perfect labels
   because it was generated from them; scoring against it measures the generator.
 
-**On assignment stability.** Groups are assigned by hash *threshold* rather than
-slice position, so at a fixed ratio the corpus can grow without reassigning
-anything. Two things do move groups, and both are deliberate: crossing a volume
-band, because the ratios themselves change; and the empty-split repair, which
-fires only at very small N. Neither is a comparability problem — cross-version
-comparability comes from the frozen golden eval set (§15.4), not from the corpus
-test split.
+**The ratio** comes from the document type's volume (``common.constants.
+SPLIT_RATIOS_BY_VOLUME``: 70/18/12 below 200 documents, 75/15/10 below 1000,
+80/10/10 from 1000). It is per TYPE because the gate's metrics are per type: the
+band answers "are 10% of this type's documents enough to measure it".
+
+**Placement is per line of business** (a policy's ``lob``). Every group gets a
+stable hash position; below the train edge it trains, below the val edge it is
+validation, above it is test — the same rule in every line, so each line lands
+near the type's ratio. Two per-line rules on top:
+
+* a line with fewer than :data:`MIN_DOCS_TO_MEASURE_LINE` documents trains on
+  everything it has. One or two documents cannot measure a line, and holding
+  them out would leave the model with no example of it at all;
+* a line with enough groups is repaired to have at least one val and one test
+  group, so no measured line is absent from evaluation by the luck of the hash.
+
+**On assignment stability.** Groups are assigned by hash *threshold*, not slice
+position, so at a fixed ratio the corpus grows without reassigning anything.
+Crossing a volume band changes the edges, and :func:`assert_bands_only_grow_train`
+guarantees both edges only ever move UP (train edge 0.70 -> 0.75 -> 0.80, val
+edge 0.88 -> 0.90 -> 0.90). So a band crossing only moves groups toward train —
+test -> val, val -> train — and never moves a document a model trained on into
+val or test. Two small-N rules can still move a group the other way, and both
+say so in the log: the empty-split repair, and a line crossing
+:data:`MIN_DOCS_TO_MEASURE_LINE`. Cross-version comparability comes from the
+frozen golden eval set (§15.4), which no reassignment touches.
 """
 
 from __future__ import annotations
@@ -51,6 +70,13 @@ Split = Literal["train", "val", "test"]
 SPLITS: tuple[Split, ...] = ("train", "val", "test")
 
 ValHalf = Literal["calibration", "threshold"]
+
+#: Below this many documents a line of business is not measured: all of it trains.
+MIN_DOCS_TO_MEASURE_LINE = 5
+
+#: A line needs this many groups before the repair forces a val and a test group:
+#: with fewer, the repair would hand one line's whole evaluation to one family.
+MIN_GROUPS_TO_REPAIR = 3
 
 #: Carriers to hold out entirely per doc type, once the corpus has enough of them
 #: that removing two still leaves a usable training set.
@@ -73,6 +99,12 @@ class GroupSplitAssignment:
 
     #: Carriers placed entirely in test, per doc type.
     held_out_carriers: dict[str, list[str]] = field(default_factory=dict)
+
+    #: Groups per split per line of business, per doc type — what the ratio
+    #: actually produced for each line.
+    counts_by_line: dict[str, dict[str, dict[str, int]]] = field(default_factory=dict)
+    #: Lines too small to measure, trained on whole.
+    train_only_lines: dict[str, list[str]] = field(default_factory=dict)
 
     seed: int = 42
     ratios_by_doc_type: dict[str, dict[str, float]] = field(default_factory=dict)
@@ -101,6 +133,8 @@ class GroupSplitAssignment:
             "seed": self.seed,
             "ratios_by_doc_type": self.ratios_by_doc_type,
             "counts_by_doc_type": self.counts_by_doc_type,
+            "counts_by_line": self.counts_by_line,
+            "train_only_lines": {k: sorted(v) for k, v in sorted(self.train_only_lines.items())},
         }
 
 
@@ -118,9 +152,45 @@ class GroupRecord:
     #: generator, not the model (arch v2.1 §4d).
     synthetic: bool = False
 
+    #: The line of business the family belongs to (:func:`line_of`). ``None`` for
+    #: types without one (ACORD, Loss Runs), which are then one line per type.
+    line: str | None = None
+
     @property
     def size(self) -> int:
         return len(self.source_ids)
+
+
+def line_of(lob: str | list[str] | None) -> str | None:
+    """A document's line as a stratum key. A package policy's lines, sorted and
+    joined, are one stratum of their own: they are read against the fallback
+    schema, not either line's."""
+    if lob is None or lob == [] or lob == "":
+        return None
+    if isinstance(lob, str):
+        return lob.strip().lower()
+    return "+".join(sorted(str(x).strip().lower() for x in lob))
+
+
+def assert_bands_only_grow_train() -> None:
+    """Both split edges must be non-decreasing as volume grows.
+
+    That is what makes a band crossing move groups only toward train. An edge
+    that fell — a later band with a smaller train share, say — would move groups
+    a previous version trained on into val or test, and score it on them.
+    """
+    from common.constants import SPLIT_RATIOS_BY_VOLUME
+
+    edges = [(r.train, r.train + r.val) for _t, r in SPLIT_RATIOS_BY_VOLUME]
+    for (t0, v0), (t1, v1) in zip(edges, edges[1:], strict=False):
+        if t1 < t0 - 1e-9 or v1 < v0 - 1e-9:
+            raise ValueError(
+                f"split bands {edges} move an edge DOWN between bands; a band crossing would "
+                "move trained documents into val or test."
+            )
+
+
+assert_bands_only_grow_train()
 
 
 def _stable_hash(group_id: str, seed: int, salt: str = "") -> float:
@@ -161,12 +231,18 @@ def assign_group_splits(
     seed: int = 42,
     ratios: SplitRatio | None = None,
     hold_out_carriers: bool = True,
+    with_test: bool = True,
 ) -> GroupSplitAssignment:
     """Assign each group to a split, per document type.
 
     Splitting per type rather than globally keeps every type represented in every
     split — a global split on an unbalanced corpus can leave a type with no test
     documents at all, and its accuracy then silently unmeasured.
+
+    ``with_test=False`` once the golden eval set is frozen: the frozen set IS the
+    test set, so new documents split into train and val only, in the ratio's own
+    train:val proportion, and no carrier is held out (the frozen set already
+    holds the carriers the first split held out).
     """
     result = GroupSplitAssignment(seed=seed)
 
@@ -180,11 +256,16 @@ def assign_group_splits(
         # certificates is still forty documents of training signal.
         document_count = sum(r.size for r in unique)
         ratio = ratios or split_ratio_for(document_count)
+        if not with_test:
+            share = ratio.train + ratio.val
+            ratio = SplitRatio(ratio.train / share, ratio.val / share, 0.0)
         result.ratios_by_doc_type[doc_type] = {
             "train": ratio.train, "val": ratio.val, "test": ratio.test,
         }
 
-        held_out = _pick_held_out_carriers(unique, seed) if hold_out_carriers else []
+        held_out = (
+            _pick_held_out_carriers(unique, seed) if hold_out_carriers and with_test else []
+        )
         if held_out:
             result.held_out_carriers[doc_type] = held_out
 
@@ -192,18 +273,46 @@ def assign_group_splits(
         val_edge = ratio.train + ratio.val
         buckets: dict[str, list[str]] = {"train": [], "val": [], "test": []}
 
+        by_line: dict[str | None, list[GroupRecord]] = defaultdict(list)
         for record in unique:
-            if record.synthetic:
-                buckets["train"].append(record.group_id)
-                continue
-            if record.carrier and record.carrier in held_out:
-                buckets["test"].append(record.group_id)
-                continue
-            position = _stable_hash(record.group_id, seed)
-            split = "train" if position < train_edge else "val" if position < val_edge else "test"
-            buckets[split].append(record.group_id)
+            by_line[record.line].append(record)
 
-        _repair_empty_splits(buckets, unique, doc_type, seed)
+        for line, members in sorted(by_line.items(), key=lambda kv: kv[0] or ""):
+            line_buckets: dict[str, list[str]] = {"train": [], "val": [], "test": []}
+            line_documents = sum(r.size for r in members)
+            measured = line_documents >= MIN_DOCS_TO_MEASURE_LINE
+            for record in members:
+                if record.synthetic:
+                    line_buckets["train"].append(record.group_id)
+                    continue
+                if record.carrier and record.carrier in held_out:
+                    line_buckets["test"].append(record.group_id)
+                    continue
+                if not measured and line is not None:
+                    line_buckets["train"].append(record.group_id)
+                    continue
+                position = _stable_hash(record.group_id, seed)
+                split = "train" if position < train_edge else "val" if position < val_edge else "test"
+                line_buckets[split].append(record.group_id)
+
+            if measured or line is None:
+                _repair_empty_splits(
+                    line_buckets, members, f"{doc_type}/{line or '-'}", seed,
+                    starved=("test", "val") if with_test else ("val",),
+                )
+            else:
+                result.train_only_lines.setdefault(doc_type, []).append(line)
+                log.info(
+                    "%s/%s has %d document(s), fewer than %d: all of it trains, and the line is "
+                    "not measured until it has more", doc_type, line, line_documents,
+                    MIN_DOCS_TO_MEASURE_LINE,
+                )
+            if line is not None:
+                result.counts_by_line.setdefault(doc_type, {})[line] = {
+                    k: len(v) for k, v in line_buckets.items()
+                }
+            for split_name, ids in line_buckets.items():
+                buckets[split_name].extend(ids)
 
         for split, members in buckets.items():
             for group_id in members:
@@ -224,7 +333,8 @@ def assign_group_splits(
 
 
 def _repair_empty_splits(
-    buckets: dict[str, list[str]], groups: list[GroupRecord], doc_type: str, seed: int
+    buckets: dict[str, list[str]], groups: list[GroupRecord], doc_type: str, seed: int,
+    starved: tuple[str, ...] = ("test", "val"),
 ) -> None:
     """Move one group into a starved split rather than ship an unusable corpus.
 
@@ -236,11 +346,11 @@ def _repair_empty_splits(
     repair, because a test split made of generated documents measures the
     generator and reports it as model accuracy.
     """
-    if len(groups) < 3:
+    if len(groups) < MIN_GROUPS_TO_REPAIR:
         return
     movable = {g.group_id for g in groups if not g.synthetic}
-    for starved in ("test", "val"):
-        if buckets[starved]:
+    for split in starved:
+        if buckets[split]:
             continue
         donor = max(buckets, key=lambda s: len([g for g in buckets[s] if g in movable]))
         candidates = [g for g in buckets[donor] if g in movable]
@@ -248,11 +358,11 @@ def _repair_empty_splits(
             continue
         moved = sorted(candidates, key=lambda g: _stable_hash(g, seed))[-1]
         buckets[donor].remove(moved)
-        buckets[starved].append(moved)
+        buckets[split].append(moved)
         log.warning(
             "%s: group %r moved to %s so the split is not empty — an empty test split cannot be "
             "evaluated. This is the one case where assignment is not stable under growth.",
-            doc_type, moved, starved,
+            doc_type, moved, split,
         )
 
 

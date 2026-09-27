@@ -288,6 +288,17 @@ def build_parser() -> argparse.ArgumentParser:
     rollback = sub.add_parser("rollback-endpoint", help="restore the previously promoted version")
     rollback.add_argument("--dry-run", dest="dry_run", action="store_true")
 
+    freeze = sub.add_parser(
+        "freeze-eval-set",
+        help="copy a corpus's test split into the frozen golden eval set (once)",
+    )
+    freeze.add_argument("--corpus", required=True, help="the corpus version whose test split to freeze")
+    freeze.add_argument("--tenant", default=None)
+    freeze.add_argument(
+        "--allow-small", dest="allow_small", action="store_true",
+        help="freeze even when a document type has fewer than 100 test documents (a pilot)",
+    )
+
     return parser
 
 
@@ -300,6 +311,17 @@ def main(argv: Iterable[str] | None = None) -> int:
 
     if args.command == "extract":
         return run_extract(args)
+
+    if args.command == "freeze-eval-set":
+        from evaluation.freeze_eval_set import freeze_eval_set
+        from registry_utils.write_run_manifest import capture_git_commit
+
+        manifest = freeze_eval_set(
+            BlobClient(), args.corpus, tenant_id=args.tenant, git_commit=capture_git_commit(),
+            allow_small=args.allow_small,
+        )
+        print(json.dumps(manifest, indent=2, ensure_ascii=False))
+        return 0
 
     if args.command in ("deploy-endpoint", "rollback-endpoint"):
         controller = RunPodController()

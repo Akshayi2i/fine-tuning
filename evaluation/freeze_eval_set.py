@@ -1,0 +1,176 @@
+"""Freeze a corpus's test split into the golden eval set, once (arch v2.1 §8).
+
+The promotion gate scores the frozen set at ``golden-eval-set/`` — the same
+documents for every model version, so two versions' numbers are comparable. The
+corpus's own test split cannot be that: it is re-drawn on every rebuild. Nothing
+populated the frozen set, and nothing read the test split, so the gate had no
+documents and the test documents were held out for nothing.
+
+This joins the two. The first real corpus build's test split is copied, per
+document, into the layout :mod:`evaluation.golden_eval` reads — the golden label,
+its metadata, every page image and OCR page — and a ``manifest.json`` records
+where it came from. After that:
+
+* every corpus build excludes the frozen documents **and their families**
+  (``orchestration.pipeline_dag.stage_dataset_build``), so a renewal of an eval
+  document cannot train the model on its own answer key;
+* new documents split into train and val only: the test role is the frozen set.
+
+Freezing twice is refused. A set that changes between versions stops being the
+yardstick the gate compares them on; replacing it is a deliberate act (delete
+the prefix, then freeze again), after which old and new scores are not
+comparable.
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+from datetime import UTC, datetime
+from typing import Any
+
+from artifact_registry import paths
+from artifact_registry.blob_client import BlobClient
+
+log = logging.getLogger(__name__)
+
+
+class FreezeError(RuntimeError):
+    """Raised when the eval set cannot be frozen."""
+
+
+#: The smallest frozen set per document type worth making permanent. About 100
+#: documents is where a rate near 80% is known to roughly ±4 points (one standard
+#: error: sqrt(0.8 * 0.2 / 100)); below it the gate cannot tell a regression of a
+#: few points from noise, and the set cannot grow once frozen.
+MIN_FROZEN_DOCS_PER_TYPE = 100
+
+
+def manifest_key() -> str:
+    return f"{paths.golden_eval_set_dir()}/manifest.json"
+
+
+def is_frozen(client: BlobClient) -> bool:
+    """Whether a golden eval set exists. Split assignment and exclusion key on it."""
+    from evaluation.run_eval import eval_set_source_ids
+
+    return bool(eval_set_source_ids(client))
+
+
+def frozen_manifest(client: BlobClient) -> dict[str, Any]:
+    key = manifest_key()
+    return client.read_json(key) if client.exists(key) else {}
+
+
+def freeze_eval_set(
+    client: BlobClient,
+    corpus_version: str,
+    *,
+    tenant_id: str | None = None,
+    git_commit: str = "unknown",
+    allow_small: bool = False,
+) -> dict[str, Any]:
+    """Copy ``corpus_version``'s test split into ``golden-eval-set/``. Returns the manifest.
+
+    Refused when any document type would freeze with fewer than
+    :data:`MIN_FROZEN_DOCS_PER_TYPE` documents, unless ``allow_small``: the frozen
+    set is the size of the build it came from, permanently, so freezing a pilot
+    build fixes a pilot-sized yardstick for every later version.
+    """
+    from data_pipeline.dataset_builder.split_groups import line_of
+    from data_pipeline.labeling.export_golden_labels import load_golden_label
+
+    if is_frozen(client):
+        existing = frozen_manifest(client)
+        raise FreezeError(
+            f"the golden eval set is already frozen (from corpus "
+            f"{existing.get('frozen_from_corpus', 'unknown')}, "
+            f"{len(existing.get('source_ids', []))} documents). Re-freezing would change the "
+            "yardstick every version is compared on. To replace it on purpose, delete "
+            f"{paths.golden_eval_set_dir()}/ first — and treat older scores as not comparable."
+        )
+
+    test_key = paths.corpus_eval_split(corpus_version, "test", tenant_id)
+    if not client.exists(test_key):
+        raise FreezeError(f"corpus {corpus_version} has no test split at {test_key}")
+    documents: dict[str, str] = {}
+    for line in client.read_text(test_key).splitlines():
+        if line.strip():
+            row = json.loads(line)
+            documents.setdefault(row["source_id"], row["doc_type"])
+    if not documents:
+        raise FreezeError(f"the test split of corpus {corpus_version} holds no documents")
+    per_type: dict[str, int] = {}
+    for doc_type in documents.values():
+        per_type[doc_type] = per_type.get(doc_type, 0) + 1
+    small = {t: n for t, n in sorted(per_type.items()) if n < MIN_FROZEN_DOCS_PER_TYPE}
+    if small and not allow_small:
+        raise FreezeError(
+            f"the test split would freeze only {small} document(s) for these types, under the "
+            f"{MIN_FROZEN_DOCS_PER_TYPE} a permanent eval set needs. The set cannot grow once "
+            "frozen, so freeze from a build holding most of the labeled documents. To freeze a "
+            "smaller set anyway (a pilot), pass --allow-small."
+        )
+
+    corpus_manifest_key = paths.corpus_manifest(corpus_version, tenant_id)
+    corpus_manifest = (
+        client.read_json(corpus_manifest_key) if client.exists(corpus_manifest_key) else {}
+    )
+    split = corpus_manifest.get("split_assignment") or {}
+
+    root = paths.golden_eval_set_dir()
+    by_type: dict[str, int] = {}
+    by_line: dict[str, int] = {}
+    for source_id, doc_type in sorted(documents.items()):
+        label, metadata = load_golden_label(source_id, doc_type, client, tenant_id)
+        ocr_meta = client.read_json(paths.ocr_meta(doc_type, source_id, tenant_id))
+        page_count = int(ocr_meta.get("page_count") or 0)
+        if page_count < 1:
+            raise FreezeError(f"{source_id} records no pages; it cannot be evaluated")
+
+        base = f"{root}/{source_id}"
+        for page in range(1, page_count + 1):
+            client.write_bytes(
+                f"{base}/page_{page}.png",
+                client.read_bytes(paths.processed_page(doc_type, source_id, page, "png", tenant_id)),
+            )
+            md = paths.processed_page(doc_type, source_id, page, "md", tenant_id)
+            if client.exists(md):
+                client.write_text(f"{base}/page_{page}.md", client.read_text(md))
+        client.write_json(f"{base}/metadata.json", {
+            "doc_type": doc_type,
+            "acord_form": metadata.get("acord_form"),
+            "lob": metadata.get("lob"),
+            "is_scanned": bool(ocr_meta.get("failed_pages")),
+            "frozen_from_corpus": corpus_version,
+        })
+        # Written last: a document counts as part of the set once golden.json
+        # exists (eval_set_source_ids), so an interrupted freeze leaves no
+        # half-copied document that the gate would try to score.
+        client.write_json(f"{base}/golden.json", label)
+        by_type[doc_type] = by_type.get(doc_type, 0) + 1
+        line = line_of(metadata.get("lob"))
+        if line:
+            by_line[line] = by_line.get(line, 0) + 1
+
+    manifest = {
+        "frozen_at": datetime.now(UTC).isoformat(),
+        "frozen_from_corpus": corpus_version,
+        "tenant_id": paths._tenant(tenant_id),
+        "git_commit": git_commit,
+        "source_ids": sorted(documents),
+        "documents_by_doc_type": dict(sorted(by_type.items())),
+        # What the gate can say something about, per line. A line absent here is
+        # not measured by the gate at all.
+        "documents_by_line": dict(sorted(by_line.items())),
+        "small_set_accepted": bool(small),
+        # The carriers the split held out entirely. They are "unseen" to the model
+        # only while no document of theirs trains; the build warns when one does.
+        "held_out_carriers": split.get("held_out_carriers", {}),
+    }
+    client.write_json(manifest_key(), manifest)
+    log.info(
+        "froze %d document(s) from corpus %s into %s: %s",
+        len(documents), corpus_version, root, manifest["documents_by_doc_type"],
+    )
+    return manifest

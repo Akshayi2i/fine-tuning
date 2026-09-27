@@ -516,7 +516,7 @@ def _declared_account(label: dict[str, Any]) -> str | None:
 
 def group_records(documents: list[Any]) -> dict[str, list[Any]]:
     """One :class:`GroupRecord` per family, per doc type, sorted by group id."""
-    from data_pipeline.dataset_builder.split_groups import GroupRecord
+    from data_pipeline.dataset_builder.split_groups import GroupRecord, line_of
 
     # One GroupRecord per family, per doc type. A document with no detected
     # family is its own group — which reproduces the v1 per-document behaviour
@@ -532,6 +532,10 @@ def group_records(documents: list[Any]) -> dict[str, list[Any]]:
                 source_ids=[document.source_id],
                 carrier=document.carrier,
                 synthetic=document.synthetic,
+                # The line the split balances on. A family is one line in
+                # practice (one insured's policy renewed); the first member's
+                # stands for it.
+                line=line_of(getattr(document, "lob", None)),
             )
         else:
             record.source_ids.append(document.source_id)
@@ -603,6 +607,41 @@ def _is_corpus_built(ctx: StageContext) -> bool:
     return ctx.client.exists(paths.corpus_manifest(ctx.corpus, ctx.tenant_id))
 
 
+def exclude_eval_families(
+    client: Any, documents: list[Any]
+) -> tuple[list[Any], list[str]]:
+    """Drop the frozen eval documents, and every document sharing a family with one.
+
+    Families are assigned over ALL loaded documents first (the frozen ones are
+    still labeled and OCR'd, so they load), which is what lets a renewal or a
+    same-template sibling of an eval document be recognised here.
+    """
+    from evaluation.run_eval import eval_set_source_ids
+
+    frozen = eval_set_source_ids(client)
+    families = {d.family for d in documents if d.source_id in frozen}
+    kept = [d for d in documents if d.source_id not in frozen and d.family not in families]
+    excluded = sorted(d.source_id for d in documents if d not in kept)
+    return kept, excluded
+
+
+def warn_on_held_out_carriers(manifest: dict[str, Any], documents: list[Any]) -> None:
+    """Say when a carrier the eval set holds out is about to be trained on.
+
+    The frozen set's held-out carriers are what makes its "unseen carrier"
+    numbers mean anything. Training on a later document of theirs is allowed —
+    the data is real — but from then on those numbers measure a seen carrier.
+    """
+    held = {c for carriers in (manifest.get("held_out_carriers") or {}).values() for c in carriers}
+    seen = sorted({d.carrier for d in documents if d.carrier in held})
+    if seen:
+        log.warning(
+            "carrier(s) %s are held out in the frozen eval set but now have documents in this "
+            "corpus. The eval set's unseen-carrier results no longer measure an unseen carrier.",
+            seen,
+        )
+
+
 def stage_dataset_build(ctx: StageContext) -> StageResult:
     """Split, expand into modality variants, write JSONL, and pin the corpus.
 
@@ -619,13 +658,29 @@ def stage_dataset_build(ctx: StageContext) -> StageResult:
     )
     from data_pipeline.dataset_builder.sample_modes import assert_mix_is_close, sample_modes
     from data_pipeline.dataset_builder.split_groups import assign_group_splits
+    from evaluation.freeze_eval_set import frozen_manifest, is_frozen
 
     documents = load_labeled_documents(ctx)
     if not documents:
         raise PipelineError("no labeled, OCR'd documents to build a corpus from")
 
+    # Once the golden eval set is frozen it IS the test set: its documents, and
+    # every document in the same family, stay out of the corpus — a renewal of an
+    # eval document would otherwise train the model on that document's answers —
+    # and the rest split into train and val only.
+    frozen = is_frozen(ctx.client)
+    if frozen:
+        documents, excluded = exclude_eval_families(ctx.client, documents)
+        if excluded:
+            log.info(
+                "excluded %d document(s) in the frozen eval set or its families", len(excluded)
+            )
+        warn_on_held_out_carriers(frozen_manifest(ctx.client), documents)
+        if not documents:
+            raise PipelineError("every labeled document is in the frozen eval set or its families")
+
     by_type = group_records(documents)
-    assignment = assign_group_splits(by_type, seed=ctx.seed)
+    assignment = assign_group_splits(by_type, seed=ctx.seed, with_test=not frozen)
     # One modality draw per train document per epoch (arch v2.1 §6.1). This is
     # the only sampling step: v1's down-sampler discarded rows to fix a 33/33/33
     # expansion, and running it over epoch rows would drop documents from epochs.
@@ -634,7 +689,8 @@ def stage_dataset_build(ctx: StageContext) -> StageResult:
     built = build_corpus(documents, assignment, seed=ctx.seed, mode_assignment=modes)
     # Refused before anything is written. An epoch file of zero rows trains
     # nothing, and the run would still record a corpus version as built.
-    missing = [s for s in ("train", "val", "test") if not built.rows_by_split.get(s)]
+    needed = ("train", "val") if frozen else ("train", "val", "test")
+    missing = [s for s in needed if not built.rows_by_split.get(s)]
     if missing and ctx.dry_run and "train" not in missing:
         # A fixture-sized dry-run corpus is too small to fill every split; a real
         # build is refused below, and training refuses a run with no val anyway.

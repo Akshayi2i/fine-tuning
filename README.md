@@ -85,6 +85,23 @@ Versions are declared once, in `pyproject.toml`; the requirements files only
 choose dependency groups. `tests/test_dependencies.py` fails if the code imports
 a package no group installs.
 
+## The eval set: freeze it once
+
+Train and val come from each corpus build. The promotion gate does NOT score the
+build's test split — that is re-drawn on every rebuild — but a frozen golden eval
+set at `golden-eval-set/` in Blob, the same documents for every model version.
+Create it once, from the first real corpus build:
+
+```bash
+python -m orchestration.run freeze-eval-set --corpus v1
+```
+
+It copies that corpus's test split (labels, metadata, page images, OCR) into the
+frozen set and records `manifest.json`. From then on every corpus build leaves the
+frozen documents and their families out, and splits new documents into train
+and val only. Freezing again is refused; replacing the set is a deliberate delete
+followed by a new freeze, after which older scores are not comparable.
+
 ## Build status
 
 All ten phases are built. `pytest -q` runs the whole suite on CPU with no live

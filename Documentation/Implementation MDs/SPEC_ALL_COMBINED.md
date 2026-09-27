@@ -447,7 +447,7 @@ The system prompt **explicitly declares which mode is active** rather than silen
 | Data volume per doc type | Split |
 |---|---|
 | Pilot batch (~25–30/type) | ~70 / 18 / 12 — metrics are directional, not final |
-| 200–1000/type | 75/15/15 or 80/10/10 |
+| 200–1000/type | 75/15/10 |
 | 1000+/type (target state) | 80/10/10 |
 
 ---
