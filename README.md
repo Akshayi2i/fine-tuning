@@ -14,8 +14,8 @@ in `schemas/` are those canonical models serialised to JSON Schema.
 
 | Where | What |
 |---|---|
-| `Documentation/finetuning-architecture-v1.md` | The design and its rationale - the *why* |
-| `Documentation/Implementation MDs/SPEC_00` .. `SPEC_15` | Module specs and acceptance criteria - the *how* |
+| `Documentation/finetuning-architecture-v2.1.docx` | The design and its rationale - the *why* (v2.1, with the v2.2 implementation update). v1 is kept for history only |
+| `Documentation/Implementation MDs/SPEC_00` .. `SPEC_15` | Module specs and acceptance criteria - the *how*; SPEC_00 §13 indexes what the code does now |
 | `Documentation/Implementation MDs/SPEC_ALL_COMBINED.md` | All specs in one file |
 
 The two are in sync. **If they disagree, that is a bug in one of them** - fix the
@@ -32,17 +32,20 @@ scanned page there is no text for a rule to read.
 ## Operator commands (SPEC_13)
 
 ```bash
-# 1  ingest -> OCR -> corpus -> train -> evaluate -> GATE -> merge
-python -m orchestration.run finetune --input ./intake --out-version v2 --gpu a100-80
+# 1  ingest -> OCR -> corpus -> train -> select checkpoint -> merge  (staged on the pod)
+python -m orchestration.run finetune --input ./intake --corpus-version v1 --out-version v2
 
-# 2  quantize -> push adapters + merged + quantized to Azure Blob
-python -m orchestration.run package --version v2 --formats fp16 q5_k_m
+# 2  quantize -> calibrate -> GATE -> push real weights + release bundle to Azure Blob
+python -m orchestration.run package --version v2 --release-id release-2026.11.1 --formats bf16
 
 # 3  extraction, model chosen by the operator
 python -m orchestration.run extract --model base|v1|v2 --input testing/test_data/
 
 # all = 1 + 2. Never includes extraction.
-python -m orchestration.run all --input ./intake --out-version v2
+python -m orchestration.run all --input ./intake --out-version v2 --release-id release-2026.11.1
+
+# once, from the first real corpus build: the gate's frozen eval set
+python -m orchestration.run freeze-eval-set --corpus v1
 ```
 
 ## Pilot protocol (SPEC_15)
@@ -104,7 +107,8 @@ bash scripts/pod_run.sh attach <name>         # watch live; Ctrl-b then d to lea
 bash scripts/pod_run.sh tail <name>           # follow the log on the volume (/workspace/logs)
 ```
 
-How it decides: on a RunPod pod (`RUNPOD_POD_ID` is set) a command not already
+How it decides: on the pod (`RUNPOD_POD_ID` set, or RunPod's `/etc/rp_environment`,
+or Linux with `/workspace` mounted and a GPU present) a command not already
 inside tmux re-launches itself through `scripts/pod_run.sh`; inside tmux, or on a
 laptop or CI, it runs in the foreground as before. `tests/test_detach.py` fails
 if a new long-running entry point is added without this guard.
@@ -177,7 +181,8 @@ test suite is not evidence about extraction quality.
   the loss curve looks normal.
 - **The alias registry is never used at inference.** It is labeling and
   evaluation material. The model does the semantic mapping.
-- **The promotion gate has no override flag.** By design.
+- **The promotion gate has no override flag.** The one exception is a recorded
+  written override (named approver, reason, waived gates), stored with the release.
 
 ## What is deliberately not wired
 
@@ -186,14 +191,15 @@ the reason and what unblocks it. They are the whole of what Phase 0 gates.
 
 | Where | Waiting on |
 |---|---|
-| `inference_core/model_runner.py` (vLLM, HF, GGUF backends) | a GPU; vLLM multi-LoRA support for Qwen3-VL |
-| `data_pipeline/ocr/run_mineru.py` (`MinerUEngine`) | MinerU installed and running on CUDA |
-| `postprocessing/merge_adapter.py`, `quantize.py` | a GPU; llama.cpp `mmproj` support for Qwen3-VL |
-| `orchestration/runpod_controller.py` (`RunPodBackend`, endpoint deploy) | `RUNPOD_API_KEY` and the network volume |
+| `data_pipeline/ocr/run_mineru.py` (`MinerUEngine.process`) | **not wired**: MinerU on CUDA, confirmed by the Phase 0 spike. The OCR stage cannot run until it is |
+| `postprocessing/quantize.py` (FP8/AWQ export, GGUF export) | llm-compressor in its own environment; FP8 verified by the spike (bf16 needs no export) |
+| `artifact_registry/transfer.py` (`pull_base_model` from the Hub) | not needed on the pod: the base is read from `/workspace/models` |
+| `orchestration/runpod_controller.py` (`RunPodBackend`, endpoint deploy) | `RUNPOD_API_KEY` and the network volume; until then jobs run on the pod in tmux |
+| `inference_core/model_runner.py` (vLLM and HF backends, written; merge in `training/merge.py`, written) | a GPU to run on - they refuse without CUDA |
 | `testing/run_extraction.py`, `pilot/zero_shot_baseline.py` CLIs | a live model backend, i.e. the row above it |
 | `training/data_collator.py` custom hook | nothing - ms-swift collates and masks; the hook exists only for a genuine override |
 | `data_pipeline/labeling/pre_annotate.py` external backend | a compliance decision **and** a zero-retention endpoint; refuses without both |
-| `evaluation/run_eval.py`, `data_pipeline/labeling/active_learning.py` inference loops | a live model backend; the leakage assertion and the routing refusal run today |
+| `evaluation/golden_eval.py`, `data_pipeline/labeling/active_learning.py` inference loops | a live model backend on the GPU; the golden eval runs through the serving pipeline |
 
 `LocalBackend`, `EchoBackend` and `InMemoryBackend` are **real implementations**,
 not stubs: they run the whole DAG, the whole pipeline and the whole registry in

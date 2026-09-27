@@ -260,53 +260,61 @@ azure-blob://insurance-extraction/
 
 ---
 
-## 5. Repository structure (code side — this is what the specs build)
+## 5. Repository structure (code side — as built, 2026-09-27)
 
 ```
 insurance-extraction-finetuning/
-├── README.md
-├── pyproject.toml                       versions declared ONCE, in dependency groups
-├── requirements.txt, requirements-{ocr,train,serve,quantize}.txt   groups per pod (§13)
-├── .env.example
-├── configs/            base_model.yaml, training/*.yaml, sweeps/*.yaml (deferred),
-│                       deepspeed/*.json, inference/vllm_serving.yaml                   → SPEC_01
-├── schemas/            {acord25,acord125,acord140,lossrun,policy_doc}.schema.json,
-│                       lob.enum.json, examples/                                        → SPEC_01
-│                       aliases/{doc_type}.aliases.json   # NEVER in the prompt (§1.4)
-│                       (all five schemas needed for form-level routing; only ONE
-│                        shared `acord` ADAPTER is trained — arch §4b)
-├── prompts/            system_prompt_template.jinja, doc_type_classifier_prompt.jinja  → SPEC_01
-├── common/             config, schemas, prompts, ids, constants, lob, aliases,
-│                       normalize                                                       → SPEC_01
-├── artifact_registry/  blob_client.py, paths.py, push_to_blob.py, pull_from_blob.py    → SPEC_02
-├── registry_utils/     models.py, write_run_manifest.py, query_registry.py             → SPEC_02
+├── pyproject.toml  requirements*.txt  .env.example  README.md
+├── configs/          base_model.yaml  scopes.yaml  schema_sections.yaml
+│   │                 layout_families.yaml
+│   ├── canonical schema/LOB Schema/   34 client LOB schemas (output)
+│   ├── shared/       vision.yaml (pixel budgets)  sequence.yaml (caps)
+│   ├── training/     unified.yaml     sweeps/  phase1..3 + README
+│   └── inference/    vllm_serving.yaml    deepspeed/  zero2  zero3
+├── schemas/          acord25/125/140, lossrun, policy_doc schemas,
+│                     lob.enum.json, aliases/, examples/
+├── prompts/          system_prompt_template.jinja,
+│                     doc_type_classifier_prompt.jinja, doc_types/*.jinja
+├── common/           canonical config constants gpu ids lob normalize
+│                     prompts run_ids schema_sections schemas scopes
+│                     tasks aliases
+├── artifact_registry/  blob_client  paths  transfer
+├── registry_utils/   models  query_registry  write_run_manifest
 ├── data_pipeline/
-│   ├── ingestion/      pull_raw_pdfs.py                                                → SPEC_03
-│   ├── ocr/            run_mineru.py, render_only.py, mineru_version.py                → SPEC_03
-│   ├── labeling/       pre_annotate.py, export_golden_labels.py, review_tool/,
-│   │                   active_learning.py                                              → SPEC_04
-│   ├── deidentify/     (BLOCKED — see SPEC_05; do not implement yet)                   → SPEC_05
-│   ├── dataset_builder/ build_jsonl.py, modality_dropout.py, noisy_ocr_augment.py,
-│   │                   split_train_val_test.py                                         → SPEC_05
-│   └── corpus_manifest.py                                                              → SPEC_05
-├── training/           train_foundation.py, train_adapter.py, data_collator.py,
-│                       vit_gate.py, callbacks/  (sweep.py deferred — see SPEC_06)      → SPEC_06
-├── inference_core/     model_runner.py, input_builder.py, span_map.py, runner_config.py → SPEC_07 (shared primitive)
-├── evaluation/         run_eval.py, metrics/*, gating.py                               → SPEC_08
-├── calibration/        logprob_confidence.py, fit_calibration.py, apply_calibration.py,
-│                       list_completeness.py, calibration_store/                        → SPEC_09
-├── postprocessing/     merge_adapter.py, quantize.py
-│                       (validate_quant.py deferred — see SPEC_10)                      → SPEC_10
-├── serving/            vllm_entrypoint.py, doc_type_classifier.py, adapter_router.py,
-│                       page_router.py, confidence_postprocess.py, pipeline.py          → SPEC_11
-├── testing/            run_extraction.py, prompts/, (test_data, ocr_cache, results,
-│                       metrics, extraction_registry.json)                              → SPEC_12
-├── orchestration/      run.py (the 3+1 command surface + freeze-eval-set),
-│                       runpod_controller.py, pipeline_dag.py, detach.py, config/      → SPEC_13
-├── scripts/            setup_pod.sh (install per pod role), pod_run.sh (tmux jobs),
-│                       phase0_spike.py                                                  → SPEC_13
-├── pilot/              zero_shot_baseline.py, smoke_test.py, pilot_report.py           → SPEC_15
-└── tests/              test_*.py, fixtures/                                            → SPEC_14
+│   ├── ingestion/    pull_raw_pdfs  import_labeled_pdfs
+│   │                 import_prepared  dedup_and_group
+│   ├── ocr/          run_mineru  render_only  mineru_version
+│   ├── labeling/     pre_annotate  export_golden_labels
+│   │                 derive_aliases  active_learning  review_tool/
+│   ├── dataset_builder/  split_groups  sample_modes  expand_tasks
+│   │                 policy_windows  noisy_ocr_augment  cap_check
+│   │                 build_jsonl
+│   └── corpus_manifest.py
+├── training/         train  stage_data  length_check  corpus_view
+│                     base_precision  data_collator  merge  sweep
+│                     vit_gate  callbacks/early_stopping
+├── inference_core/   model_runner  input_builder  span_map
+│                     runner_config
+├── evaluation/       run_eval  golden_eval  freeze_eval_set
+│                     checkpoint_eval  validation_generation  gating
+│                     bootstrap  metrics/{field_accuracy, confusable,
+│                     coverage_metrics, extraction_faults}
+├── calibration/      features  feature_calibrator  thresholds
+│                     fit_calibration  apply_calibration
+│                     logprob_confidence  list_completeness
+│                     reconciliation
+├── postprocessing/   quantize  quant_thresholds  validate_quant
+├── serving/          vllm_entrypoint  pipeline  policy_merge
+│                     lossrun_merge  page_router  doc_type_classifier
+│                     adapter_router  release_router
+├── orchestration/    run  pipeline_dag  runpod_controller  detach
+│                     settings  config/pipeline.yaml
+├── scripts/          setup_pod.sh  pod_run.sh  phase0_spike.py
+│                     combine_specs.py  derive_aliases_from_canonical.py
+├── testing/          run_extraction  render_prompts  prompts/
+├── pilot/            zero_shot_baseline  smoke_test  pilot_run
+│                     pilot_report
+└── tests/            45 test modules; fixtures/ (synthetic, no PII)
 ```
 
 **Key separation principle:** the repo never stores model weights, corpus data, or PDFs. Everything data/artifact-related is pulled from / pushed to Azure Blob at runtime via `artifact_registry/`.
@@ -605,14 +613,14 @@ Scaffold the `insurance-extraction-finetuning` repo and create every config file
 
 ### 2. `configs/`
 - **`base_model.yaml`** — `model_id: Qwen/Qwen3-VL-8B-Instruct`, `revision: <pin>`, **`local_dir: /workspace/models`** (where the pod keeps the weights; every loader reads them from there), quantization block (**`load_in_4bit: false` by default — the base is held in bf16**; the `bnb_4bit_*` keys stay populated so flipping the flag on a VRAM-constrained pod needs no other edit, and are read only when it is true, per arch §9.2), `attn_implementation: flash_attention_2`, resolution cap (`max_image_long_side_px: 1792`, valid range 1536–2048 per arch §11), `max_seq_len` (comment: **set from the 95th-percentile token count measured on the real corpus**, not guessed).
-- **`configs/training/foundation.yaml`** — the full parameter set from arch §11, not just the summary:
+- **`configs/training/unified.yaml`** (was `foundation.yaml` under v1's two-level design) — the full parameter set from arch §11, not just the summary:
   - LoRA: rank 64, alpha 128, dropout 0.05, `bias: none`, target modules from master §2.
   - Optimization: LR `2e-4` (range 1e-4–2e-4), cosine schedule, warmup ratio 0.03–0.05, epochs 3 (range 2–3), **optimizer AdamW paged 8-bit**, β₁ 0.9, β₂ 0.999, ε 1e-8, weight decay 0.01, max grad norm 1.0.
   - Batch/memory: per-device train batch 1–2, grad accumulation set to reach **effective batch 32–64**, gradient checkpointing on, mixed precision bf16.
   - Vision: `train_vit: false` (the §3 gate default), resolution cap inherited from `base_model.yaml`.
-  - Eval/checkpointing: eval per fixed step interval, **early stopping on validation loss (`metric_for_best_model: eval_loss`, `greater_is_better: false`), patience 3**, save per step interval with `save_total_limit: 4` so checkpoint selection has its candidates — the checkpoint that ships is chosen afterwards by generated `field_normalized_match` (SPEC_06 §3), never by loss, fixed recorded `seed`, logging interval.
+  - Eval/checkpointing: eval per fixed step interval, **validation loss tracked (`metric_for_best_model: eval_loss`, `greater_is_better: false`); no early-stopping patience is passed — ms-swift 3 takes none, and what ships is chosen by generated field accuracy over every saved checkpoint**, save per step interval with `save_total_limit: 4` so checkpoint selection has its candidates — the checkpoint that ships is chosen afterwards by generated `field_normalized_match` (SPEC_06 §3), never by loss, fixed recorded `seed`, logging interval.
   - Top comment: "hyperparameters are sweep starting points (arch §11/§11a) — tune on the validation set, not fixed truth."
-- **`configs/training/{acord,lossrun,policy}_adapter.yaml`** — LoRA rank 16 / alpha 32 / dropout 0.05, LR `7e-5` (range 5e-5–1e-4), epochs 4 (range 3–5), **effective batch 16–32**; each references its `doc_type`, its schema file, and `foundation_version: <set at runtime>`.
+- **Not created under v2.1:** `configs/training/{acord,lossrun,policy}_adapter.yaml`. There is one unified adapter (arch §4.1); a per-type config arrives only with a type that passes the §4.2 graduation gate. The original v1 description, for reference — LoRA rank 16 / alpha 32 / dropout 0.05, LR `7e-5` (range 5e-5–1e-4), epochs 4 (range 3–5), **effective batch 16–32**; each references its `doc_type`, its schema file, and `foundation_version: <set at runtime>`.
   - **One shared `acord` adapter only** (arch §4b Option 1). Per-form adapter configs (`acord25`/`acord125`/`acord140`) are **not created** — with limited data per form, one adapter learning shared "ACORD-ness" generalizes better than several data-starved ones. Add them only when a form has 1000+ examples *and* eval shows the shared adapter underperforming. The per-form **schemas** still exist, because the classifier must select the right schema regardless.
 - **`configs/sweeps/`** *(arch §11a — **author the configs now, run them after the SPEC_15 pilot**)* — the bounded 3-phase sweep definitions, as W&B Sweep / MLflow configs. A 9–12 run sweep against 25–30 docs/type mostly measures noise; arch §11a scopes it to "before the first **production** run", not before the pilot:
   - `phase1_lr.yaml` — Foundation `{5e-5, 1e-4, 2e-4}`, per-type `{2e-5, 5e-5, 1e-4}`; 1 epoch per candidate; metric = validation loss; 3 runs per adapter type.
@@ -736,7 +744,7 @@ Each schema must be loadable by `jsonschema` and validate a correct example. Inc
 - [ ] `schemas/aliases/{doc_type}.aliases.json` loads for every active doc type; no string appears in both `aliases` and `confusables` for the same field.
 - [ ] `common.aliases.canonical_for("policy", "Applicant")` returns `insured_name`; `is_confusable("policy", "insured_name", "Certificate Holder")` is true.
 - [ ] `common.constants` resolves `lossrun → loss_run/LossRunDocument` and the other two active types.
-- [ ] `configs/training/foundation.yaml` contains every parameter in arch §11's full specification tables (not just the summary table).
+- [ ] `configs/training/unified.yaml` contains every parameter in arch §11's full specification tables (not just the summary table).
 - [ ] `configs/sweeps/` defines the 3 phases with the documented candidate sets and budgets (authored, not executed this cycle).
 - [ ] `configs/inference/vllm_serving.yaml` resolution cap equals `configs/base_model.yaml` — assert this in a test.
 - [ ] `.env.example` lists every env var used anywhere in the design.
@@ -812,7 +820,7 @@ Provide a clean, typed interface for all Azure Blob reads/writes, and implement 
   - `push_corpus_version(...)`, `pull_corpus_version(version, ..., tenant_id=None)`
   - `push_calibration(version, doc_type, params)` / `pull_calibration(...)` (SPEC_09 store)
   - `push_eval_report(...)`, `push_golden_eval_set` / `pull_golden_eval_set`
-- CLI so a RunPod pod can `python -m artifact_registry.pull_from_blob --corpus v3 --dest ./data`.
+- No standalone pull CLI: the pipeline stages call these helpers directly (training stages its own data through `training/stage_data.py`). `pull_base_model` from the Hub is not wired; the pod reads the base from `/workspace/models` (`configs/base_model.yaml` `local_dir`).
 
 **Reading the index is not optional.** `_index` raises `RegistryQueryError` when the index blob exists but cannot be read. It must never degrade to an empty list: an empty registry and an unreadable one are different facts, and conflating them makes a throttled or 403'd Azure call look like a first-ever run — `latest_promoted` returns `None`, the promotion gate sets `is_first_version` and has nothing to regress against, and a candidate whose accuracy collapsed is promoted. The same swallow silently cleared the arch §12 Foundation cascade block.
 
@@ -1448,7 +1456,7 @@ Replaces v1's `train_foundation.py` and `train_adapter.py`. One entrypoint, one 
 - **Evaluation during training** is validation **loss** (`eval_steps` = `save_steps`, `save_total_limit: 4`, `metric_for_best_model: eval_loss`, `greater_is_better: false`, `load_best_model_at_end`). The interval is the configured one **shrunk so a run gets at least 5 evaluations** (`_eval_interval`), so a short pilot run still leaves several checkpoints to choose from. ms-swift 3 takes no early-stopping patience argument; none is passed. **Loss never selects what ships** — see §11.2 below.
 - **Staging:** the adapter and its `checkpoint-*` directories go to the RunPod staging volume under `staging/adapters/foundation/v{n}/` (unified; `staging/adapters/scope/{scope}/v{n}/` for a scoped run). Pushed to Blob by `package` (the checkpoint selection chose), or immediately with `finetune --push-adapters` (the best-loss checkpoint, before selection).
 - **Manifest:** a `RunManifest` (SPEC_02) is written at status **`training`** before launch; `launch_and_record` flips it to `trained` when ms-swift returns, or **`failed`** when it raises, so the registry never claims weights a crashed run never wrote. It records the full config, data stats, LoB coverage, seed, git commit, corpus version, MinerU version, schema/prompt template versions, and the de-identification flag (recorded, not asserted, while de-identification is blocked — SPEC_05 §1).
-- **Every value in the YAML's `evaluation:` block reaches ms-swift.** `metric_for_best_model`, `greater_is_better` and `load_best_model_at_end` are passed into `swift_early_stopping_args`, which is unpacked **first** so explicit keys win.
+- **Every value in the YAML's `evaluation:` block reaches ms-swift** — `metric_for_best_model`, `greater_is_better`, `load_best_model_at_end`, `save_total_limit` — passed directly by `build_training_config`. No early-stopping patience is passed: ms-swift 3 accepts none.
 
 Flags: `--corpus vN`, `--out-version vN`, `--tenant`, `--deepspeed zero2|zero3`, `--train-vit`, `--continue-from <checkpoint dir>`, `--dry-run`.
 
@@ -1482,7 +1490,7 @@ There is **no per-type training entrypoint** in the default topology. A per-type
 
 ### 6. `training/callbacks/early_stopping.py`
 
-`swift_early_stopping_args` emits `early_stopping_patience` (3 in `unified.yaml`) with `metric_for_best_model: eval_loss`, `greater_is_better: false`. Early stopping stops a run that has stopped improving; it does not pick the checkpoint that ships (§3 above).
+**Not in the launch path.** `swift_early_stopping_args` (which emitted `early_stopping_patience`) is no longer called: ms-swift 3 accepts no patience argument, and stopping early would only remove candidates from checkpoint selection, which chooses by generated field accuracy over every saved checkpoint. `EarlyStoppingState` remains as the field-F1 tracker used by `checkpoint_eval`.
 
 ### 7. `training/vit_gate.py` (decision helper — arch §3)
 
@@ -1719,28 +1727,29 @@ One definition of "matches", applied **consistently in the promotion gate, the t
 
 ### 2. `evaluation/metrics/` — one module per metric, each pure and testable
 
-| Module | Metric | What it catches (arch §15) |
+| Where (`evaluation/…`) | Metric | What it catches (arch §15) |
 |---|---|---|
-| `field_exact_match.py` | Exact + normalized match, per-field and aggregate | Core extraction accuracy |
-| `field_f1.py` | Precision/recall/F1 for list fields (claims, schedule rows) | Precision/recall on repeating structures |
-| `list_recall.py` | **Row completeness** — extracted row count vs ground truth; missed-row rate | Whole rows silently missed — a dropped Loss Run claim is invisible to per-value confidence (arch §5) |
-| `schema_validity.py` | Parse + validate against the doc_type schema | Structural reliability; mirrors the Fideon SPEC_07 Stage 3 audit gate |
-| `calibration_error.py` | Expected Calibration Error on confidence vs correctness | Whether the confidence numbers are trustworthy, not just the extractions |
-| `ocr_arbitration_accuracy.py` | Scored on the **deliberately-noisy-OCR subset** | Did the model correctly override bad OCR using the image? |
-| `mode_accuracy.py` | Separate accuracy for the `image_only` and `scanned` subsets | Confirms the second production pathway works; **feeds the ViT escalation gate** (SPEC_06) |
-| `classifier_accuracy.py` | Doc-type + ACORD-form classification accuracy | Whether the right adapter/prompt/schema is even selected — **a classifier at 92% caps the whole system at 92%** (arch §4a) |
-| `lob_accuracy.py` *(new)* | **`line_of_business` detection accuracy, overall and per LoB value** | The VLM is the fallback LoB detector when L1/L2 miss (arch §0b) |
-| `alias_accuracy.py` *(new)* | Field accuracy **sliced by the observed surface label** | Whether the canonical mapping generalises across phrasings, or only works on the dominant one (master §1.4) |
-| `confusable.py` *(new)* | Rate at which a **confusable entity's value is returned as the canonical field** | The failure that produces confident, well-formed, wrong extractions — a certificate holder returned as `insured_name` |
-| `latency.py` | Latency / token cost per document | Production feasibility, not just accuracy |
+| `metrics/field_accuracy.score_fields` | Exact + normalized match, per-field and aggregate | Core extraction accuracy |
+| `metrics/field_accuracy.score_list_field` | Precision/recall/F1 for list fields (claims, schedule rows) | Precision/recall on repeating structures |
+| `metrics/field_accuracy.score_list_field` (recall) | **Row completeness** — extracted row count vs ground truth; missed-row rate | Whole rows silently missed — a dropped Loss Run claim is invisible to per-value confidence (arch §5) |
+| `metrics/coverage_metrics.score_schema_validity` | Parse + validate against the doc_type schema | Structural reliability; mirrors the Fideon SPEC_07 Stage 3 audit gate |
+| `metrics/coverage_metrics.expected_calibration_error` | Expected Calibration Error on confidence vs correctness | Whether the confidence numbers are trustworthy, not just the extractions |
+| `run_eval` — the `noisy_ocr` subset | Scored on the **deliberately-noisy-OCR subset** | Did the model correctly override bad OCR using the image? |
+| `run_eval` — `image_only` / `scanned` subsets; `metrics/coverage_metrics.score_by_mode`; `training/vit_gate.classify_error` | Separate accuracy for the `image_only` and `scanned` subsets | Confirms the second production pathway works; **feeds the ViT escalation gate** (SPEC_06) |
+| `doc_type_classifier_accuracy` — not applicable while the corpus builds no classify rows | Doc-type + ACORD-form classification accuracy | Whether the right adapter/prompt/schema is even selected — **a classifier at 92% caps the whole system at 92%** (arch §4a) |
+| `metrics/coverage_metrics.score_lob` | **`line_of_business` detection accuracy, overall and per LoB value** | The VLM is the fallback LoB detector when L1/L2 miss (arch §0b) |
+| `metrics/confusable.score_alias_accuracy` | Field accuracy **sliced by the observed surface label** | Whether the canonical mapping generalises across phrasings, or only works on the dominant one (master §1.4) |
+| `metrics/confusable.score_misattribution` | Rate at which a **confusable entity's value is returned as the canonical field** | The failure that produces confident, well-formed, wrong extractions — a certificate holder returned as `insured_name` |
+| `ExtractionResult.latency_ms` (serving) — not yet a report metric | Latency / token cost per document | Production feasibility, not just accuracy |
+| `metrics/extraction_faults` — `score_false_nulls`, `score_hallucinations`, `score_page_selection` | False-null rate, hallucination rate, page-selection recall | A value on the page emitted as null; a value emitted that is on no page sent; pages with fields that routing dropped |
 
-**`alias_accuracy.py` specifics (master §1.4).** Joins predictions to each eval document's `field_provenance` (SPEC_04) and reports accuracy per canonical field × surface label. This turns an unhelpful aggregate into an actionable one: *0.94 on "Named Insured", 0.61 on "Applicant"* tells you the mapping is not generalising and names the documents to go collect. **Reported, not gating** — rare aliases have too little support for a stable gate, and gating on them would block promotion on noise.
+**Alias accuracy specifics (master §1.4).** Joins predictions to each eval document's `field_provenance` (SPEC_04) and reports accuracy per canonical field × surface label. This turns an unhelpful aggregate into an actionable one: *0.94 on "Named Insured", 0.61 on "Applicant"* tells you the mapping is not generalising and names the documents to go collect. **Reported, not gating** — rare aliases have too little support for a stable gate, and gating on them would block promotion on noise.
 
 **`confusable.py` specifics.** For each canonical field, check whether the returned value matches the document's value for one of that field's registered **confusables** instead. Requires the eval golden labels to carry the confusable entities' values, so the frozen eval set must include the confusable co-occurrence documents from SPEC_05. **This is a gating metric.** Ordinary field accuracy already penalises a wrong value — but misattribution is worth isolating because it is systematic rather than random: it means the model has collapsed two distinct entities, it will keep doing so, and the output is fluent and confident enough to pass every structural check.
 
-**`lob_accuracy.py` specifics (arch §15):** LoB accuracy is reported as **its own metric, measured per LoB value**, and is **never averaged into overall field accuracy** — a class that is rare in the corpus must not hide inside a healthy-looking aggregate. It is a gating metric.
+**LoB accuracy specifics (arch §15):** LoB accuracy is reported as **its own metric, measured per LoB value**, and is **never averaged into overall field accuracy** — a class that is rare in the corpus must not hide inside a healthy-looking aggregate. It is a gating metric.
 
-**`mode_accuracy.py` specifics:** must also classify errors as **perception** (misread characters, missed checkboxes) vs **schema/reasoning** (right value, wrong field), because SPEC_06's `vit_gate` needs that distinction, not just the accuracy number.
+**Mode accuracy specifics:** must also classify errors as **perception** (misread characters, missed checkboxes) vs **schema/reasoning** (right value, wrong field), because SPEC_06's `vit_gate` needs that distinction, not just the accuracy number.
 
 ### 3. `evaluation/run_eval.py`
 - Given `--model vN` (resolved via SPEC_02) + the frozen golden eval set, run inference **through the serving pipeline** (`serving.pipeline.extract`, built on the SPEC_07 inference core — so windows, merge, date formatting and calibrated confidence are what is measured) across all eval docs and all three modes, compute every metric, and write `eval-reports/v{n}/{doc_type}/report.json` plus a top-level summary. Broken down **per doc_type and per modality mode**.
@@ -2733,36 +2742,36 @@ A test suite + CI that verifies the correctness-critical pieces without GPUs or 
 
 | Test | Guards |
 |---|---|
-| `test_data_collator.py` | **Label masking**: loss only on assistant JSON tokens; system/image/OCR masked to `-100` (SPEC_06). Broken masking trains the model on its own prompt and is invisible in loss curves. **Mutation-check it** — a deliberately broken masking implementation must fail this test. |
-| `test_split_leakage.py` | No `source_id` crosses train/val/test; modality expansion happens **after** the split (SPEC_05). Leakage inflates every eval number the project trusts. |
+| `test_training.py` (+ staged-row masking in `test_stage_data.py`) | **Label masking**: loss only on assistant JSON tokens; system/image/OCR masked to `-100` (SPEC_06). Broken masking trains the model on its own prompt and is invisible in loss curves. **Mutation-check it** — a deliberately broken masking implementation must fail this test. |
+| `test_dataset_builder.py`, `test_split_by_line.py` | No `source_id` crosses train/val/test; modality expansion happens **after** the split (SPEC_05). Leakage inflates every eval number the project trusts. |
 | `test_inference_core.py` | `build_messages` identical across eval/serving/testing contexts; `map_field_spans` correct for scalar, `null`, and list-row fields (SPEC_07). **Guards test == prod at the primitive level.** |
-| `test_test_prod_parity.py` | Testing output == serving pipeline output on the same fixture (SPEC_11/12). Since testing reuses `serving/pipeline.py`, this asserts they don't diverge. |
-| `test_prompt_parity.py` | The rendered prompt at corpus-build time (SPEC_05) is **byte-identical** to the one at inference time (SPEC_07) and to `testing/prompts/*.prompt.txt` (SPEC_12), for every doc_type × modality mode. Training/inference prompt drift is the most common cause of post-fine-tuning degradation and shows up in no training metric. |
+| `test_parity.py` | Testing output == serving pipeline output on the same fixture (SPEC_11/12). Since testing reuses `serving/pipeline.py`, this asserts they don't diverge. |
+| `test_parity.py`, `test_serving_parity.py` | The rendered prompt at corpus-build time (SPEC_05) is **byte-identical** to the one at inference time (SPEC_07) and to `testing/prompts/*.prompt.txt` (SPEC_12), for every doc_type × modality mode. Training/inference prompt drift is the most common cause of post-fine-tuning degradation and shows up in no training metric. |
 
 **Contract and correctness:**
 
 | Test | Guards |
 |---|---|
-| `test_schema_validity.py` | Schemas load; valid examples pass; malformed/wrong-type fail (SPEC_01/08) |
-| `test_lob_contract.py` | Every schema requires `line_of_business`; out-of-enum values rejected; `null` accepted; a golden label missing the key is rejected by SPEC_04; per-value LoB accuracy computed correctly by SPEC_08 |
-| `test_modality_mix.py` | 50/20/30 holds; `image_only` rows omit OCR; `noisy_ocr_image` renders the same prompt as `ocr_plus_image` (SPEC_05) |
-| `test_corpus_tenancy.py` | No corpus file mixes tenants — the one live tenancy rule, because corpus composition is training data (SPEC_05) |
-| `test_mineru_pin.py` | A MinerU version mismatch between corpus manifest and runtime raises in dataset build, serving, and testing (SPEC_03) |
-| `test_metrics.py` | Normalized match (dates/currency/names), list F1, and **list recall** correct (SPEC_08) |
-| `test_gating.py` | A regression on **any single** metric blocks promotion — including LoB accuracy alone; no override path exists; a `--continue-from` candidate lacking cross-type regression evidence is blocked (SPEC_08) |
-| `test_calibration.py` | Temperature + isotonic reduce ECE; params persist/reload; `apply_calibration` **raises** on missing params; list-completeness flags dropped rows even when per-value confidence is high (SPEC_09) |
-| `test_run_registry.py` | `RunManifest` validates; `adapters_depending_on` + `resolve_model_version` + `diff_manifests` correct (SPEC_02) |
-| `test_router.py` | Low classifier confidence → Foundation-only fallback + review flag; ACORD returns doc_type **and** form; deterministic selection (SPEC_11) |
-| `test_page_router.py` | Documents over the page threshold route and record `pages_used`; short docs skip; the declarations-page conflict rule resolves duplicates (SPEC_11) |
-| `test_vit_gate.py` | Fires on perception-type errors below target; **does not** fire on schema/reasoning errors; no code path enables full ViT fine-tuning (SPEC_06) |
-| `test_source_id.py` | id build/parse/validate round-trips (SPEC_01) |
-| `test_alias_registry.py` | Registry loads for every doc type; **every schema field has a non-empty `description`**; no string appears in both `aliases` and `confusables` for one field; the rendered prompt contains descriptions and **contains no alias strings** (SPEC_01) |
-| `test_field_provenance.py` | A label whose `field_provenance` names a registered confusable is **rejected** by `export_golden_labels`; provenance round-trips through review-tool export (SPEC_04) |
-| `test_confusable_metric.py` | Misattribution scored correctly on synthetic cases and distinguished from an ordinary wrong value; a regression on it alone blocks promotion (SPEC_08) |
+| `test_schema_contract.py` | Schemas load; valid examples pass; malformed/wrong-type fail (SPEC_01/08) |
+| `test_schema_contract.py`, `test_labeling.py` | Every schema requires `line_of_business`; out-of-enum values rejected; `null` accepted; a golden label missing the key is rejected by SPEC_04; per-value LoB accuracy computed correctly by SPEC_08 |
+| `test_dataset_builder.py` | 50/20/30 holds; `image_only` rows omit OCR; `noisy_ocr_image` renders the same prompt as `ocr_plus_image` (SPEC_05) |
+| `test_dataset_builder.py` | No corpus file mixes tenants — the one live tenancy rule, because corpus composition is training data (SPEC_05) |
+| `test_ingestion_ocr.py` | A MinerU version mismatch between corpus manifest and runtime raises in dataset build, serving, and testing (SPEC_03) |
+| `test_evaluation_calibration.py`, `test_eval_integrity.py` | Normalized match (dates/currency/names), list F1, and **list recall** correct (SPEC_08) |
+| `test_evaluation_calibration.py` | A regression on **any single** metric blocks promotion — including LoB accuracy alone; an override needs a named approver and a written reason; a `--continue-from` candidate lacking cross-type regression evidence is blocked (SPEC_08) |
+| `test_evaluation_calibration.py` | Temperature + isotonic reduce ECE; params persist/reload; `apply_calibration` **raises** on missing params; list-completeness flags dropped rows even when per-value confidence is high (SPEC_09) |
+| `test_registry.py` | `RunManifest` validates; `adapters_depending_on` + `resolve_model_version` + `diff_manifests` correct (SPEC_02) |
+| `test_serving_pipeline.py`, `test_release_router.py` | Low classifier confidence → Foundation-only fallback + review flag; ACORD returns doc_type **and** form; deterministic selection (SPEC_11) |
+| `test_serving_pipeline.py`, `test_policy_windows.py` | Documents over the page threshold route and record `pages_used`; short docs skip; the declarations-page conflict rule resolves duplicates (SPEC_11) |
+| `test_training.py` | Fires on perception-type errors below target; **does not** fire on schema/reasoning errors; no code path enables full ViT fine-tuning (SPEC_06) |
+| `test_ids_and_run_ids.py` | id build/parse/validate round-trips (SPEC_01) |
+| `test_schema_contract.py` | Registry loads for every doc type; **every schema field has a non-empty `description`**; no string appears in both `aliases` and `confusables` for one field; the rendered prompt contains descriptions and **contains no alias strings** (SPEC_01) |
+| `test_labeling.py` | A label whose `field_provenance` names a registered confusable is **rejected** by `export_golden_labels`; provenance round-trips through review-tool export (SPEC_04) |
+| `test_evaluation_calibration.py` | Misattribution scored correctly on synthetic cases and distinguished from an ordinary wrong value; a regression on it alone blocks promotion (SPEC_08) |
 | `test_no_runtime_aliases.py` | **No module under `serving/`, `inference_core/`, or `testing/` imports `common.aliases`** — the master §1.4 anti-pattern, enforced by an import check rather than by discipline |
-| `test_command_surface.py` | `all` = `finetune` + `package` and **never** invokes extraction; a failed gate stops `finetune` before merge and `all` before `package`; `--from-stage` resumes and a completed stage re-runs as a no-op (SPEC_13) |
-| `test_model_resolution.py` | `resolve_model_version("base")` returns the pinned base with no adapter; `"v2"` returns Foundation + per-type; a `staged` manifest resolves to volume paths and a `published` one to Blob paths (SPEC_02/13) |
-| `test_staging_contract.py` | `finetune` writes a Blob manifest with `status: "staged"` even though weights stay on the volume; `package` flips it to `"published"` with real paths and fails loudly when the version is not staged (SPEC_13) |
+| `test_orchestration.py` | `all` = `finetune` + `package` and **never** invokes extraction; a failed gate stops `finetune` before merge and `all` before `package`; `--from-stage` resumes and a completed stage re-runs as a no-op (SPEC_13) |
+| `test_registry.py` | `resolve_model_version("base")` returns the pinned base with no adapter; `"v2"` returns Foundation + per-type; a `staged` manifest resolves to volume paths and a `published` one to Blob paths (SPEC_02/13) |
+| `test_orchestration.py` | `finetune` writes a Blob manifest with `status: "staged"` even though weights stay on the volume; `package` flips it to `"published"` with real paths and fails loudly when the version is not staged (SPEC_13) |
 
 ### 3. CI
 - `.github/workflows/ci.yml`: install `[dev]` extras, run `ruff`, `mypy`, `pytest` on every push. Mark GPU + live-Azure tests to skip so CI is **CPU-only and fast**.

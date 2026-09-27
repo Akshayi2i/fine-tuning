@@ -45,7 +45,7 @@ Replaces v1's `train_foundation.py` and `train_adapter.py`. One entrypoint, one 
 - **Evaluation during training** is validation **loss** (`eval_steps` = `save_steps`, `save_total_limit: 4`, `metric_for_best_model: eval_loss`, `greater_is_better: false`, `load_best_model_at_end`). The interval is the configured one **shrunk so a run gets at least 5 evaluations** (`_eval_interval`), so a short pilot run still leaves several checkpoints to choose from. ms-swift 3 takes no early-stopping patience argument; none is passed. **Loss never selects what ships** — see §11.2 below.
 - **Staging:** the adapter and its `checkpoint-*` directories go to the RunPod staging volume under `staging/adapters/foundation/v{n}/` (unified; `staging/adapters/scope/{scope}/v{n}/` for a scoped run). Pushed to Blob by `package` (the checkpoint selection chose), or immediately with `finetune --push-adapters` (the best-loss checkpoint, before selection).
 - **Manifest:** a `RunManifest` (SPEC_02) is written at status **`training`** before launch; `launch_and_record` flips it to `trained` when ms-swift returns, or **`failed`** when it raises, so the registry never claims weights a crashed run never wrote. It records the full config, data stats, LoB coverage, seed, git commit, corpus version, MinerU version, schema/prompt template versions, and the de-identification flag (recorded, not asserted, while de-identification is blocked — SPEC_05 §1).
-- **Every value in the YAML's `evaluation:` block reaches ms-swift.** `metric_for_best_model`, `greater_is_better` and `load_best_model_at_end` are passed into `swift_early_stopping_args`, which is unpacked **first** so explicit keys win.
+- **Every value in the YAML's `evaluation:` block reaches ms-swift** — `metric_for_best_model`, `greater_is_better`, `load_best_model_at_end`, `save_total_limit` — passed directly by `build_training_config`. No early-stopping patience is passed: ms-swift 3 accepts none.
 
 Flags: `--corpus vN`, `--out-version vN`, `--tenant`, `--deepspeed zero2|zero3`, `--train-vit`, `--continue-from <checkpoint dir>`, `--dry-run`.
 
@@ -79,7 +79,7 @@ There is **no per-type training entrypoint** in the default topology. A per-type
 
 ### 6. `training/callbacks/early_stopping.py`
 
-`swift_early_stopping_args` emits `early_stopping_patience` (3 in `unified.yaml`) with `metric_for_best_model: eval_loss`, `greater_is_better: false`. Early stopping stops a run that has stopped improving; it does not pick the checkpoint that ships (§3 above).
+**Not in the launch path.** `swift_early_stopping_args` (which emitted `early_stopping_patience`) is no longer called: ms-swift 3 accepts no patience argument, and stopping early would only remove candidates from checkpoint selection, which chooses by generated field accuracy over every saved checkpoint. `EarlyStoppingState` remains as the field-F1 tracker used by `checkpoint_eval`.
 
 ### 7. `training/vit_gate.py` (decision helper — arch §3)
 

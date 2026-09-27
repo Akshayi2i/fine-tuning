@@ -33,7 +33,7 @@ Provide a clean, typed interface for all Azure Blob reads/writes, and implement 
   - `push_corpus_version(...)`, `pull_corpus_version(version, ..., tenant_id=None)`
   - `push_calibration(version, doc_type, params)` / `pull_calibration(...)` (SPEC_09 store)
   - `push_eval_report(...)`, `push_golden_eval_set` / `pull_golden_eval_set`
-- CLI so a RunPod pod can `python -m artifact_registry.pull_from_blob --corpus v3 --dest ./data`.
+- No standalone pull CLI: the pipeline stages call these helpers directly (training stages its own data through `training/stage_data.py`). `pull_base_model` from the Hub is not wired; the pod reads the base from `/workspace/models` (`configs/base_model.yaml` `local_dir`).
 
 **Reading the index is not optional.** `_index` raises `RegistryQueryError` when the index blob exists but cannot be read. It must never degrade to an empty list: an empty registry and an unreadable one are different facts, and conflating them makes a throttled or 403'd Azure call look like a first-ever run — `latest_promoted` returns `None`, the promotion gate sets `is_first_version` and has nothing to regress against, and a candidate whose accuracy collapsed is promoted. The same swallow silently cleared the arch §12 Foundation cascade block.
 

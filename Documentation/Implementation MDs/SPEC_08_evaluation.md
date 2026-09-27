@@ -27,28 +27,29 @@ One definition of "matches", applied **consistently in the promotion gate, the t
 
 ### 2. `evaluation/metrics/` — one module per metric, each pure and testable
 
-| Module | Metric | What it catches (arch §15) |
+| Where (`evaluation/…`) | Metric | What it catches (arch §15) |
 |---|---|---|
-| `field_exact_match.py` | Exact + normalized match, per-field and aggregate | Core extraction accuracy |
-| `field_f1.py` | Precision/recall/F1 for list fields (claims, schedule rows) | Precision/recall on repeating structures |
-| `list_recall.py` | **Row completeness** — extracted row count vs ground truth; missed-row rate | Whole rows silently missed — a dropped Loss Run claim is invisible to per-value confidence (arch §5) |
-| `schema_validity.py` | Parse + validate against the doc_type schema | Structural reliability; mirrors the Fideon SPEC_07 Stage 3 audit gate |
-| `calibration_error.py` | Expected Calibration Error on confidence vs correctness | Whether the confidence numbers are trustworthy, not just the extractions |
-| `ocr_arbitration_accuracy.py` | Scored on the **deliberately-noisy-OCR subset** | Did the model correctly override bad OCR using the image? |
-| `mode_accuracy.py` | Separate accuracy for the `image_only` and `scanned` subsets | Confirms the second production pathway works; **feeds the ViT escalation gate** (SPEC_06) |
-| `classifier_accuracy.py` | Doc-type + ACORD-form classification accuracy | Whether the right adapter/prompt/schema is even selected — **a classifier at 92% caps the whole system at 92%** (arch §4a) |
-| `lob_accuracy.py` *(new)* | **`line_of_business` detection accuracy, overall and per LoB value** | The VLM is the fallback LoB detector when L1/L2 miss (arch §0b) |
-| `alias_accuracy.py` *(new)* | Field accuracy **sliced by the observed surface label** | Whether the canonical mapping generalises across phrasings, or only works on the dominant one (master §1.4) |
-| `confusable.py` *(new)* | Rate at which a **confusable entity's value is returned as the canonical field** | The failure that produces confident, well-formed, wrong extractions — a certificate holder returned as `insured_name` |
-| `latency.py` | Latency / token cost per document | Production feasibility, not just accuracy |
+| `metrics/field_accuracy.score_fields` | Exact + normalized match, per-field and aggregate | Core extraction accuracy |
+| `metrics/field_accuracy.score_list_field` | Precision/recall/F1 for list fields (claims, schedule rows) | Precision/recall on repeating structures |
+| `metrics/field_accuracy.score_list_field` (recall) | **Row completeness** — extracted row count vs ground truth; missed-row rate | Whole rows silently missed — a dropped Loss Run claim is invisible to per-value confidence (arch §5) |
+| `metrics/coverage_metrics.score_schema_validity` | Parse + validate against the doc_type schema | Structural reliability; mirrors the Fideon SPEC_07 Stage 3 audit gate |
+| `metrics/coverage_metrics.expected_calibration_error` | Expected Calibration Error on confidence vs correctness | Whether the confidence numbers are trustworthy, not just the extractions |
+| `run_eval` — the `noisy_ocr` subset | Scored on the **deliberately-noisy-OCR subset** | Did the model correctly override bad OCR using the image? |
+| `run_eval` — `image_only` / `scanned` subsets; `metrics/coverage_metrics.score_by_mode`; `training/vit_gate.classify_error` | Separate accuracy for the `image_only` and `scanned` subsets | Confirms the second production pathway works; **feeds the ViT escalation gate** (SPEC_06) |
+| `doc_type_classifier_accuracy` — not applicable while the corpus builds no classify rows | Doc-type + ACORD-form classification accuracy | Whether the right adapter/prompt/schema is even selected — **a classifier at 92% caps the whole system at 92%** (arch §4a) |
+| `metrics/coverage_metrics.score_lob` | **`line_of_business` detection accuracy, overall and per LoB value** | The VLM is the fallback LoB detector when L1/L2 miss (arch §0b) |
+| `metrics/confusable.score_alias_accuracy` | Field accuracy **sliced by the observed surface label** | Whether the canonical mapping generalises across phrasings, or only works on the dominant one (master §1.4) |
+| `metrics/confusable.score_misattribution` | Rate at which a **confusable entity's value is returned as the canonical field** | The failure that produces confident, well-formed, wrong extractions — a certificate holder returned as `insured_name` |
+| `ExtractionResult.latency_ms` (serving) — not yet a report metric | Latency / token cost per document | Production feasibility, not just accuracy |
+| `metrics/extraction_faults` — `score_false_nulls`, `score_hallucinations`, `score_page_selection` | False-null rate, hallucination rate, page-selection recall | A value on the page emitted as null; a value emitted that is on no page sent; pages with fields that routing dropped |
 
-**`alias_accuracy.py` specifics (master §1.4).** Joins predictions to each eval document's `field_provenance` (SPEC_04) and reports accuracy per canonical field × surface label. This turns an unhelpful aggregate into an actionable one: *0.94 on "Named Insured", 0.61 on "Applicant"* tells you the mapping is not generalising and names the documents to go collect. **Reported, not gating** — rare aliases have too little support for a stable gate, and gating on them would block promotion on noise.
+**Alias accuracy specifics (master §1.4).** Joins predictions to each eval document's `field_provenance` (SPEC_04) and reports accuracy per canonical field × surface label. This turns an unhelpful aggregate into an actionable one: *0.94 on "Named Insured", 0.61 on "Applicant"* tells you the mapping is not generalising and names the documents to go collect. **Reported, not gating** — rare aliases have too little support for a stable gate, and gating on them would block promotion on noise.
 
 **`confusable.py` specifics.** For each canonical field, check whether the returned value matches the document's value for one of that field's registered **confusables** instead. Requires the eval golden labels to carry the confusable entities' values, so the frozen eval set must include the confusable co-occurrence documents from SPEC_05. **This is a gating metric.** Ordinary field accuracy already penalises a wrong value — but misattribution is worth isolating because it is systematic rather than random: it means the model has collapsed two distinct entities, it will keep doing so, and the output is fluent and confident enough to pass every structural check.
 
-**`lob_accuracy.py` specifics (arch §15):** LoB accuracy is reported as **its own metric, measured per LoB value**, and is **never averaged into overall field accuracy** — a class that is rare in the corpus must not hide inside a healthy-looking aggregate. It is a gating metric.
+**LoB accuracy specifics (arch §15):** LoB accuracy is reported as **its own metric, measured per LoB value**, and is **never averaged into overall field accuracy** — a class that is rare in the corpus must not hide inside a healthy-looking aggregate. It is a gating metric.
 
-**`mode_accuracy.py` specifics:** must also classify errors as **perception** (misread characters, missed checkboxes) vs **schema/reasoning** (right value, wrong field), because SPEC_06's `vit_gate` needs that distinction, not just the accuracy number.
+**Mode accuracy specifics:** must also classify errors as **perception** (misread characters, missed checkboxes) vs **schema/reasoning** (right value, wrong field), because SPEC_06's `vit_gate` needs that distinction, not just the accuracy number.
 
 ### 3. `evaluation/run_eval.py`
 - Given `--model vN` (resolved via SPEC_02) + the frozen golden eval set, run inference **through the serving pipeline** (`serving.pipeline.extract`, built on the SPEC_07 inference core — so windows, merge, date formatting and calibrated confidence are what is measured) across all eval docs and all three modes, compute every metric, and write `eval-reports/v{n}/{doc_type}/report.json` plus a top-level summary. Broken down **per doc_type and per modality mode**.

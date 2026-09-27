@@ -251,53 +251,61 @@ azure-blob://insurance-extraction/
 
 ---
 
-## 5. Repository structure (code side — this is what the specs build)
+## 5. Repository structure (code side — as built, 2026-09-27)
 
 ```
 insurance-extraction-finetuning/
-├── README.md
-├── pyproject.toml                       versions declared ONCE, in dependency groups
-├── requirements.txt, requirements-{ocr,train,serve,quantize}.txt   groups per pod (§13)
-├── .env.example
-├── configs/            base_model.yaml, training/*.yaml, sweeps/*.yaml (deferred),
-│                       deepspeed/*.json, inference/vllm_serving.yaml                   → SPEC_01
-├── schemas/            {acord25,acord125,acord140,lossrun,policy_doc}.schema.json,
-│                       lob.enum.json, examples/                                        → SPEC_01
-│                       aliases/{doc_type}.aliases.json   # NEVER in the prompt (§1.4)
-│                       (all five schemas needed for form-level routing; only ONE
-│                        shared `acord` ADAPTER is trained — arch §4b)
-├── prompts/            system_prompt_template.jinja, doc_type_classifier_prompt.jinja  → SPEC_01
-├── common/             config, schemas, prompts, ids, constants, lob, aliases,
-│                       normalize                                                       → SPEC_01
-├── artifact_registry/  blob_client.py, paths.py, push_to_blob.py, pull_from_blob.py    → SPEC_02
-├── registry_utils/     models.py, write_run_manifest.py, query_registry.py             → SPEC_02
+├── pyproject.toml  requirements*.txt  .env.example  README.md
+├── configs/          base_model.yaml  scopes.yaml  schema_sections.yaml
+│   │                 layout_families.yaml
+│   ├── canonical schema/LOB Schema/   34 client LOB schemas (output)
+│   ├── shared/       vision.yaml (pixel budgets)  sequence.yaml (caps)
+│   ├── training/     unified.yaml     sweeps/  phase1..3 + README
+│   └── inference/    vllm_serving.yaml    deepspeed/  zero2  zero3
+├── schemas/          acord25/125/140, lossrun, policy_doc schemas,
+│                     lob.enum.json, aliases/, examples/
+├── prompts/          system_prompt_template.jinja,
+│                     doc_type_classifier_prompt.jinja, doc_types/*.jinja
+├── common/           canonical config constants gpu ids lob normalize
+│                     prompts run_ids schema_sections schemas scopes
+│                     tasks aliases
+├── artifact_registry/  blob_client  paths  transfer
+├── registry_utils/   models  query_registry  write_run_manifest
 ├── data_pipeline/
-│   ├── ingestion/      pull_raw_pdfs.py                                                → SPEC_03
-│   ├── ocr/            run_mineru.py, render_only.py, mineru_version.py                → SPEC_03
-│   ├── labeling/       pre_annotate.py, export_golden_labels.py, review_tool/,
-│   │                   active_learning.py                                              → SPEC_04
-│   ├── deidentify/     (BLOCKED — see SPEC_05; do not implement yet)                   → SPEC_05
-│   ├── dataset_builder/ build_jsonl.py, modality_dropout.py, noisy_ocr_augment.py,
-│   │                   split_train_val_test.py                                         → SPEC_05
-│   └── corpus_manifest.py                                                              → SPEC_05
-├── training/           train_foundation.py, train_adapter.py, data_collator.py,
-│                       vit_gate.py, callbacks/  (sweep.py deferred — see SPEC_06)      → SPEC_06
-├── inference_core/     model_runner.py, input_builder.py, span_map.py, runner_config.py → SPEC_07 (shared primitive)
-├── evaluation/         run_eval.py, metrics/*, gating.py                               → SPEC_08
-├── calibration/        logprob_confidence.py, fit_calibration.py, apply_calibration.py,
-│                       list_completeness.py, calibration_store/                        → SPEC_09
-├── postprocessing/     merge_adapter.py, quantize.py
-│                       (validate_quant.py deferred — see SPEC_10)                      → SPEC_10
-├── serving/            vllm_entrypoint.py, doc_type_classifier.py, adapter_router.py,
-│                       page_router.py, confidence_postprocess.py, pipeline.py          → SPEC_11
-├── testing/            run_extraction.py, prompts/, (test_data, ocr_cache, results,
-│                       metrics, extraction_registry.json)                              → SPEC_12
-├── orchestration/      run.py (the 3+1 command surface + freeze-eval-set),
-│                       runpod_controller.py, pipeline_dag.py, detach.py, config/      → SPEC_13
-├── scripts/            setup_pod.sh (install per pod role), pod_run.sh (tmux jobs),
-│                       phase0_spike.py                                                  → SPEC_13
-├── pilot/              zero_shot_baseline.py, smoke_test.py, pilot_report.py           → SPEC_15
-└── tests/              test_*.py, fixtures/                                            → SPEC_14
+│   ├── ingestion/    pull_raw_pdfs  import_labeled_pdfs
+│   │                 import_prepared  dedup_and_group
+│   ├── ocr/          run_mineru  render_only  mineru_version
+│   ├── labeling/     pre_annotate  export_golden_labels
+│   │                 derive_aliases  active_learning  review_tool/
+│   ├── dataset_builder/  split_groups  sample_modes  expand_tasks
+│   │                 policy_windows  noisy_ocr_augment  cap_check
+│   │                 build_jsonl
+│   └── corpus_manifest.py
+├── training/         train  stage_data  length_check  corpus_view
+│                     base_precision  data_collator  merge  sweep
+│                     vit_gate  callbacks/early_stopping
+├── inference_core/   model_runner  input_builder  span_map
+│                     runner_config
+├── evaluation/       run_eval  golden_eval  freeze_eval_set
+│                     checkpoint_eval  validation_generation  gating
+│                     bootstrap  metrics/{field_accuracy, confusable,
+│                     coverage_metrics, extraction_faults}
+├── calibration/      features  feature_calibrator  thresholds
+│                     fit_calibration  apply_calibration
+│                     logprob_confidence  list_completeness
+│                     reconciliation
+├── postprocessing/   quantize  quant_thresholds  validate_quant
+├── serving/          vllm_entrypoint  pipeline  policy_merge
+│                     lossrun_merge  page_router  doc_type_classifier
+│                     adapter_router  release_router
+├── orchestration/    run  pipeline_dag  runpod_controller  detach
+│                     settings  config/pipeline.yaml
+├── scripts/          setup_pod.sh  pod_run.sh  phase0_spike.py
+│                     combine_specs.py  derive_aliases_from_canonical.py
+├── testing/          run_extraction  render_prompts  prompts/
+├── pilot/            zero_shot_baseline  smoke_test  pilot_run
+│                     pilot_report
+└── tests/            45 test modules; fixtures/ (synthetic, no PII)
 ```
 
 **Key separation principle:** the repo never stores model weights, corpus data, or PDFs. Everything data/artifact-related is pulled from / pushed to Azure Blob at runtime via `artifact_registry/`.
