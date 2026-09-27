@@ -265,12 +265,16 @@ def test_character_noise_reaches_the_bottom_of_the_page():
     assert max(lowest) > len(text) // 2
 
 
-def test_lob_coverage_reads_the_line_from_metadata():
-    """A canonical policy label has no line_of_business; its line is metadata."""
-    from data_pipeline.corpus_manifest import compute_lob_coverage
+def test_policy_lines_are_counted_from_metadata_not_checked_against_the_enum():
+    """A policy's line is a schema name (flood, gl, cyber). Checked against the
+    13-value LOB enum it raised, and the whole corpus build failed."""
+    from data_pipeline.corpus_manifest import compute_lob_coverage, count_policy_lines
 
-    shares, _ = compute_lob_coverage([{"policy": {}}, {"policy": {}}], ["homeowners", "homeowners"])
-    assert shares["homeowners"] == 1.0
+    labels = [{"policy": {}}, {"policy": {}}, {"policy": {}}, {"line_of_business": ["workers_comp"]}]
+    lobs = ["flood", "gl", ["homeowners", "personal_auto"], None]
+    shares, _ = compute_lob_coverage(labels, lobs)        # does not raise
+    assert shares["workers_comp"] == 1.0                   # only the label that carries the field
+    assert count_policy_lines(lobs) == {"flood": 1, "gl": 1, "homeowners": 1, "personal_auto": 1}
 
 
 def test_a_long_policy_counts_once_not_once_per_window():

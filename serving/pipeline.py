@@ -26,7 +26,7 @@ import logging
 import math
 import time
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 from calibration.apply_calibration import CalibratedField, CalibratedResult, apply_calibration
@@ -552,6 +552,7 @@ def extract(
     plan: Any = None,
     fallback_doc_type: str | None = None,
     long_doc_types: tuple[str, ...] = ("policy",),
+    release_runtimes: Mapping[str, Any] | None = None,
 ) -> ExtractionResult:
     """Run one document through the full pipeline.
 
@@ -574,13 +575,25 @@ def extract(
         fallback_doc_type=fallback_doc_type,
     )
 
+    release = None
     if plan is not None:
         from serving.release_router import UnservedDocType
 
         try:
-            plan.release_for(route_.doc_type, request.known_lob)
+            release = plan.release_for(route_.doc_type, request.known_lob)
         except UnservedDocType as exc:
             raise PipelineError(str(exc)) from exc
+
+    # Serve THROUGH the release the plan chose: its adapter and its calibrators.
+    # The choice used to be a yes/no check and was then thrown away, so a
+    # personal-lines release "answered" a homeowners policy that the unified
+    # model then read, with the unified model's confidence.
+    runtime = (release_runtimes or {}).get(release.release_id) if release is not None else None
+    if runtime is not None:
+        if runtime.adapter is not None:
+            route_ = replace(route_, adapter=runtime.adapter)
+        if runtime.calibrators is not None:
+            calibrators, thresholds = runtime.calibrators, runtime.thresholds
 
     # Calibration is per document type, and which type this is only becomes
     # known once the classifier has run — so it is selected here, not by the
@@ -588,7 +601,8 @@ def extract(
     # `doc_type`, which is absent on every classification-driven request; the
     # lookup fell through to `.get("")` and the request was refused before
     # extraction ever ran.
-    calibration = _calibration_for(calibration, route_.doc_type)
+    # The v1 transform is needed only when no fitted calibrator set applies.
+    calibration = _calibration_for(calibration, route_.doc_type) if calibrators is None else None
 
     # The line selects the policy's canonical schema. It is the caller's to
     # supply; with none, `schema_key` selects the client's canonical fallback,

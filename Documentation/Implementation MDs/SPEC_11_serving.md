@@ -150,3 +150,14 @@ merged model, or the base from the pod's local copy.
 lines cover **all** of the request's lines, else to the type's unrestricted release; with only a line-scoped
 release promoted, a policy of another line — or with no `lob` — is **refused** rather than read by a model that
 never trained on its line. A per-type pin cannot route every policy to a line-scoped release.
+
+**Serving through the chosen release** (`serving/vllm_entrypoint.load_release_runtimes`, `extract(...,
+release_runtimes=)`): cold start builds, per served release, its adapter and its fitted calibrators and
+thresholds (`releases/.../calibration/{format}/calibrators.json`). With **one** release the engine serves its
+merged model and no adapter is applied; with **several** (e.g. unified + personal lines) the engine loads the
+base with LoRA enabled and each release's adapter is downloaded and applied per request — cold start refuses
+a model loaded without LoRA support, or a release whose adapter is missing. `extract` routes each request
+through the release `release_for` returned (it was a yes/no check whose answer was discarded). The v1
+per-version calibration is needed only for a release without its own calibrators. An operator **pin**
+outranks line-scoped routing, so a rollback applies to every document of the type. Cold start no longer
+requires a unified run when releases are promoted. The plan's log lists line-scoped releases.

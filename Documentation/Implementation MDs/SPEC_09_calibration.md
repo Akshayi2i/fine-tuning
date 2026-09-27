@@ -121,3 +121,7 @@ This spec's §1–§3 describe v1's single-number calibration. What runs now (ar
 
 The calibration samples come from `evaluation/validation_generation.py` on the merged model in each format,
 with the engine released between formats. A resumed `package` finds the calibrators in Blob.
+
+**Thresholds** load back for serving (`ThresholdSet.from_dict`). An explicit target table that leaves a
+field type out now means *no promise* — every field of that type is reviewed — instead of silently falling
+back to the default target.

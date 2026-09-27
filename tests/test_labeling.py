@@ -128,9 +128,16 @@ def test_a_canonical_policy_label_needs_no_top_level_line_of_business():
     validate_golden_label(label, "policy")   # an unknown line: the fallback schema
 
 
-def test_a_canonical_policy_label_with_an_out_of_enum_line_is_rejected():
-    with pytest.raises(LabelValidationError, match="invalid line_of_business"):
+def test_a_canonical_policy_label_with_a_line_that_has_no_schema_is_rejected():
+    with pytest.raises(LabelValidationError, match="names no canonical policy schema"):
         validate_golden_label(_policy_label(), "policy", lob="marine_cargo")
+
+
+@pytest.mark.parametrize("lob", ["flood", "gl", "cyber", "workers_comp", ["homeowners", "personal_auto"]])
+def test_a_policy_line_is_any_line_with_a_canonical_schema(lob):
+    """A policy's line names its schema. The LOB enum (13 values) rejected flood,
+    cyber and the schema spellings (gl, wc), so real labels failed export."""
+    validate_golden_label(_policy_label(), "policy", lob=lob)
 
 
 def test_a_flat_label_under_a_canonical_policy_is_rejected():

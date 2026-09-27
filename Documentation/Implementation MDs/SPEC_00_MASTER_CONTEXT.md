@@ -555,6 +555,11 @@ What the build does now that the sections above did not describe. Each module sp
   homeowners, personal auto, dwelling fire, ocean marine, classic auto, motorcycle, recreational vehicle,
   personal umbrella and flood. Its corpus view, validation, golden eval and serving keep to those lines; a
   policy of another line, or with no `lob`, is refused by its release.
+- **Serving goes through the release the plan chooses** — its adapter and its calibrators. One promoted
+  release: the engine serves its merged model. Several: the engine loads the base with LoRA enabled and
+  each release is its own LoRA, applied per request. An operator pin (rollback) outranks line routing.
+- A policy's line is a canonical schema name (`flood`, `gl`, `cyber` …), validated against the lines that
+  have a schema — not against the 13-value LOB enum, which is for labels that carry `line_of_business`.
 - Render-only and zero-page documents are skipped from training; a build with no train rows is refused,
   and a real build with no val rows, or no test rows while the eval set is not yet frozen.
 

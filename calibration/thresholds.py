@@ -128,6 +128,19 @@ class FieldTypeThreshold:
             "reason": self.reason,
         }
 
+    @classmethod
+    def from_dict(cls, payload: dict[str, Any]) -> FieldTypeThreshold:
+        return cls(
+            field_type=payload["field_type"],
+            threshold=payload.get("threshold"),
+            target_error_rate=float(payload.get("target_error_rate", 0.0)),
+            accepted=int(payload.get("accepted", 0)),
+            errors=int(payload.get("errors", 0)),
+            reviewed=int(payload.get("reviewed", 0)),
+            achieved_upper_bound=float(payload.get("achieved_upper_bound", 1.0)),
+            reason=payload.get("reason"),
+        )
+
 
 def choose_threshold(
     field_type: str,
@@ -238,6 +251,18 @@ class ThresholdSet:
             "thresholds": {t: v.as_dict() for t, v in sorted(self.thresholds.items())},
         }
 
+    @classmethod
+    def from_dict(cls, payload: dict[str, Any]) -> ThresholdSet:
+        """What serving loads from a release bundle's calibration file."""
+        return cls(
+            release_id=payload["release_id"],
+            serving_format=payload["serving_format"],
+            thresholds={
+                name: FieldTypeThreshold.from_dict(body)
+                for name, body in (payload.get("thresholds") or {}).items()
+            },
+        )
+
 
 def fit_thresholds(
     scored_by_type: Mapping[str, Sequence[tuple[float, bool]]],
@@ -247,9 +272,18 @@ def fit_thresholds(
     targets: dict[str, float] | None = None,
 ) -> ThresholdSet:
     """Choose every field type's threshold from the validation threshold half."""
-    table = targets or DEFAULT_ERROR_TARGETS
+    table = DEFAULT_ERROR_TARGETS if targets is None else targets
     result = ThresholdSet(release_id=release_id, serving_format=serving_format)
     for field_type, scored in sorted(scored_by_type.items()):
+        if targets is not None and field_type not in targets:
+            # An explicit table that leaves a type out means "no promise for this
+            # type": every field of it is reviewed. Falling back to the default
+            # target auto-accepted fields the caller deliberately excluded.
+            result.thresholds[field_type] = FieldTypeThreshold(
+                field_type=field_type, threshold=None, target_error_rate=0.0,
+                reviewed=len(scored), reason="no error target set for this field type",
+            )
+            continue
         result.thresholds[field_type] = choose_threshold(
             field_type, scored, target_error_rate=table.get(field_type)
         )

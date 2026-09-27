@@ -160,3 +160,7 @@ the eval set is not frozen — is refused too.
 **Manifest**: LoB coverage reads each document's line from metadata (canonical policy labels carry none);
 the `modality_mix` counts **train rows only** (`modality_mix_basis: "train rows"`), since val/test carry
 every mode by design.
+
+**Line coverage in the manifest**: `lob_coverage` (the ≥20% enum target) counts only labels that carry
+`line_of_business` (ACORD, Loss Run); policy lines are counted from metadata in `policy_line_counts`
+(canonical schema names). Checking policy lines against the enum raised and failed the whole build.

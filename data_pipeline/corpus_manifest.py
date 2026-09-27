@@ -55,23 +55,40 @@ class CoverageReport:
 def compute_lob_coverage(
     golden_labels: list[dict[str, Any]], lobs: list[Any] | None = None,
 ) -> tuple[dict[str, float], list[str]]:
-    """Per-LoB-value share, against the ≥20% target (arch §0b).
+    """Per-LoB-value share of the labels that carry ``line_of_business``, against
+    the ≥20% target (arch §0b).
 
-    ``lobs`` — one per label, from the document's metadata — wins where given. A
-    canonical policy label carries no ``line_of_business`` (its line selects the
-    schema, and lives in the label metadata), so reading the label alone counted
-    every policy as having no line and reported coverage from ACORDs only.
+    Only labels that CARRY the field are counted here (ACORD, Loss Run). A policy's
+    line is metadata — a canonical schema name such as ``flood``, ``gl`` or
+    ``cyber`` — not a value of the LOB enum the model outputs, so it is counted by
+    :func:`count_policy_lines` instead. Validating it against the enum rejected most
+    real policy lines and failed the whole corpus build.
     """
-    values = [
-        (lobs[i] if lobs is not None and lobs[i] else None) or label.get("line_of_business")
+    carried = [
+        label.get("line_of_business")
         for i, label in enumerate(golden_labels)
+        if not (lobs is not None and lobs[i]) and "line_of_business" in label
     ]
-    coverage = compute_coverage(values)
+    coverage = compute_coverage(carried)
     warnings: list[str] = []
     if message := coverage.warning():
         warnings.append(message)
     return coverage.shares, warnings
 
+
+def count_policy_lines(lobs: list[Any]) -> dict[str, int]:
+    """Documents per policy line (canonical schema names), from metadata.
+
+    A package policy counts once for each of its lines.
+    """
+    from collections import Counter
+
+    from common.scopes import lob_lines
+
+    counts: Counter[str] = Counter()
+    for lob in lobs:
+        counts.update(lob_lines(lob))
+    return dict(sorted(counts.items()))
 
 def compute_alias_coverage(
     provenance_by_source: dict[str, dict[str, str]],
@@ -199,6 +216,7 @@ def build_manifest(
     alias_counts, alias_warnings = compute_alias_coverage(provenance_by_source)
     report.warnings.extend(lob_warnings + alias_warnings)
     report.lob_shares = lob_shares
+    policy_lines = count_policy_lines([(lob_by_source or {}).get(s) for s in sources])
     report.alias_counts = alias_counts
 
     confusable_total = 0
@@ -248,6 +266,8 @@ def build_manifest(
 
         # ---- coverage measurements ----
         "lob_coverage": lob_shares,
+        # Documents per policy line (canonical schema names, from metadata).
+        "policy_line_counts": policy_lines,
         "lob_coverage_target": LOB_COVERAGE_TARGET,
         "alias_coverage": alias_counts,
         "confusable_example_count": confusable_total,

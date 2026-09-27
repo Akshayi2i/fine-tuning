@@ -23,7 +23,6 @@ from __future__ import annotations
 
 import argparse
 import logging
-import re
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -51,6 +50,9 @@ class PageOutput:
     image_bytes: bytes
     table_row_count: int = 0  # feeds the row-completeness signal (SPEC_09)
     ocr_failed: bool = False
+    #: MinerU's own classification of the DOCUMENT: OCR mode for a scan, text mode
+    #: for a text layer. Recorded as ``is_scanned``; the same on every page.
+    scanned: bool = False
 
 
 class OcrEngine(Protocol):
@@ -116,7 +118,8 @@ class MinerUEngine:
             dataset = PymuDocDataset(pdf_bytes)
             # A text layer is read as text; a scan is OCR'd. MinerU decides, per
             # document, from the embedded text — the same call on every document.
-            if dataset.classify() == SupportedPdfParseMethod.OCR:
+            scanned = dataset.classify() == SupportedPdfParseMethod.OCR
+            if scanned:
                 piped = dataset.apply(doc_analyze, ocr=True).pipe_ocr_mode(writer)
             else:
                 piped = dataset.apply(doc_analyze, ocr=False).pipe_txt_mode(writer)
@@ -131,9 +134,11 @@ class MinerUEngine:
                 markdown=text,
                 image_bytes=image,
                 table_row_count=count_table_rows(text),
-                # A page MinerU returned nothing for: kept (its image still
-                # counts), flagged, and built with the blank-page placeholder.
-                ocr_failed=not text.strip(),
+                # Nothing read on a SCANNED page is an OCR failure; on a text-layer
+                # page it is a blank or picture-only page, which is not. Either
+                # way the page is kept and built with the blank-page placeholder.
+                ocr_failed=scanned and not text.strip(),
+                scanned=scanned,
             )
             for index, (text, image) in enumerate(zip(texts, images, strict=True))
         ]
@@ -190,19 +195,48 @@ def count_table_rows(markdown: str) -> int:
     return _count_pipe_rows(markdown) + _count_html_rows(markdown)
 
 
-_TABLE = re.compile(r"<table\b.*?</table>", re.IGNORECASE | re.DOTALL)
-_ROW = re.compile(r"<tr\b.*?</tr>", re.IGNORECASE | re.DOTALL)
-
-
 def _count_html_rows(text: str) -> int:
-    """Body rows of every HTML table: rows holding a ``<th>`` are headers; a table
-    with none treats its first row as the header, as a pipe table does."""
-    rows = 0
-    for table in _TABLE.findall(text):
-        found = _ROW.findall(table)
-        headers = sum(1 for row in found if re.search(r"<th\b", row, re.IGNORECASE))
-        rows += max(0, len(found) - (headers or (1 if found else 0)))
-    return rows
+    """Body rows of every HTML table, nested tables included, each counted once.
+
+    A row is a header only when it has header cells and no data cells: a schedule
+    whose every row starts with ``<th>Vehicle 1</th>`` and continues in ``<td>``
+    is all body rows. A table with no header row treats its first row as the
+    header, as a pipe table does. Parsed, not matched by regex: a non-greedy
+    ``<table>.*?</table>`` stopped at a nested table's end and cut the outer one short.
+    """
+    from html.parser import HTMLParser
+
+    class _Rows(HTMLParser):
+        def __init__(self) -> None:
+            super().__init__()
+            self.stack: list[list[tuple[bool, bool]]] = []   # per open table: (has_th, has_td) per row
+            self.row: list[list[bool]] = []                   # per open table: current row flags
+            self.body = 0
+
+        def handle_starttag(self, tag, attrs):
+            if tag == "table":
+                self.stack.append([])
+                self.row.append([False, False])
+            elif self.stack and tag == "tr":
+                self.row[-1] = [False, False]
+            elif self.stack and tag in ("th", "td"):
+                self.row[-1][0 if tag == "th" else 1] = True
+
+        def handle_endtag(self, tag):
+            if not self.stack:
+                return
+            if tag == "tr":
+                self.stack[-1].append(tuple(self.row[-1]))
+            elif tag == "table":
+                rows = self.stack.pop()
+                self.row.pop()
+                headers = sum(1 for has_th, has_td in rows if has_th and not has_td)
+                self.body += max(0, len(rows) - (headers or (1 if rows else 0)))
+
+    parser = _Rows()
+    parser.feed(text)
+    parser.close()
+    return parser.body
 
 
 def _count_pipe_rows(markdown: str) -> int:
@@ -301,6 +335,9 @@ def process_document(
         "source_checksum": raw_meta.get("checksum_sha256"),
         "table_row_counts": {str(p.page_number): p.table_row_count for p in pages},
         "failed_pages": [p.page_number for p in pages if p.ocr_failed],
+        # From MinerU's classification, not from failed pages: a text PDF with one
+        # blank page was recorded as a scan, and counted in the scanned gate.
+        "is_scanned": any(p.scanned for p in pages),
     }
     client.write_json(meta_key, ocr_meta)
     # The marker distinguishes a real OCR pass from the stored metadata returned

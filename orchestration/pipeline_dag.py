@@ -419,6 +419,7 @@ def load_labeled_documents(ctx: StageContext) -> list[Any]:
     """Assemble ``SourceDocument``s from Blob for every labeled source_id."""
     from data_pipeline.dataset_builder.build_jsonl import SourceDocument
     from data_pipeline.labeling.export_golden_labels import list_labeled_source_ids, load_golden_label
+    from evaluation.freeze_eval_set import is_scanned
 
     documents = []
     for doc_type in ctx.doc_types:
@@ -469,7 +470,7 @@ def load_labeled_documents(ctx: StageContext) -> list[Any]:
                 lob=metadata.get("lob"),
                 tenant_id=ctx.tenant_id,
                 field_provenance=metadata.get("field_provenance", {}),
-                is_scanned=bool(ocr_meta.get("failed_pages")),
+                is_scanned=is_scanned(ocr_meta),
                 carrier=_declared_carrier(label),
                 synthetic=bool(metadata.get("synthetic", False)),
             ))

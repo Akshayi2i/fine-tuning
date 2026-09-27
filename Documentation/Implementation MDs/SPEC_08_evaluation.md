@@ -137,3 +137,6 @@ nothing. Images are localised to the pod cache first (vLLM opens paths, the rows
 **Line-scoped gate**: for a scope narrowed by line of business (`personal_lines`), `evaluate_version` scores
 only the frozen documents whose line is in scope. Double annotation of the frozen documents (arch §15.4)
 remains a manual step before the first production gate.
+
+**Freeze guard covers every corpus type**: a document type the corpus holds but the test split drew none
+of counts as 0 and blocks the freeze (it used to pass unchecked and be missing from the frozen set for good).

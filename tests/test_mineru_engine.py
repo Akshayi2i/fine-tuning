@@ -125,7 +125,9 @@ def test_the_engine_returns_a_page_per_page_with_its_image(monkeypatch, scanned,
     assert [p.page_number for p in pages] == [1, 2, 3]
     assert calls["mode"] == mode and calls["ocr"] is scanned
     assert pages[0].markdown.startswith("# COMMON POLICY DECLARATIONS")
-    assert pages[1].ocr_failed and not pages[0].ocr_failed
+    # An empty page is an OCR failure only on a scan; on a text layer it is blank.
+    assert pages[1].ocr_failed is scanned and not pages[0].ocr_failed
+    assert all(p.scanned is scanned for p in pages)
     assert pages[2].table_row_count == 1
     assert all(p.image_bytes.startswith(b"\x89PNG") for p in pages)
 

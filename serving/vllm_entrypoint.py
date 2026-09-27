@@ -96,6 +96,10 @@ class EndpointState:
     calibration: Any = None
     adapter_map: dict[str, Any] = field(default_factory=dict)
     corpus_manifest: dict[str, Any] = field(default_factory=dict)
+    #: release_id -> what serving a document through that release needs: its
+    #: adapter (when releases share the engine as LoRAs) and its fitted
+    #: calibrators and thresholds. Built at cold start from the serving plan.
+    release_runtimes: dict[str, Any] = field(default_factory=dict)
 
     #: Which promoted release answers for each document type (arch v2.1 §12.3).
     #: More than one can be promoted at a time — a policy release alongside an
@@ -224,6 +228,72 @@ def build_adapter_map(model_version: str, client: BlobClient) -> dict[str, str]:
     return adapter_map
 
 
+@dataclass
+class ReleaseRuntime:
+    """One promoted release, as a request is served through it."""
+
+    release_id: str
+    #: Local LoRA directory applied per request, or ``None`` for the engine's own
+    #: weights (a single served release: its merged model IS the engine).
+    adapter: str | None = None
+    calibrators: Any = None
+    thresholds: Any = None
+
+
+def load_release_runtimes(
+    plan: Any,
+    client: BlobClient,
+    *,
+    adapter_root: str | Path,
+) -> dict[str, ReleaseRuntime]:
+    """Each served release's adapter and calibration, ready for requests.
+
+    **One release served:** the engine loads that release's merged model, and no
+    adapter is applied. **Several** (a unified release and a personal-lines one):
+    one engine cannot hold several merged models, so it loads the BASE with LoRA
+    enabled and each release is its adapter, applied per request — vLLM's one
+    LoRA per request, the shape arch v2.1 §4 serves in. Adapters are copied from
+    Blob to ``adapter_root`` once, here.
+    """
+    from artifact_registry import paths
+    from calibration.feature_calibrator import CalibratorSet
+    from calibration.thresholds import ThresholdSet
+    from common.run_ids import version_of
+
+    served = list(plan.served)
+    as_lora = len(served) > 1
+    runtimes: dict[str, ReleaseRuntime] = {}
+    for release in served:
+        runtime = ReleaseRuntime(release_id=release.release_id)
+        if release.calibrators and client.exists(release.calibrators):
+            body = client.read_json(release.calibrators)
+            runtime.calibrators = CalibratorSet.from_dict(body["calibrators"])
+            runtime.thresholds = ThresholdSet.from_dict(body["thresholds"])
+        else:
+            log.warning(
+                "release %s has no calibrators at %s; its fields are served with the v1 fallback",
+                release.release_id, release.calibrators,
+            )
+        if as_lora:
+            if not release.adapter:
+                raise ColdStartError(
+                    f"release {release.release_id} records no adapter, so it cannot be served as a "
+                    "LoRA beside the other promoted releases"
+                )
+            scope = None if release.scope == "unified" else release.scope
+            prefix = paths.scoped_adapter_dir(scope, version_of(release.adapter))
+            local = Path(adapter_root) / release.release_id
+            client.download_dir(prefix, local)
+            if not (local / "adapter_config.json").is_file():
+                raise ColdStartError(
+                    f"release {release.release_id}: no adapter at {prefix} (no adapter_config.json). "
+                    "Serving it beside another release needs its LoRA; run `package` for it."
+                )
+            runtime.adapter = str(local)
+        runtimes[release.release_id] = runtime
+    return runtimes
+
+
 def load_calibrations(model_version: str, client: BlobClient) -> dict[str, Any]:
     """doc_type -> calibration parameters for the served version.
 
@@ -250,6 +320,7 @@ def cold_start(
     tenant_id: str | None = None,
     model: Any = None,
     classifier: Any = None,
+    adapter_root: str | Path | None = None,
 ) -> EndpointState:
     """Pull the promoted artifact and validate the deployment before serving.
 
@@ -259,10 +330,13 @@ def cold_start(
     from artifact_registry import paths
     from registry_utils.query_registry import resolve_model_version
 
-    # Resolved for its side effect: an unknown version must fail the cold start
-    # here rather than on the first request. The per-type adapters are resolved
-    # separately by build_adapter_map below.
-    resolve_model_version(model_version, client)
+    plan = build_serving_plan(client, tenant_id=tenant_id, pins=release_pins())
+    if not plan.served:
+        # No release bundle promoted yet: the pre-release path, served by version.
+        # Resolved for its side effect, so an unknown version fails the cold start
+        # here rather than on the first request. With promoted releases the plan
+        # decides — a scoped release (personal lines) has no unified run behind it.
+        resolve_model_version(model_version, client)
 
     manifest: dict[str, Any] = {}
     if corpus_version:
@@ -285,8 +359,15 @@ def cold_start(
             "falls back to serving merged per-type models and only this function changes."
         )
 
-    plan = build_serving_plan(client, tenant_id=tenant_id, pins=release_pins())
     assert_prompt_hash(plan)
+    runtimes = load_release_runtimes(
+        plan, client, adapter_root=adapter_root or Path(paths.staging_root()) / "serving-adapters",
+    )
+    if len(runtimes) > 1 and not getattr(getattr(model, "config", None), "enable_lora", True):
+        raise ColdStartError(
+            f"{len(runtimes)} releases are promoted, so each is served as its LoRA on the base, "
+            "but the model was loaded without LoRA support (enable_lora: false)."
+        )
     state = EndpointState(
         model_version=model_version,
         model=model,
@@ -295,6 +376,7 @@ def cold_start(
         calibration=load_calibrations(model_version, client),
         plan=plan,
         corpus_manifest=manifest,
+        release_runtimes=runtimes,
         ready=True,
     )
     log.info(
@@ -491,9 +573,13 @@ def handler(event: dict[str, Any], state: EndpointState) -> dict[str, Any]:
         # every request that did not name its own doc_type — which is every
         # classification-driven request, the endpoint's entire purpose — and
         # `assert_calibration_present` then refused it before extraction ran.
-        assert_calibration_present(
-            state.calibration, state.model_version, request.known_doc_type or "any"
-        )
+        runtimes = state.release_runtimes
+        if not runtimes or not all(r.calibrators is not None for r in runtimes.values()):
+            # The v1 per-version calibration is the fallback for releases without
+            # their own calibrators; it has to exist when anything falls back.
+            assert_calibration_present(
+                state.calibration, state.model_version, request.known_doc_type or "any"
+            )
         # The thresholds come from configs/inference/vllm_serving.yaml. They
         # were declared there and read by nothing, so raising review_threshold
         # and redeploying changed no behaviour at all — the hardcoded defaults
@@ -510,6 +596,7 @@ def handler(event: dict[str, Any], state: EndpointState) -> dict[str, Any]:
             # extracted by a model that never trained on it, against a schema it
             # has never seen (arch v2.1 §12.3).
             plan=state.plan,
+            release_runtimes=state.release_runtimes,
             long_doc_types=long_doc_types_for(state.plan),
             **tuning,
         )

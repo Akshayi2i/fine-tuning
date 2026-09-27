@@ -47,6 +47,14 @@ class FreezeError(RuntimeError):
 MIN_FROZEN_DOCS_PER_TYPE = 150
 
 
+def is_scanned(ocr_meta: dict[str, Any]) -> bool:
+    """Whether a document is a scan: MinerU's own classification when recorded,
+    else — for documents OCR'd before it was — whether any page failed OCR."""
+    if "is_scanned" in ocr_meta:
+        return bool(ocr_meta["is_scanned"])
+    return bool(ocr_meta.get("failed_pages"))
+
+
 def manifest_key() -> str:
     return f"{paths.golden_eval_set_dir()}/manifest.json"
 
@@ -101,7 +109,14 @@ def freeze_eval_set(
             documents.setdefault(row["source_id"], row["doc_type"])
     if not documents:
         raise FreezeError(f"the test split of corpus {corpus_version} holds no documents")
-    per_type: dict[str, int] = {}
+    corpus_manifest_key = paths.corpus_manifest(corpus_version, tenant_id)
+    corpus_manifest = (
+        client.read_json(corpus_manifest_key) if client.exists(corpus_manifest_key) else {}
+    )
+    # Every type the corpus holds, not only those that drew test documents: a
+    # type with NONE in test would otherwise pass the guard and be missing from
+    # the frozen set for good, its quality never gated.
+    per_type: dict[str, int] = {t: 0 for t in corpus_manifest.get("doc_types") or ()}
     for doc_type in documents.values():
         per_type[doc_type] = per_type.get(doc_type, 0) + 1
     small = {t: n for t, n in sorted(per_type.items()) if n < MIN_FROZEN_DOCS_PER_TYPE}
@@ -113,10 +128,6 @@ def freeze_eval_set(
             "smaller set anyway (a pilot), pass --allow-small."
         )
 
-    corpus_manifest_key = paths.corpus_manifest(corpus_version, tenant_id)
-    corpus_manifest = (
-        client.read_json(corpus_manifest_key) if client.exists(corpus_manifest_key) else {}
-    )
     split = corpus_manifest.get("split_assignment") or {}
 
     root = paths.golden_eval_set_dir()
@@ -142,7 +153,7 @@ def freeze_eval_set(
             "doc_type": doc_type,
             "acord_form": metadata.get("acord_form"),
             "lob": metadata.get("lob"),
-            "is_scanned": bool(ocr_meta.get("failed_pages")),
+            "is_scanned": is_scanned(ocr_meta),
             "frozen_from_corpus": corpus_version,
         })
         # Written last: a document counts as part of the set once golden.json

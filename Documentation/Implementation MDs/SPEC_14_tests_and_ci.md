@@ -107,6 +107,7 @@ failure that was real:
 | `test_detach.py`, `test_pod_run.py` | on the pod every long entry point detaches; already-safe jobs do not re-detach; every entry point classified; the launcher never stops the pod or a run unasked; LF line endings |
 | `test_personal_lines_scope.py` | a scope narrowed by line: coverage rules, corpus view, golden eval and serving route by line and refuse other lines |
 | `test_mineru_engine.py` | one markdown string per page from MinerU's content list; HTML table rows counted; OCR vs text mode; GPU only |
+| `test_review_fixes.py` | serving through the chosen release (adapter + calibrators, LoRA when several), rollback pin, freeze guard on types with no test documents, scanned from MinerU's classification, HTML row headers and nested tables, explicit threshold targets, scoped pulls, classify in every scope |
 | `test_gpu_only.py` | model loaders require CUDA; no `device_map="cpu"`/`"auto"`; OCR refuses CPU; pod detection without `RUNPOD_POD_ID`, and look-alikes rejected |
 
 Contract tests also check that `.env.example` documents every variable the code reads (and nothing it

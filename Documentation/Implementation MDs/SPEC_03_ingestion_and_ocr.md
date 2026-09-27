@@ -123,3 +123,9 @@ Consequences, all enforced in code:
 Verified here with a stand-in MinerU on a real PDF (`tests/test_mineru_engine.py`); the real library, its model
 weights and GPU output are verified on the pod by the Phase 0 spike (`check_mineru_gpu`). Serving callers that
 supply `page_texts` must produce them with this engine, or the model reads a formatting it never trained on.
+
+**Scanned is MinerU's classification**, recorded as `ocr_meta.is_scanned` (OCR mode = scan). An empty page
+is an OCR failure only on a scan; on a text layer it is a blank or picture-only page, and no longer makes the
+document count as scanned (older metas fall back to "any failed page"). **HTML table rows are parsed**, not
+regex-matched: a row is a header only when it has header cells and no data cells (so row-header schedules
+count), and nested tables no longer cut the outer table short.

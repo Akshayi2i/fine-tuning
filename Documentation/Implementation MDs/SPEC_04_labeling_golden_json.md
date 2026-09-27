@@ -186,3 +186,7 @@ Once a model version exists (arch §7 step 6, §13 step 11):
 - **Line of business** for a policy comes from `label_metadata.json` (`lob`), not from the label; it
   selects the canonical schema and is what the corpus manifest's LoB coverage counts.
 - **Synthetic documents** (`metadata.synthetic: true`) pin their whole family to train (SPEC_05).
+
+**A policy's line** (`label_metadata.lob`) is validated against the lines that have a canonical schema
+(`common.scopes.known_lines`, schema spellings and enum spellings both accepted) — not against the 13-value
+LOB enum, which rejected `flood`, `cyber`, `professional_eo`, `gl`, `wc` and failed real labels.

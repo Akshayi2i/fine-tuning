@@ -111,13 +111,19 @@ def validate_golden_label(
 
     if canonical:
         # The line travels in the metadata, beside the client's label rather than
-        # inside it. Checked against the same enum when given; absent is
-        # allowed, because the canonical fallback exists for exactly that case.
+        # inside it. It names a canonical schema (flood, gl, cyber …), not a value
+        # of the LOB enum the model outputs, so it is checked against the lines
+        # that have a schema; absent is allowed, because the canonical fallback
+        # exists for exactly that case.
         if lob:
-            try:
-                validate_lob(lob)
-            except LobError as exc:
-                problems.append(str(exc))
+            from common.scopes import known_lines, lob_lines
+
+            unknown = sorted(lob_lines(lob) - known_lines())
+            if not lob_lines(lob) or unknown:
+                problems.append(
+                    f"line of business {lob!r} names no canonical policy schema "
+                    f"({unknown or 'empty'}); known lines: {sorted(known_lines())}"
+                )
     elif "line_of_business" not in label:
         problems.append(
             "line_of_business is missing. It is required in every golden label for every "

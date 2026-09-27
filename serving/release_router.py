@@ -90,6 +90,9 @@ class ServingPlan:
     #: The release answering for each type across every line (no line restriction).
     by_doc_type: dict[str, ServedRelease] = field(default_factory=dict)
     releases: dict[str, ServedRelease] = field(default_factory=dict)
+    #: Types an operator pinned (``routing.release_pins``). A pin is an explicit
+    #: instruction — typically a rollback — so it outranks line-scoped releases.
+    pinned: set[str] = field(default_factory=set)
 
     @property
     def line_releases(self) -> list[ServedRelease]:
@@ -121,6 +124,11 @@ class ServingPlan:
         unrestricted release. A document no release covers — a type nothing
         serves, or a line only a line-scoped release could have taken — is refused.
         """
+        if doc_type in self.pinned:
+            # A rollback pin sends EVERY document of the type to the pinned
+            # release; checking line releases first would silently ignore it for
+            # exactly the documents the rollback was for.
+            return self.by_doc_type[doc_type]
         by_line = [r for r in self.line_releases if doc_type in r.covers and r.covers_lob(lob)]
         if by_line:
             fewest = min(len(r.lines) for r in by_line)
@@ -146,6 +154,8 @@ class ServingPlan:
 
     def describe(self) -> str:
         lines = [f"{dt} -> {r.describe()}" for dt, r in sorted(self.by_doc_type.items())]
+        lines += [f"by line -> {r.describe()}" for r in sorted(self.line_releases,
+                                                               key=lambda r: r.release_id)]
         if self.unserved_doc_types:
             lines.append(f"unserved: {list(self.unserved_doc_types)}")
         return "; ".join(lines) or "nothing promoted"
@@ -241,6 +251,7 @@ def build_serving_plan(
                 "rather than quietly ignored."
             )
         plan.by_doc_type[doc_type] = pinned
+        plan.pinned.add(doc_type)
 
     assert_one_base_model(plan)
     if plan.unserved_doc_types:

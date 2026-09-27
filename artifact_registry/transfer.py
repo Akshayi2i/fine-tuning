@@ -106,9 +106,10 @@ def push_merged_model(
 
 
 def pull_merged_model(
-    version: str, local_dir: str | Path, doc_type: str | None = None, *, client: BlobClient
+    version: str, local_dir: str | Path, doc_type: str | None = None, *, client: BlobClient,
+    scope: str | None = None,
 ) -> Path:
-    client.download_dir(paths.merged_model_dir(version, doc_type), local_dir)
+    client.download_dir(paths.merged_model_dir(version, doc_type, scope=scope), local_dir)
     return Path(local_dir)
 
 
@@ -124,9 +125,9 @@ def push_quantized(
 
 def pull_quantized(
     version: str, fmt: str, local_dir: str | Path, doc_type: str | None = None, *,
-    client: BlobClient,
+    client: BlobClient, scope: str | None = None,
 ) -> Path:
-    client.download_dir(paths.quantized_model_dir(version, fmt, doc_type), local_dir)
+    client.download_dir(paths.quantized_model_dir(version, fmt, doc_type, scope=scope), local_dir)
     return Path(local_dir)
 
 

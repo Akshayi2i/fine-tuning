@@ -564,6 +564,11 @@ What the build does now that the sections above did not describe. Each module sp
   homeowners, personal auto, dwelling fire, ocean marine, classic auto, motorcycle, recreational vehicle,
   personal umbrella and flood. Its corpus view, validation, golden eval and serving keep to those lines; a
   policy of another line, or with no `lob`, is refused by its release.
+- **Serving goes through the release the plan chooses** — its adapter and its calibrators. One promoted
+  release: the engine serves its merged model. Several: the engine loads the base with LoRA enabled and
+  each release is its own LoRA, applied per request. An operator pin (rollback) outranks line routing.
+- A policy's line is a canonical schema name (`flood`, `gl`, `cyber` …), validated against the lines that
+  have a schema — not against the 13-value LOB enum, which is for labels that carry `line_of_business`.
 - Render-only and zero-page documents are skipped from training; a build with no train rows is refused,
   and a real build with no val rows, or no test rows while the eval set is not yet frozen.
 
@@ -1064,6 +1069,12 @@ Verified here with a stand-in MinerU on a real PDF (`tests/test_mineru_engine.py
 weights and GPU output are verified on the pod by the Phase 0 spike (`check_mineru_gpu`). Serving callers that
 supply `page_texts` must produce them with this engine, or the model reads a formatting it never trained on.
 
+**Scanned is MinerU's classification**, recorded as `ocr_meta.is_scanned` (OCR mode = scan). An empty page
+is an OCR failure only on a scan; on a text layer it is a blank or picture-only page, and no longer makes the
+document count as scanned (older metas fall back to "any failed page"). **HTML table rows are parsed**, not
+regex-matched: a row is a header only when it has header cells and no data cells (so row-header schedules
+count), and nested tables no longer cut the outer table short.
+
 ---
 
 # SPEC_04_labeling_golden_json
@@ -1257,6 +1268,10 @@ Once a model version exists (arch §7 step 6, §13 step 11):
   selects the canonical schema and is what the corpus manifest's LoB coverage counts.
 - **Synthetic documents** (`metadata.synthetic: true`) pin their whole family to train (SPEC_05).
 
+**A policy's line** (`label_metadata.lob`) is validated against the lines that have a canonical schema
+(`common.scopes.known_lines`, schema spellings and enum spellings both accepted) — not against the 13-value
+LOB enum, which rejected `flood`, `cyber`, `professional_eo`, `gl`, `wc` and failed real labels.
+
 ---
 
 # SPEC_05_dataset_builder
@@ -1423,6 +1438,10 @@ the eval set is not frozen — is refused too.
 **Manifest**: LoB coverage reads each document's line from metadata (canonical policy labels carry none);
 the `modality_mix` counts **train rows only** (`modality_mix_basis: "train rows"`), since val/test carry
 every mode by design.
+
+**Line coverage in the manifest**: `lob_coverage` (the ≥20% enum target) counts only labels that carry
+`line_of_business` (ACORD, Loss Run); policy lines are counted from metadata in `policy_line_counts`
+(canonical schema names). Checking policy lines against the enum raised and failed the whole build.
 
 ---
 
@@ -1862,6 +1881,9 @@ nothing. Images are localised to the pod cache first (vLLM opens paths, the rows
 only the frozen documents whose line is in scope. Double annotation of the frozen documents (arch §15.4)
 remains a manual step before the first production gate.
 
+**Freeze guard covers every corpus type**: a document type the corpus holds but the test split drew none
+of counts as 0 and blocks the freeze (it used to pass unchecked and be missing from the frozen set for good).
+
 ---
 
 # SPEC_09_calibration
@@ -1989,6 +2011,10 @@ This spec's §1–§3 describe v1's single-number calibration. What runs now (ar
 
 The calibration samples come from `evaluation/validation_generation.py` on the merged model in each format,
 with the engine released between formats. A resumed `package` finds the calibrators in Blob.
+
+**Thresholds** load back for serving (`ThresholdSet.from_dict`). An explicit target table that leaves a
+field type out now means *no promise* — every field of that type is reviewed — instead of silently falling
+back to the default target.
 
 ---
 
@@ -2284,6 +2310,17 @@ merged model, or the base from the pod's local copy.
 lines cover **all** of the request's lines, else to the type's unrestricted release; with only a line-scoped
 release promoted, a policy of another line — or with no `lob` — is **refused** rather than read by a model that
 never trained on its line. A per-type pin cannot route every policy to a line-scoped release.
+
+**Serving through the chosen release** (`serving/vllm_entrypoint.load_release_runtimes`, `extract(...,
+release_runtimes=)`): cold start builds, per served release, its adapter and its fitted calibrators and
+thresholds (`releases/.../calibration/{format}/calibrators.json`). With **one** release the engine serves its
+merged model and no adapter is applied; with **several** (e.g. unified + personal lines) the engine loads the
+base with LoRA enabled and each release's adapter is downloaded and applied per request — cold start refuses
+a model loaded without LoRA support, or a release whose adapter is missing. `extract` routes each request
+through the release `release_for` returned (it was a yes/no check whose answer was discarded). The v1
+per-version calibration is needed only for a release without its own calibrators. An operator **pin**
+outranks line-scoped routing, so a rollback applies to every document of the type. Cold start no longer
+requires a unified run when releases are promoted. The plan's log lists line-scoped releases.
 
 ---
 
@@ -2857,6 +2894,7 @@ failure that was real:
 | `test_detach.py`, `test_pod_run.py` | on the pod every long entry point detaches; already-safe jobs do not re-detach; every entry point classified; the launcher never stops the pod or a run unasked; LF line endings |
 | `test_personal_lines_scope.py` | a scope narrowed by line: coverage rules, corpus view, golden eval and serving route by line and refuse other lines |
 | `test_mineru_engine.py` | one markdown string per page from MinerU's content list; HTML table rows counted; OCR vs text mode; GPU only |
+| `test_review_fixes.py` | serving through the chosen release (adapter + calibrators, LoRA when several), rollback pin, freeze guard on types with no test documents, scanned from MinerU's classification, HTML row headers and nested tables, explicit threshold targets, scoped pulls, classify in every scope |
 | `test_gpu_only.py` | model loaders require CUDA; no `device_map="cpu"`/`"auto"`; OCR refuses CPU; pod detection without `RUNPOD_POD_ID`, and look-alikes rejected |
 
 Contract tests also check that `.env.example` documents every variable the code reads (and nothing it

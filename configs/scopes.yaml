@@ -91,7 +91,9 @@ scopes:
     doc_types: [policy]
     lines: [homeowners, personal_auto, dwelling_fire, ocean_marine, classic_auto,
             motorcycle, recreational_vehicle, personal_umbrella, flood]
-    tasks: [extract, policy_declarations, policy_schedule, policy_endorsements]
+    # classify stays, as in every scope: a personal-lines release must still
+    # recognise a non-policy document and refuse it.
+    tasks: [classify, extract, policy_declarations, policy_schedule, policy_endorsements]
     training_config: unified
     long_doc_types: [policy]
     not_applicable_metrics: [lossrun_totals_reconciliation_rate]
