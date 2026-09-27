@@ -1,0 +1,7 @@
+# Serving pod: the vLLM endpoint (merged model, calibrators and release bundle
+# read from Blob).
+#
+#   bash scripts/setup_pod.sh serve
+#
+# Versions live in pyproject.toml.
+-e .[data,serve]

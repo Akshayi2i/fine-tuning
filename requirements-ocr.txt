@@ -1,0 +1,7 @@
+# OCR pod (stage 2): MinerU 1.x on CUDA, plus Blob access and page rendering.
+#
+#   bash scripts/setup_pod.sh ocr
+#
+# MinerU's layout and table model weights are a separate download; the setup
+# script prints the command. Versions live in pyproject.toml.
+-e .[data,ocr]

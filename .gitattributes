@@ -1,0 +1,2 @@
+# Shell scripts run on Linux pods; a CRLF line ending breaks bash.
+*.sh text eol=lf

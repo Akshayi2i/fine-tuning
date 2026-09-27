@@ -22,6 +22,8 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# One group per job. The requirements-*.txt files at the repo root install the
+# right groups per pod, in the right order - see scripts/setup_pod.sh.
 data = [
     "azure-storage-blob>=12.19,<13", "pypdf>=4.0", "pillow>=10.2",
     # Page rasterisation for the image_only pathway. pypdf reads structure
@@ -29,22 +31,46 @@ data = [
     "PyMuPDF>=1.24",
 ]
 
-# RunPod only. flash-attn needs a CUDA toolchain and is the usual install
-# failure - the Phase 0 spike exists partly to find that out early.
+# MinerU, for stage 2 (OCR). The 1.x line: the code imports `magic_pdf` and reads
+# the `magic-pdf` version into every ocr_meta.json, and MinerU 2.x renamed the
+# package (`mineru`) and removed that module. [full] brings the layout and
+# table models' runtime, torch included. The model weights themselves are a
+# separate download (MinerU's own `magic-pdf.json` / models-download step).
+ocr = ["magic-pdf[full]>=1.3,<2"]
+
+# RunPod training pod. torch is pinned to the minor version vLLM 0.11 pins,
+# because the finetune pipeline runs vLLM in the same process for checkpoint
+# selection and calibration: one environment, one torch. flash-attn is NOT here
+# - it must be built against the installed torch with --no-build-isolation,
+# which pip cannot do from inside an extra (scripts/setup_pod.sh does it).
 train = [
-    "torch>=2.3", "transformers>=4.57", "peft>=0.11", "bitsandbytes>=0.43",
-    "accelerate>=0.30", "deepspeed>=0.14", "trl>=0.9", "ms-swift>=3.9,<4",
-    "flash-attn>=2.5; platform_system=='Linux'",
+    "torch>=2.8,<2.9", "transformers>=4.57", "peft>=0.11", "bitsandbytes>=0.45",
+    "accelerate>=1.0", "deepspeed>=0.15", "ms-swift>=3.9,<4",
+    # ms-swift's Qwen3-VL template needs it (Qwen's own image/video helpers).
+    "qwen-vl-utils>=0.0.14",
 ]
-# RunPod serving pod. llm-compressor produces the FP8 and AWQ INT4 weights vLLM
-# loads natively (arch v2.1 13a) - it replaces the llama.cpp toolchain on the
-# serving path, which produced GGUF files vLLM cannot open. llama.cpp is still
-# needed for an on-request edge export, but that is not installed here because
-# it is not part of serving.
-serve = ["vllm>=0.5", "llm-compressor>=0.3"]
+# RunPod serving pod, and the training pod (see above). vLLM 0.11 is the first
+# with Qwen3-VL, and it keeps `guided_decoding`, which later releases replace
+# with `structured_outputs` - so the upper bound stays until model_runner moves.
+# EXACT, and the same on both pods: calibration is fitted on the logprobs the
+# training pod's vLLM produces, so serving must run the same build. 0.11.0 is
+# the last 0.11 on torch 2.8, the torch the training stack is pinned to.
+serve = ["vllm==0.11.0", "transformers>=4.57"]
+# FP8 / AWQ INT4 export (arch v2.1 13a), in an environment OF ITS OWN: llmcompressor
+# needs datasets>=4 where ms-swift 3 needs <4, and its transformers range excludes
+# the one vLLM 0.11 needs, so it cannot join the train or serve environments.
+# Only needed once FP8 is verified; cycle 1 serves bf16 and exports nothing.
+# (The PyPI name is `llmcompressor`; `llm-compressor` does not exist there.)
+quantize = ["llmcompressor>=0.8"]
 eval = ["numpy>=1.26", "scikit-learn>=1.4"]
 track = ["mlflow>=2.12"]
-dev = ["pytest>=8.0", "pytest-cov>=5.0", "ruff>=0.4", "mypy>=1.10", "types-PyYAML", "types-jsonschema"]
+dev = [
+    "pytest>=8.0", "pytest-cov>=5.0", "ruff>=0.4", "mypy>=1.10", "types-PyYAML",
+    "types-jsonschema",
+    # Two staging tests read the staged JSONL with pyarrow, as ms-swift does;
+    # without it they are skipped rather than run.
+    "pyarrow>=15",
+]
 
 [tool.setuptools]
 packages = [

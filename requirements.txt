@@ -1,0 +1,13 @@
+# Laptop / CI: the data pipeline, evaluation and the full test suite, CPU only.
+#
+#   pip install -r requirements.txt
+#   pytest -q
+#
+# Versions are declared once, in pyproject.toml; each requirements file only
+# chooses which dependency groups a machine gets. On a RunPod pod use the
+# per-pod file instead, through scripts/setup_pod.sh:
+#
+#   requirements-ocr.txt     stage 2, MinerU OCR          (GPU)
+#   requirements-train.txt   finetune + package           (GPU, A100/H100 80GB)
+#   requirements-serve.txt   the vLLM serving endpoint    (GPU)
+-e .[data,eval,dev]

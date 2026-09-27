@@ -1,0 +1,8 @@
+# Quantization pod: FP8 / AWQ INT4 export with llmcompressor (arch v2.1 13a).
+#
+#   bash scripts/setup_pod.sh quantize
+#
+# Its own environment: llmcompressor needs datasets>=4 and a transformers range
+# that neither ms-swift 3 (training) nor vLLM 0.11 (serving) accepts. Only
+# needed once the spike has verified FP8; cycle 1 serves bf16 and exports nothing.
+-e .[data,quantize]

@@ -1,0 +1,13 @@
+# Training pod: finetune (staging, ms-swift, checkpoint selection, merge,
+# calibration, the golden eval) and package.
+#
+#   bash scripts/setup_pod.sh train
+#
+# vLLM is here too, not only on the serving pod: checkpoint selection and
+# calibration generate with it in the same pipeline process, so training,
+# vLLM and flash-attn share ONE torch (2.8, the version vLLM 0.11 pins).
+#
+# flash-attn is deliberately absent: it must be compiled against the torch
+# installed by this file, with --no-build-isolation, which pip cannot express
+# here. scripts/setup_pod.sh installs it as a second step.
+-e .[data,eval,train,serve,track]

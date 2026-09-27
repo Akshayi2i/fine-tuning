@@ -66,12 +66,24 @@ measures noise.
 ## Setup
 
 ```bash
-cp .env.example .env          # fill in Azure + RunPod credentials
-pip install -e ".[dev]"       # core + test tooling, CPU only
-pytest -q                     # fixture-driven, no GPU or live Azure needed
+cp .env.example .env              # fill in Azure + RunPod credentials
+pip install -r requirements.txt   # data pipeline, eval, test tooling - CPU only
+pytest -q                         # fixture-driven, no GPU or live Azure needed
 ```
 
-GPU extras (`[train]`, `[serve]`) install on a RunPod pod, not a laptop.
+On a RunPod pod, one command per role installs its dependencies in the order
+that works and checks CUDA afterwards:
+
+| Pod | Command | Installs |
+|---|---|---|
+| OCR (stage 2) | `bash scripts/setup_pod.sh ocr` | `requirements-ocr.txt`: MinerU 1.x (`magic-pdf[full]`) |
+| Training | `bash scripts/setup_pod.sh train` | `requirements-train.txt`: ms-swift, torch 2.8, **and vLLM** (checkpoint selection and calibration generate with it), then flash-attn built against that torch |
+| Serving | `bash scripts/setup_pod.sh serve` | `requirements-serve.txt`: vLLM 0.11.0, the same build the training pod calibrates with |
+| Quantization (only once FP8 is verified) | `bash scripts/setup_pod.sh quantize` | `requirements-quantize.txt`: llmcompressor, in its own environment (its `datasets`/`transformers` ranges conflict with ms-swift and vLLM) |
+
+Versions are declared once, in `pyproject.toml`; the requirements files only
+choose dependency groups. `tests/test_dependencies.py` fails if the code imports
+a package no group installs.
 
 ## Build status
 
