@@ -202,7 +202,7 @@ def evaluate_version(
 
     # Before anything is evaluated: a leaked eval set makes every number meaningless.
     assert_eval_set_disjoint(client, corpus_version, tenant_id)
-    documents = load_golden_set(client, scope.doc_types)
+    documents = [d for d in load_golden_set(client, scope.doc_types) if scope.covers_lob(d.lob)]
     if not documents:
         raise GoldenEvalError(
             f"the frozen eval set holds no {list(scope.doc_types)} documents, so there is "

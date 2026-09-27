@@ -59,8 +59,9 @@ class CorpusView:
         )
 
 
-def _filter(text: str, doc_types: tuple[str, ...]) -> tuple[str, int, int]:
-    """Keep the rows this scope covers. Returns ``(jsonl, kept, dropped)``."""
+def _filter(text: str, scope: Scope) -> tuple[str, int, int]:
+    """Keep the rows this scope covers — its document types and, for a scope
+    narrowed by line of business, its lines. Returns ``(jsonl, kept, dropped)``."""
     kept: list[str] = []
     dropped = 0
     for line in text.splitlines():
@@ -70,7 +71,7 @@ def _filter(text: str, doc_types: tuple[str, ...]) -> tuple[str, int, int]:
             row = json.loads(line)
         except ValueError as exc:
             raise CorpusViewError(f"corpus row is not JSON: {exc}") from exc
-        if row.get("doc_type") in doc_types:
+        if row.get("doc_type") in scope.doc_types and scope.covers_lob(row.get("lob")):
             kept.append(line)
         else:
             dropped += 1
@@ -106,7 +107,7 @@ def materialize(
                 f"corpus {corpus_version} has no {source}. A scope filters the corpus that was "
                 "built; it does not build one of its own."
             )
-        body, kept, dropped = _filter(client.read_text(source), scope.doc_types)
+        body, kept, dropped = _filter(client.read_text(source), scope)
         target = paths.corpus_scope_epoch_file(corpus_version, epoch, scope.name, tenant_id)
         client.write_text(target, body)
         view.epoch_files.append(target)
@@ -123,14 +124,14 @@ def materialize(
     source = paths.corpus_eval_split(corpus_version, "val", tenant_id)
     if not client.exists(source):
         raise CorpusViewError(f"corpus {corpus_version} has no validation split at {source}")
-    body, kept, _ = _filter(client.read_text(source), scope.doc_types)
+    body, kept, _ = _filter(client.read_text(source), scope)
     view.val_path = paths.corpus_scope_eval_split(corpus_version, "val", scope.name, tenant_id)
     client.write_text(view.val_path, body)
     view.val_rows = kept
 
     test = paths.corpus_eval_split(corpus_version, "test", tenant_id)
     if client.exists(test):
-        _body, view.test_rows, _ = _filter(client.read_text(test), scope.doc_types)
+        _body, view.test_rows, _ = _filter(client.read_text(test), scope)
 
     if not view.val_rows:
         # Not fatal here — it is the checkpoint selector and the gate that need

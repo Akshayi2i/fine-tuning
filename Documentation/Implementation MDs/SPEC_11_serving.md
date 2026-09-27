@@ -144,3 +144,9 @@ with no recorded hash is warned about.
 
 **Engine**: vLLM `==0.11.0` (the build calibration was fitted with); refuses to start without CUDA; loads the
 merged model, or the base from the pod's local copy.
+
+**Line-scoped releases** (`serving/release_router.py`): a release from a scope narrowed by line records its
+`lines` in the bundle. `ServingPlan.release_for(doc_type, lob)` sends a policy to the narrowest release whose
+lines cover **all** of the request's lines, else to the type's unrestricted release; with only a line-scoped
+release promoted, a policy of another line — or with no `lob` — is **refused** rather than read by a model that
+never trained on its line. A per-type pin cannot route every policy to a line-scoped release.

@@ -557,9 +557,13 @@ What the build does now that the sections above did not describe. Each module sp
 - Group-level split, band per type, placement **per line of business**; lines under 5 documents train
   whole; crossing a band only moves groups toward train (§10).
 - **The golden eval set is frozen once** from a corpus build's test split
-  (`python -m orchestration.run freeze-eval-set --corpus vN`); refused twice, and refused below 100 test
-  documents per type unless `--allow-small`. Later builds exclude its documents and their families and
+  (`python -m orchestration.run freeze-eval-set --corpus vN`); refused twice, and refused below 150 test
+  documents per type (arch §15.4) unless `--allow-small`. Later builds exclude its documents and their families and
   split new documents into train/val only.
+- **Scopes by line of business**: `personal_lines` (`configs/scopes.yaml`) is a policy-only scope limited to
+  homeowners, personal auto, dwelling fire, ocean marine, classic auto, motorcycle, recreational vehicle,
+  personal umbrella and flood. Its corpus view, validation, golden eval and serving keep to those lines; a
+  policy of another line, or with no `lob`, is refused by its release.
 - Render-only and zero-page documents are skipped from training; a build with no train rows is refused,
   and a real build with no val rows, or no test rows while the eval set is not yet frozen.
 
@@ -576,7 +580,7 @@ What the build does now that the sections above did not describe. Each module sp
 - **Dependencies** (`pyproject.toml` groups; `requirements-*.txt` per pod; `scripts/setup_pod.sh <role>`):
   training pod = ms-swift 3.x + torch 2.8 + **vLLM 0.11.0** (checkpoint selection and calibration run vLLM
   in the same process) + flash-attn built against that torch; serving pod = the same **vLLM 0.11.0**;
-  OCR pod = MinerU 1.x (`magic-pdf[full]`); quantization = `llmcompressor` in its own environment (its
+  OCR pod = MinerU 1.x (`magic-pdf[full]`, wired in `data_pipeline/ocr/run_mineru.py`); quantization = `llmcompressor` in its own environment (its
   `datasets`/`transformers` ranges conflict with ms-swift and vLLM).
 - **Base model** in `/workspace/models` (`model.local_dir`, or `FIDEON_BASE_MODEL_DIR`); a real launch is
   refused when it is configured and absent.
@@ -1044,6 +1048,21 @@ Consequences, all enforced in code:
   built into `ocr_plus_image` rows with blank text.
 - On the pod, `run_mineru`, `render_only` and all three importers run **detached in tmux**
   (`orchestration/detach.py`) — a closed laptop does not stop an OCR batch.
+
+**MinerU engine, wired** (`data_pipeline/ocr/run_mineru.py::MinerUEngine`, MinerU 1.x public API):
+- refuses anything but CUDA; renders page images with the shared renderer (`render_only.render_pdf_pages`)
+  at the configured cap, so OCR'd and image-only documents are the same pixels;
+- `PymuDocDataset(pdf).classify()` picks OCR mode for scans and text mode for a text layer; the result's
+  **content list** becomes **one markdown string per page** (`pages_from_content_list`: headings by
+  `text_level`, tables as MinerU's HTML with captions and footnotes, image captions only, equations as text).
+  MinerU's own `get_markdown` returns one blob per document, which cannot be split back into pages;
+- **table rows are counted in HTML tables** as well as pipe tables (`count_table_rows`) — MinerU 1.x writes
+  HTML, and counting pipe tables alone read every page as row-less, so the row-completeness check never fired;
+- a page MinerU returns nothing for is kept and flagged `ocr_failed`.
+
+Verified here with a stand-in MinerU on a real PDF (`tests/test_mineru_engine.py`); the real library, its model
+weights and GPU output are verified on the pod by the Phase 0 spike (`check_mineru_gpu`). Serving callers that
+supply `page_texts` must produce them with this engine, or the model reads a formatting it never trained on.
 
 ---
 
@@ -1606,6 +1625,11 @@ recorded.
 
 **On the pod** `training.train` and `training.sweep` run detached in tmux like every long job.
 
+**Scopes by line of business** (`training/corpus_view.py`): a scope with `lines` (`personal_lines`) filters the
+one corpus by line as well as type — a row is kept only when all of its lines are in scope (a personal +
+commercial package is not a personal-lines document; a row with no line is outside the scope). Train, val
+(hence checkpoint selection and calibration) and the test count all follow.
+
 ---
 
 # SPEC_07_inference_core
@@ -1805,8 +1829,8 @@ One definition of "matches", applied **consistently in the promotion gate, the t
   per type and per line of business, held-out carriers). `golden.json` is written last per document, so an
   interrupted freeze leaves nothing half-copied;
 - **refused a second time** (the set is the yardstick every version is compared on), and **refused when
-  any type would freeze fewer than 100 documents** unless `--allow-small`: the set cannot grow once frozen,
-  and at ~100 documents a rate near 80% is known to about ±4 points;
+  any type would freeze fewer than 150 documents** (arch §15.4) unless `--allow-small`: the set cannot grow
+  once frozen, and at 150 documents a rate near 80% is known to about ±3 points;
 - after freezing, every corpus build excludes the frozen documents and their families and splits new
   documents into train/val only (SPEC_05).
 
@@ -1833,6 +1857,10 @@ nothing. Images are localised to the pod cache first (vLLM opens paths, the rows
 - field accuracy is **pooled per document reading** (source × mode), then averaged over documents — a
   60-window policy counts once, not 60 times; a window with nothing to score adds nothing;
 - the classifier metric is not applicable while the corpus builds no classify rows (`common.tasks.CORPUS_TASKS`).
+
+**Line-scoped gate**: for a scope narrowed by line of business (`personal_lines`), `evaluate_version` scores
+only the frozen documents whose line is in scope. Double annotation of the frozen documents (arch §15.4)
+remains a manual step before the first production gate.
 
 ---
 
@@ -2250,6 +2278,12 @@ with no recorded hash is warned about.
 
 **Engine**: vLLM `==0.11.0` (the build calibration was fitted with); refuses to start without CUDA; loads the
 merged model, or the base from the pod's local copy.
+
+**Line-scoped releases** (`serving/release_router.py`): a release from a scope narrowed by line records its
+`lines` in the bundle. `ServingPlan.release_for(doc_type, lob)` sends a policy to the narrowest release whose
+lines cover **all** of the request's lines, else to the type's unrestricted release; with only a line-scoped
+release promoted, a policy of another line — or with no `lob` — is **refused** rather than read by a model that
+never trained on its line. A per-type pin cannot route every policy to a line-scoped release.
 
 ---
 
@@ -2816,11 +2850,13 @@ failure that was real:
 |---|---|
 | `test_eval_integrity.py` | invented fields scored wrong; nested tables; per-document pooling; failure-rate refusal; image localisation; calibration features on canonical paths; engine release; carrier normalisation; digit-aware estimate; per-window noise spread |
 | `test_serving_parity.py` | `lob` on the request; page/image pairing; one blank-page text; one pixel budget; **every date field in every LOB schema** formatted; no serving page threshold; prompt hash over every prompt input, refused at cold start |
-| `test_freeze_eval_set.py` | freeze layout the gate reads; refused twice; refused below 100/type without `--allow-small`; a rebuild after freezing trains on none of the eval set or its families |
+| `test_freeze_eval_set.py` | freeze layout the gate reads; refused twice; refused below 150/type without `--allow-small`; a rebuild after freezing trains on none of the eval set or its families |
 | `test_split_by_line.py` | band per type, placement per line; small lines train whole; measured lines reach val and test; bands only raise edges; crossing a band never moves a trained family into evaluation |
 | `test_release_weights.py` | merge refusals; scoped push paths; off-pod refusal; the base found under `/workspace/models` in all three layouts |
 | `test_dependencies.py` | every third-party import installed by some group; requirements files name real groups; the training pod has vLLM |
 | `test_detach.py`, `test_pod_run.py` | on the pod every long entry point detaches; already-safe jobs do not re-detach; every entry point classified; the launcher never stops the pod or a run unasked; LF line endings |
+| `test_personal_lines_scope.py` | a scope narrowed by line: coverage rules, corpus view, golden eval and serving route by line and refuse other lines |
+| `test_mineru_engine.py` | one markdown string per page from MinerU's content list; HTML table rows counted; OCR vs text mode; GPU only |
 | `test_gpu_only.py` | model loaders require CUDA; no `device_map="cpu"`/`"auto"`; OCR refuses CPU; pod detection without `RUNPOD_POD_ID`, and look-alikes rejected |
 
 Contract tests also check that `.env.example` documents every variable the code reads (and nothing it
@@ -2960,7 +2996,7 @@ This is the **minimum experiment that tests the architecture's generalisation cl
   design, rather than being noise.
 - **Alias hold-out** (above) is still done by choosing documents deliberately; it is not automatic — the
   hash split does not know which surface label to hold out.
-- **Freezing a pilot eval set** needs `freeze-eval-set --allow-small`: under 100 test documents per type the
+- **Freezing a pilot eval set** needs `freeze-eval-set --allow-small`: under 150 test documents per type the
   set is directional, and once frozen it is the yardstick for every later version. Prefer to freeze from the
   first build at real scale; if a pilot set is frozen, replacing it later is a deliberate delete-and-refreeze
   after which older scores are not comparable.

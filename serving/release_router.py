@@ -58,36 +58,82 @@ class ServedRelease:
     prompt_hash: str = ""
     ocr_pin: dict[str, Any] = field(default_factory=dict)
     created_at: str = ""
+    #: Lines of business this release serves. Empty = every line.
+    lines: tuple[str, ...] = ()
 
     @property
     def covers(self) -> tuple[str, ...]:
         return self.doc_types or tuple(ACTIVE_DOC_TYPES)
+
+    def covers_lob(self, lob: object) -> bool:
+        """Every line when unrestricted; otherwise all of the document's lines."""
+        if not self.lines:
+            return True
+        from common.scopes import lob_lines
+
+        found = lob_lines(lob)
+        return bool(found) and found <= set(self.lines)
 
     @property
     def breadth(self) -> int:
         return len(self.covers)
 
     def describe(self) -> str:
-        return f"{self.release_id} ({self.scope}) covering {list(self.covers)}"
+        lines = f", lines {list(self.lines)}" if self.lines else ""
+        return f"{self.release_id} ({self.scope}) covering {list(self.covers)}{lines}"
 
 
 @dataclass
 class ServingPlan:
     """What the endpoint serves, per document type."""
 
+    #: The release answering for each type across every line (no line restriction).
     by_doc_type: dict[str, ServedRelease] = field(default_factory=dict)
     releases: dict[str, ServedRelease] = field(default_factory=dict)
 
     @property
+    def line_releases(self) -> list[ServedRelease]:
+        """Promoted releases narrowed by line of business (e.g. personal lines)."""
+        return [r for r in self.releases.values() if r.lines]
+
+    @property
+    def served(self) -> list[ServedRelease]:
+        """Every release this plan can route to, once each."""
+        seen = {r.release_id: r for r in self.by_doc_type.values()}
+        seen.update({r.release_id: r for r in self.line_releases})
+        return list(seen.values())
+
+    @property
     def served_doc_types(self) -> tuple[str, ...]:
-        return tuple(sorted(self.by_doc_type))
+        types = set(self.by_doc_type)
+        types.update(d for r in self.line_releases for d in r.covers)
+        return tuple(sorted(types))
 
     @property
     def unserved_doc_types(self) -> tuple[str, ...]:
-        return tuple(sorted(set(ACTIVE_DOC_TYPES) - set(self.by_doc_type)))
+        return tuple(sorted(set(ACTIVE_DOC_TYPES) - set(self.served_doc_types)))
 
-    def release_for(self, doc_type: str) -> ServedRelease:
-        """The release that answers for this type, or raise."""
+    def release_for(self, doc_type: str, lob: object = None) -> ServedRelease:
+        """The release that answers for this document, or raise.
+
+        A release narrowed by line answers first for a document all of whose lines
+        it covers (the narrowest such, newest on a tie); otherwise the type's
+        unrestricted release. A document no release covers — a type nothing
+        serves, or a line only a line-scoped release could have taken — is refused.
+        """
+        by_line = [r for r in self.line_releases if doc_type in r.covers and r.covers_lob(lob)]
+        if by_line:
+            fewest = min(len(r.lines) for r in by_line)
+            return max((r for r in by_line if len(r.lines) == fewest),
+                       key=lambda r: (r.created_at, r.release_id))
+        if doc_type not in self.by_doc_type and any(doc_type in r.covers for r in self.line_releases):
+            raise UnservedDocType(
+                f"no promoted release serves {doc_type!r} with line of business {lob!r}. The "
+                f"releases for {doc_type!r} cover only "
+                f"{sorted({line for r in self.line_releases for line in r.lines})}; a document of "
+                "another line — or with no line given — would be read by a model that never trained "
+                "on it. Send the policy's `lob`, or promote a release covering that line."
+            )
         try:
             return self.by_doc_type[doc_type]
         except KeyError:
@@ -131,6 +177,7 @@ def _as_release(bundle: dict[str, Any], fmt: str) -> ServedRelease:
         prompt_hash=str(bundle.get("prompt_hash", "")),
         ocr_pin=dict(bundle.get("ocr_pin") or {}),
         created_at=str(bundle.get("created_at", "")),
+        lines=tuple(bundle.get("lines") or ()),
     )
 
 
@@ -169,7 +216,9 @@ def build_serving_plan(
         plan.releases[release_id] = release
 
     for doc_type in ACTIVE_DOC_TYPES:
-        covering = [r for r in plan.releases.values() if doc_type in r.covers]
+        # Line-scoped releases answer only for their lines (release_for); the
+        # type-level choice is among releases that serve every line.
+        covering = [r for r in plan.releases.values() if doc_type in r.covers and not r.lines]
         if covering:
             plan.by_doc_type[doc_type] = _best(covering)
 
@@ -179,6 +228,11 @@ def build_serving_plan(
             raise ServingPlanError(
                 f"routing.release_pins sends {doc_type!r} to {release_id!r}, which is not a "
                 f"promoted release. Promoted: {sorted(plan.releases)}"
+            )
+        if pinned.lines:
+            raise ServingPlanError(
+                f"routing.release_pins sends every {doc_type!r} to {release_id!r}, which serves only "
+                f"lines {list(pinned.lines)}. A per-type pin cannot route other lines to it."
             )
         if doc_type not in pinned.covers:
             raise ServingPlanError(
@@ -205,7 +259,7 @@ def assert_one_base_model(plan: ServingPlan) -> None:
     on different bases cannot be served by one endpoint. Caught here rather than
     as a load failure on the first request routed to the odd one out.
     """
-    bases = {r.base_model for r in plan.by_doc_type.values() if r.base_model}
+    bases = {r.base_model for r in plan.served if r.base_model}
     if len(bases) > 1:
         raise ServingPlanError(
             f"the promoted releases name {len(bases)} different base models ({sorted(bases)}), "

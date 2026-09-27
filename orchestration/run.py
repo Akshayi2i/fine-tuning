@@ -296,7 +296,7 @@ def build_parser() -> argparse.ArgumentParser:
     freeze.add_argument("--tenant", default=None)
     freeze.add_argument(
         "--allow-small", dest="allow_small", action="store_true",
-        help="freeze even when a document type has fewer than 100 test documents (a pilot)",
+        help="freeze even when a document type has fewer than 150 test documents (a pilot)",
     )
 
     return parser

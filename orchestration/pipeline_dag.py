@@ -1696,6 +1696,7 @@ def build_release_bundle(ctx: StageContext) -> tuple[Any, list[str]]:
             # which is what every release written before scopes existed carries —
             # reads as "every active type".
             doc_types=[] if ctx.scope.is_unified else list(ctx.scope.serves),
+            lines=sorted(ctx.scope.lines),
             base_model=f"{base['model_id']}@{base['revision']}",
             adapter=ctx.scope.run_id(ctx.out_version),
             merged_model=paths.merged_model_dir(ctx.out_version, scope=ctx.scope.name),

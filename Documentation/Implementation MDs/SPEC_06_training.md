@@ -194,3 +194,8 @@ the directory itself, a folder named after the model, or a Hugging Face cache sn
 recorded.
 
 **On the pod** `training.train` and `training.sweep` run detached in tmux like every long job.
+
+**Scopes by line of business** (`training/corpus_view.py`): a scope with `lines` (`personal_lines`) filters the
+one corpus by line as well as type — a row is kept only when all of its lines are in scope (a personal +
+commercial package is not a personal-lines document; a row with no line is outside the scope). Train, val
+(hence checkpoint selection and calibration) and the test count all follow.

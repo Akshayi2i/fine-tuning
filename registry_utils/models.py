@@ -417,6 +417,9 @@ class ReleaseBundle(_Base):
     #: release covering it, which is what lets a policy release take policies
     #: while an older unified release keeps the rest.
     doc_types: list[str] = Field(default_factory=list)
+    #: The lines of business this release may serve, for a scope narrowed by
+    #: line (``personal_lines``). Empty means every line — every bundle before.
+    lines: list[str] = Field(default_factory=list)
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
     base_model: str = Field(..., description="Qwen/Qwen3-VL-8B-Instruct@<hf_revision>")

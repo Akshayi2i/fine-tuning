@@ -124,7 +124,7 @@ This is the **minimum experiment that tests the architecture's generalisation cl
   design, rather than being noise.
 - **Alias hold-out** (above) is still done by choosing documents deliberately; it is not automatic — the
   hash split does not know which surface label to hold out.
-- **Freezing a pilot eval set** needs `freeze-eval-set --allow-small`: under 100 test documents per type the
+- **Freezing a pilot eval set** needs `freeze-eval-set --allow-small`: under 150 test documents per type the
   set is directional, and once frozen it is the yardstick for every later version. Prefer to freeze from the
   first build at real scale; if a pilot set is frozen, replacing it later is a deliberate delete-and-refreeze
   after which older scores are not comparable.

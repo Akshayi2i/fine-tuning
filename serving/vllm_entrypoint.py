@@ -104,11 +104,11 @@ class EndpointState:
     plan: Any = None
     ready: bool = False
 
-    def release_for(self, doc_type: str) -> Any:
-        """The release serving this type. Raises ``UnservedDocType``."""
+    def release_for(self, doc_type: str, lob: Any = None) -> Any:
+        """The release serving this document. Raises ``UnservedDocType``."""
         if self.plan is None:
             return None
-        return self.plan.release_for(doc_type)
+        return self.plan.release_for(doc_type, lob)
 
 
 def assert_ocr_pin(corpus_manifest: dict[str, Any]) -> None:
@@ -317,7 +317,9 @@ def assert_prompt_hash(plan: Any) -> None:
     from common.prompts import prompt_hash
 
     current = prompt_hash()
-    releases = {r.release_id: r for r in getattr(plan, "by_doc_type", {}).values()}
+    served = getattr(plan, "served", None)
+    releases = {r.release_id: r for r in (served if served is not None
+                                          else getattr(plan, "by_doc_type", {}).values())}
     for release in releases.values():
         if not release.prompt_hash:
             log.warning(
@@ -452,7 +454,7 @@ def long_doc_types_for(plan: Any) -> tuple[str, ...]:
     if plan is None:
         return ("policy",)
     found: set[str] = set()
-    for release in plan.by_doc_type.values():
+    for release in plan.served:
         try:
             found.update(get_scope(release.scope).long_doc_types)
         except ScopeError:

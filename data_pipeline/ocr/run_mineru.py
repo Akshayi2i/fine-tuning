@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import re
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -64,33 +65,147 @@ class OcrEngine(Protocol):
 
 
 class MinerUEngine:
-    """Real MinerU. Imported lazily so CI needs neither MinerU nor CUDA."""
+    """Real MinerU 1.x (``magic-pdf``). Imported lazily so CI needs neither MinerU nor CUDA.
+
+    MinerU does the reading; this class does the two things around it that the
+    corpus depends on:
+
+    * **one markdown string per page**, built from MinerU's content list
+      (:func:`pages_from_content_list`). MinerU's ``get_markdown`` returns one blob
+      for the whole document, and a joined blob cannot be split back into pages —
+      which is what every training row and serving request is keyed on;
+    * **page images from the shared renderer** (:func:`render_only.render_pdf_pages`)
+      at the configured cap, so an OCR'd document and an image-only one are the
+      same pixels.
+
+    Checked on the pod by the Phase 0 spike (``check_mineru_gpu``): the GPU path,
+    the model weights (``~/magic-pdf.json``) and the formatting of real documents.
+    """
 
     def __init__(self, device: Device = "cuda") -> None:
         self.device = device
 
     def process(self, pdf_bytes: bytes, *, device: Device, max_long_side_px: int) -> list[PageOutput]:
+        if device != "cuda":
+            raise OcrError(f"MinerU runs on the GPU only; device {device!r} is refused")
+        from common.gpu import GPUError, require_cuda
+        from data_pipeline.ocr.render_only import render_pdf_pages
+
         try:
-            from magic_pdf.data.dataset import PymuDocDataset  # noqa: F401
+            require_cuda("MinerU OCR")
+        except GPUError as exc:
+            raise OcrError(str(exc)) from exc
+        try:
+            from magic_pdf.config.enums import SupportedPdfParseMethod
+            from magic_pdf.data.data_reader_writer import FileBasedDataWriter
+            from magic_pdf.data.dataset import PymuDocDataset
+            from magic_pdf.model.doc_analyze_by_custom_model import doc_analyze
         except ImportError as exc:  # pragma: no cover - optional heavy dep
             raise OcrError(
-                "MinerU (magic-pdf) is not installed. It runs on GPU by default (arch §14); "
-                'install the [data] extra and MinerU on the pod: pip install -e ".[data]"'
+                "MinerU 1.x (magic-pdf) is not installed, or its API moved. Install the OCR group "
+                "on the pod: bash scripts/setup_pod.sh ocr (magic-pdf[full]>=1.3,<2), and "
+                "download its model weights (MinerU's download_models_hf.py)."
             ) from exc
-        raise NotImplementedError(
-            "Wire MinerU here once the Phase 0 spike confirms the GPU path, the model-weight "
-            "download, and whether GPU and CPU output differ (mineru_version.compare_devices). "
-            "The interface above is what the rest of the pipeline depends on — keep it stable."
-        )
+
+        images = render_pdf_pages(pdf_bytes, max_long_side_px)
+        import json
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:  # pragma: no cover - needs MinerU and a GPU
+            writer = FileBasedDataWriter(tmp)
+            dataset = PymuDocDataset(pdf_bytes)
+            # A text layer is read as text; a scan is OCR'd. MinerU decides, per
+            # document, from the embedded text — the same call on every document.
+            if dataset.classify() == SupportedPdfParseMethod.OCR:
+                piped = dataset.apply(doc_analyze, ocr=True).pipe_ocr_mode(writer)
+            else:
+                piped = dataset.apply(doc_analyze, ocr=False).pipe_txt_mode(writer)
+            content = piped.get_content_list(tmp)
+            if isinstance(content, str):
+                content = json.loads(content)
+
+        texts = pages_from_content_list(content, len(images))
+        return [
+            PageOutput(
+                page_number=index + 1,
+                markdown=text,
+                image_bytes=image,
+                table_row_count=count_table_rows(text),
+                # A page MinerU returned nothing for: kept (its image still
+                # counts), flagged, and built with the blank-page placeholder.
+                ocr_failed=not text.strip(),
+            )
+            for index, (text, image) in enumerate(zip(texts, images, strict=True))
+        ]
+
+
+def pages_from_content_list(blocks: Iterable[dict[str, Any]], page_count: int) -> list[str]:
+    """MinerU's content list as one markdown string per page, in reading order.
+
+    MinerU emits blocks (``text``, ``table``, ``image``, ``equation``) each tagged
+    with its 0-based ``page_idx``. Rendered here the same way for every document,
+    so training rows and serving requests see one formatting:
+
+    * text — a heading gets ``#`` per ``text_level``, body text as is;
+    * table — captions, then the table as MinerU gives it (HTML), then footnotes;
+    * image — its captions and footnotes only (the picture is in the page image);
+    * equation — its text (LaTeX).
+    """
+    pages: list[list[str]] = [[] for _ in range(page_count)]
+    for block in blocks:
+        index = block.get("page_idx")
+        if not isinstance(index, int) or not 0 <= index < page_count:
+            continue
+        kind = block.get("type")
+        parts: list[str] = []
+        if kind == "text":
+            text = str(block.get("text") or "").strip()
+            level = block.get("text_level")
+            if text and isinstance(level, int) and level > 0:
+                text = "#" * min(level, 6) + " " + text
+            parts.append(text)
+        elif kind == "table":
+            parts += [str(c).strip() for c in block.get("table_caption") or []]
+            parts.append(str(block.get("table_body") or "").strip())
+            parts += [str(f).strip() for f in block.get("table_footnote") or []]
+        elif kind == "image":
+            parts += [str(c).strip() for c in block.get("img_caption") or []]
+            parts += [str(f).strip() for f in block.get("img_footnote") or []]
+        else:
+            parts.append(str(block.get("text") or "").strip())
+        pages[index] += [part for part in parts if part]
+    return ["\n\n".join(parts) for parts in pages]
 
 
 def count_table_rows(markdown: str) -> int:
-    """Count markdown table body rows.
+    """Count table body rows — markdown pipe tables and MinerU's HTML tables.
 
     Consumed by the list-completeness cross-check (SPEC_09): if the model extracts
     six claims from a page MinerU saw eight rows on, that is a recall failure the
     per-field confidence cannot see, because the missing rows generate no tokens.
+
+    MinerU 1.x writes tables as HTML. Counting pipe tables alone read every
+    MinerU page as having no rows, and the row-completeness signal never fired.
     """
+    return _count_pipe_rows(markdown) + _count_html_rows(markdown)
+
+
+_TABLE = re.compile(r"<table\b.*?</table>", re.IGNORECASE | re.DOTALL)
+_ROW = re.compile(r"<tr\b.*?</tr>", re.IGNORECASE | re.DOTALL)
+
+
+def _count_html_rows(text: str) -> int:
+    """Body rows of every HTML table: rows holding a ``<th>`` are headers; a table
+    with none treats its first row as the header, as a pipe table does."""
+    rows = 0
+    for table in _TABLE.findall(text):
+        found = _ROW.findall(table)
+        headers = sum(1 for row in found if re.search(r"<th\b", row, re.IGNORECASE))
+        rows += max(0, len(found) - (headers or (1 if found else 0)))
+    return rows
+
+
+def _count_pipe_rows(markdown: str) -> int:
     rows = 0
     tables = 0
     in_table = False

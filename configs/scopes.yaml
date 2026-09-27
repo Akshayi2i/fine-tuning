@@ -79,3 +79,19 @@ scopes:
     training_config: unified
     long_doc_types: []
     not_applicable_metrics: [page_selection_recall]
+
+  # Personal lines (the LOB enum's personal lines, plus flood): a policy-only
+  # scope narrowed by line of business. Its corpus view, validation, golden eval
+  # and serving all keep to these lines; a policy of any other line - or with no
+  # recorded line - is refused by its release rather than extracted by a model
+  # that never trained on it. A package policy mixing a personal and a commercial
+  # line is outside the scope.
+  personal_lines:
+    lineage: personal_lines
+    doc_types: [policy]
+    lines: [homeowners, personal_auto, dwelling_fire, ocean_marine, classic_auto,
+            motorcycle, recreational_vehicle, personal_umbrella, flood]
+    tasks: [extract, policy_declarations, policy_schedule, policy_endorsements]
+    training_config: unified
+    long_doc_types: [policy]
+    not_applicable_metrics: [lossrun_totals_reconciliation_rate]

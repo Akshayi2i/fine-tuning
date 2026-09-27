@@ -100,11 +100,13 @@ failure that was real:
 |---|---|
 | `test_eval_integrity.py` | invented fields scored wrong; nested tables; per-document pooling; failure-rate refusal; image localisation; calibration features on canonical paths; engine release; carrier normalisation; digit-aware estimate; per-window noise spread |
 | `test_serving_parity.py` | `lob` on the request; page/image pairing; one blank-page text; one pixel budget; **every date field in every LOB schema** formatted; no serving page threshold; prompt hash over every prompt input, refused at cold start |
-| `test_freeze_eval_set.py` | freeze layout the gate reads; refused twice; refused below 100/type without `--allow-small`; a rebuild after freezing trains on none of the eval set or its families |
+| `test_freeze_eval_set.py` | freeze layout the gate reads; refused twice; refused below 150/type without `--allow-small`; a rebuild after freezing trains on none of the eval set or its families |
 | `test_split_by_line.py` | band per type, placement per line; small lines train whole; measured lines reach val and test; bands only raise edges; crossing a band never moves a trained family into evaluation |
 | `test_release_weights.py` | merge refusals; scoped push paths; off-pod refusal; the base found under `/workspace/models` in all three layouts |
 | `test_dependencies.py` | every third-party import installed by some group; requirements files name real groups; the training pod has vLLM |
 | `test_detach.py`, `test_pod_run.py` | on the pod every long entry point detaches; already-safe jobs do not re-detach; every entry point classified; the launcher never stops the pod or a run unasked; LF line endings |
+| `test_personal_lines_scope.py` | a scope narrowed by line: coverage rules, corpus view, golden eval and serving route by line and refuse other lines |
+| `test_mineru_engine.py` | one markdown string per page from MinerU's content list; HTML table rows counted; OCR vs text mode; GPU only |
 | `test_gpu_only.py` | model loaders require CUDA; no `device_map="cpu"`/`"auto"`; OCR refuses CPU; pod detection without `RUNPOD_POD_ID`, and look-alikes rejected |
 
 Contract tests also check that `.env.example` documents every variable the code reads (and nothing it

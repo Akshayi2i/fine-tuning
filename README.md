@@ -139,11 +139,22 @@ Create it once, from the first real corpus build:
 python -m orchestration.run freeze-eval-set --corpus v1
 ```
 
-It copies that corpus's test split (labels, metadata, page images, OCR) into the
+It refuses fewer than 150 test documents per type (arch §15.4) unless `--allow-small`. It copies that corpus's test split (labels, metadata, page images, OCR) into the
 frozen set and records `manifest.json`. From then on every corpus build leaves the
 frozen documents and their families out, and splits new documents into train
 and val only. Freezing again is refused; replacing the set is a deliberate delete
 followed by a new freeze, after which older scores are not comparable.
+
+## Scopes
+
+A training run covers a **scope** (`configs/scopes.yaml`): `unified` (every type), `policy`, `lossrun`, and
+`personal_lines` — policies of homeowners, personal auto, dwelling fire, ocean marine, classic auto,
+motorcycle, recreational vehicle, personal umbrella and flood. A line-scoped release answers only for its
+lines; a policy request must carry its `lob` to reach it.
+
+```bash
+python -m orchestration.run finetune --scope personal_lines --corpus-version v1 --out-version v1
+```
 
 ## Build status
 
@@ -191,7 +202,7 @@ the reason and what unblocks it. They are the whole of what Phase 0 gates.
 
 | Where | Waiting on |
 |---|---|
-| `data_pipeline/ocr/run_mineru.py` (`MinerUEngine.process`) | **not wired**: MinerU on CUDA, confirmed by the Phase 0 spike. The OCR stage cannot run until it is |
+| `data_pipeline/ocr/run_mineru.py` (`MinerUEngine`, written against MinerU 1.x) | the Phase 0 spike running it on the GPU with MinerU's model weights |
 | `postprocessing/quantize.py` (FP8/AWQ export, GGUF export) | llm-compressor in its own environment; FP8 verified by the spike (bf16 needs no export) |
 | `artifact_registry/transfer.py` (`pull_base_model` from the Hub) | not needed on the pod: the base is read from `/workspace/models` |
 | `orchestration/runpod_controller.py` (`RunPodBackend`, endpoint deploy) | `RUNPOD_API_KEY` and the network volume; until then jobs run on the pod in tmux |

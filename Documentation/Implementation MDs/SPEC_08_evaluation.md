@@ -105,8 +105,8 @@ One definition of "matches", applied **consistently in the promotion gate, the t
   per type and per line of business, held-out carriers). `golden.json` is written last per document, so an
   interrupted freeze leaves nothing half-copied;
 - **refused a second time** (the set is the yardstick every version is compared on), and **refused when
-  any type would freeze fewer than 100 documents** unless `--allow-small`: the set cannot grow once frozen,
-  and at ~100 documents a rate near 80% is known to about ±4 points;
+  any type would freeze fewer than 150 documents** (arch §15.4) unless `--allow-small`: the set cannot grow
+  once frozen, and at 150 documents a rate near 80% is known to about ±3 points;
 - after freezing, every corpus build excludes the frozen documents and their families and splits new
   documents into train/val only (SPEC_05).
 
@@ -133,3 +133,7 @@ nothing. Images are localised to the pod cache first (vLLM opens paths, the rows
 - field accuracy is **pooled per document reading** (source × mode), then averaged over documents — a
   60-window policy counts once, not 60 times; a window with nothing to score adds nothing;
 - the classifier metric is not applicable while the corpus builds no classify rows (`common.tasks.CORPUS_TASKS`).
+
+**Line-scoped gate**: for a scope narrowed by line of business (`personal_lines`), `evaluate_version` scores
+only the frozen documents whose line is in scope. Double annotation of the frozen documents (arch §15.4)
+remains a manual step before the first production gate.

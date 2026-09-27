@@ -39,11 +39,12 @@ class FreezeError(RuntimeError):
     """Raised when the eval set cannot be frozen."""
 
 
-#: The smallest frozen set per document type worth making permanent. About 100
-#: documents is where a rate near 80% is known to roughly ±4 points (one standard
-#: error: sqrt(0.8 * 0.2 / 100)); below it the gate cannot tell a regression of a
-#: few points from noise, and the set cannot grow once frozen.
-MIN_FROZEN_DOCS_PER_TYPE = 100
+#: The smallest frozen set per document type worth making permanent — the
+#: production target of arch v2.1 §15.4 (≥ 150 per type). At 150 documents a rate
+#: near 80% is known to about ±3 points (one standard error: sqrt(0.8·0.2/150));
+#: below it the gate cannot tell a regression of a few points from noise, and the
+#: set cannot grow once frozen.
+MIN_FROZEN_DOCS_PER_TYPE = 150
 
 
 def manifest_key() -> str:

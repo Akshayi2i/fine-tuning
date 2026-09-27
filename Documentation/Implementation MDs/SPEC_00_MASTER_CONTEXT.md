@@ -548,9 +548,13 @@ What the build does now that the sections above did not describe. Each module sp
 - Group-level split, band per type, placement **per line of business**; lines under 5 documents train
   whole; crossing a band only moves groups toward train (§10).
 - **The golden eval set is frozen once** from a corpus build's test split
-  (`python -m orchestration.run freeze-eval-set --corpus vN`); refused twice, and refused below 100 test
-  documents per type unless `--allow-small`. Later builds exclude its documents and their families and
+  (`python -m orchestration.run freeze-eval-set --corpus vN`); refused twice, and refused below 150 test
+  documents per type (arch §15.4) unless `--allow-small`. Later builds exclude its documents and their families and
   split new documents into train/val only.
+- **Scopes by line of business**: `personal_lines` (`configs/scopes.yaml`) is a policy-only scope limited to
+  homeowners, personal auto, dwelling fire, ocean marine, classic auto, motorcycle, recreational vehicle,
+  personal umbrella and flood. Its corpus view, validation, golden eval and serving keep to those lines; a
+  policy of another line, or with no `lob`, is refused by its release.
 - Render-only and zero-page documents are skipped from training; a build with no train rows is refused,
   and a real build with no val rows, or no test rows while the eval set is not yet frozen.
 
@@ -567,7 +571,7 @@ What the build does now that the sections above did not describe. Each module sp
 - **Dependencies** (`pyproject.toml` groups; `requirements-*.txt` per pod; `scripts/setup_pod.sh <role>`):
   training pod = ms-swift 3.x + torch 2.8 + **vLLM 0.11.0** (checkpoint selection and calibration run vLLM
   in the same process) + flash-attn built against that torch; serving pod = the same **vLLM 0.11.0**;
-  OCR pod = MinerU 1.x (`magic-pdf[full]`); quantization = `llmcompressor` in its own environment (its
+  OCR pod = MinerU 1.x (`magic-pdf[full]`, wired in `data_pipeline/ocr/run_mineru.py`); quantization = `llmcompressor` in its own environment (its
   `datasets`/`transformers` ranges conflict with ms-swift and vLLM).
 - **Base model** in `/workspace/models` (`model.local_dir`, or `FIDEON_BASE_MODEL_DIR`); a real launch is
   refused when it is configured and absent.

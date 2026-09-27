@@ -578,7 +578,7 @@ def extract(
         from serving.release_router import UnservedDocType
 
         try:
-            plan.release_for(route_.doc_type)
+            plan.release_for(route_.doc_type, request.known_lob)
         except UnservedDocType as exc:
             raise PipelineError(str(exc)) from exc
 

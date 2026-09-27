@@ -108,3 +108,18 @@ Consequences, all enforced in code:
   built into `ocr_plus_image` rows with blank text.
 - On the pod, `run_mineru`, `render_only` and all three importers run **detached in tmux**
   (`orchestration/detach.py`) — a closed laptop does not stop an OCR batch.
+
+**MinerU engine, wired** (`data_pipeline/ocr/run_mineru.py::MinerUEngine`, MinerU 1.x public API):
+- refuses anything but CUDA; renders page images with the shared renderer (`render_only.render_pdf_pages`)
+  at the configured cap, so OCR'd and image-only documents are the same pixels;
+- `PymuDocDataset(pdf).classify()` picks OCR mode for scans and text mode for a text layer; the result's
+  **content list** becomes **one markdown string per page** (`pages_from_content_list`: headings by
+  `text_level`, tables as MinerU's HTML with captions and footnotes, image captions only, equations as text).
+  MinerU's own `get_markdown` returns one blob per document, which cannot be split back into pages;
+- **table rows are counted in HTML tables** as well as pipe tables (`count_table_rows`) — MinerU 1.x writes
+  HTML, and counting pipe tables alone read every page as row-less, so the row-completeness check never fired;
+- a page MinerU returns nothing for is kept and flagged `ocr_failed`.
+
+Verified here with a stand-in MinerU on a real PDF (`tests/test_mineru_engine.py`); the real library, its model
+weights and GPU output are verified on the pod by the Phase 0 spike (`check_mineru_gpu`). Serving callers that
+supply `page_texts` must produce them with this engine, or the model reads a formatting it never trained on.

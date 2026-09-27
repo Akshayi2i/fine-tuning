@@ -81,6 +81,11 @@ class Scope:
     #: vocabulary, so routing a Loss Run through them only wastes a pass.
     long_doc_types: tuple[str, ...] = ()
 
+    #: The lines of business this scope covers, as canonical schema names
+    #: (``homeowners``, ``wc``). Empty means every line. Only a policy-only scope
+    #: can narrow by line: the line is a policy's, read from its metadata.
+    lines: frozenset[str] = frozenset()
+
     @property
     def is_unified(self) -> bool:
         return self.name == UNIFIED
@@ -103,6 +108,20 @@ class Scope:
     def covers(self, doc_type: str) -> bool:
         return doc_type in self.serves
 
+    def covers_lob(self, lob: object) -> bool:
+        """Whether a document with this line of business belongs to the scope.
+
+        Every scope without ``lines`` covers every line. A line-scoped one covers
+        a document only when ALL its lines are in scope: a package policy with
+        one personal and one commercial line is not a personal-lines document.
+        A document with no recorded line is outside a line-scoped scope — its
+        line cannot be shown to be one the model trained on.
+        """
+        if not self.lines:
+            return True
+        found = lob_lines(lob)
+        return bool(found) and found <= self.lines
+
     def describe(self) -> str:
         return (
             f"scope {self.name}: {len(self.doc_types)} doc type(s) "
@@ -119,12 +138,39 @@ class Scope:
             "training_config": self.training_config,
             "serves": list(self.serves),
             "not_applicable_metrics": sorted(self.not_applicable_metrics),
+            "lines": sorted(self.lines),
         }
 
 
 # --------------------------------------------------------------------------
 # Structural not-applicable
 # --------------------------------------------------------------------------
+
+
+def lob_lines(lob: object) -> frozenset[str]:
+    """A document's line(s) of business as canonical schema names.
+
+    Accepts the enum spelling or the schema name (``workers_comp`` and ``wc`` are
+    one line), one line or a list of them.
+    """
+    from common.schemas import LOB_SCHEMA_ALIASES
+
+    if lob is None:
+        return frozenset()
+    values = [lob] if isinstance(lob, str) else list(lob) if isinstance(lob, (list, tuple)) else []
+    out = set()
+    for value in values:
+        line = str(value).strip().lower()
+        if line:
+            out.add(LOB_SCHEMA_ALIASES.get(line, line))
+    return frozenset(out)
+
+
+def known_lines() -> frozenset[str]:
+    """Every line with a canonical policy schema of its own."""
+    from common.schemas import schema_selectors
+
+    return frozenset(q for doc_type, _f, q in schema_selectors() if doc_type == "policy" and q)
 
 
 def structural_not_applicable(scope: Scope) -> frozenset[str]:
@@ -251,7 +297,21 @@ def _build(name: str, body: dict[str, Any]) -> Scope:
             str(m) for m in body.get("not_applicable_metrics") or ()
         ),
         long_doc_types=tuple(str(d).strip().lower() for d in body.get("long_doc_types") or ()),
+        lines=lob_lines(body.get("lines") or ()),
     )
+
+    if scope.lines:
+        if doc_types != ("policy",):
+            raise ScopeError(
+                f"scope {name!r} narrows by line of business but trains {list(doc_types)}. A line "
+                "is a policy's (from its metadata); ACORD forms and Loss Runs carry none to filter on."
+            )
+        unknown_lines = sorted(scope.lines - known_lines())
+        if unknown_lines:
+            raise ScopeError(
+                f"scope {name!r} names lines {unknown_lines} with no canonical policy schema. "
+                f"Known lines: {sorted(known_lines())}"
+            )
 
     over_declared = sorted(scope.not_applicable_metrics - structural_not_applicable(scope))
     if over_declared:
