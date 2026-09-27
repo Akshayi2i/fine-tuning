@@ -9,6 +9,25 @@
 
 ---
 
+## 0. Reconciliation with this repository (added 2026-09-27)
+
+This document is the Fideon pipeline's own training spec, kept here for re-checking. It is **not** the
+design this repository implements, and it has deliberately not been rewritten to match — below is where the
+two differ, so neither is misread as the other.
+
+| Topic | This spec | This repository (`Documentation/Implementation MDs/SPEC_00` §13) |
+|---|---|---|
+| Adapters | 8: three task-level + five policy LOB-group adapters, hot-swapped | ONE unified LoRA (rank 64/alpha 128), or one per **scope** (`configs/scopes.yaml`: `unified`, `policy`, `lossrun`); per-type adapters only through the §4.2 graduation gate |
+| Personal lines | `policy_check_personal_lines_v1` (Home, Personal Auto, Dwelling Fire, Watercraft) | No personal-lines scope yet; it would be a scope filtered by line of business — the split already places documents per line |
+| Routing key | `layout_family` stamped on the DocumentEnvelope | `doc_type` (+ `acord_form`), and for policies the request's `lob`, which selects the line's canonical schema |
+| Trainer | transformers/peft/**trl** script | **ms-swift 3** (`swift sft`), its own `Seq2SeqTrainer`; TRL is not the SFT loop |
+| LoRA targets | q/v_proj (task) or all-linear (policy) | q/k/v/o and gate/up/down projections of the decoder; ViT and mergers frozen |
+| Output | canonical schemas, FSM/Outlines at inference | the client's canonical LOB JSON (FieldValue envelopes, dates `MM/DD/YYYY`), vLLM structured decoding; long policies as section × page windows |
+| Promotion gate | fixed `field_f1 ≥ 0.92` per adapter | absolute floors + paired-bootstrap non-inferiority vs production on the **frozen golden eval set**, run through the serving pipeline; a recorded written override is the only exception |
+| Storage | `/models/base`, `/models/lora`, DVC + S3 | base in `/workspace/models`; adapters, merged and quantized models in Azure Blob; staging on the RunPod volume |
+| Split | holdout set | family-level split, band by volume per type, placed per line of business; test frozen once into the golden eval set |
+| Runtime | — | GPU only; every long job on the pod runs detached in tmux |
+
 ## 1. Purpose
 
 Each LoRA adapter specialises Qwen3-VL-8B-Instruct on one insurance extraction task.

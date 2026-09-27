@@ -29,11 +29,11 @@ For each PDF from a local folder or source location:
 
 ### 3. `data_pipeline/ocr/run_mineru.py`
 Batch-process documents from `raw-documents/` (or a passed list of source_ids):
-- Run **MinerU on GPU** to produce per-page markdown/text. GPU is the **default execution mode** (arch §14): layout detection, table/formula recognition and the OCR models are GPU-bound, and the CPU path falls back to lighter model variants that are both slower and less accurate. The device is configurable (`--device cuda|cpu`) and is **recorded**, never assumed.
+- Run **MinerU on GPU** to produce per-page markdown/text. GPU is the **only** execution mode (arch §14): layout detection, table/formula recognition and the OCR models are GPU-bound, and the CPU path falls back to lighter model variants that are both slower and less accurate. `cpu` is refused (`mineru_version.resolve_device`), and the device is **recorded** in `ocr_meta.json`, never assumed.
 - Render each page to PNG at the **resolution cap from `configs/base_model.yaml`** — identical in training data prep and production inference. This consistency is mandatory (arch §11): image token count is a direct function of page resolution and is the single biggest cost/latency lever.
 - Write `processed/{tenant_id}/{doc_type}/{source_id}/page_{n}.md` and `page_{n}.png`.
 - **Preserve page order explicitly** — Interleaved-MRoPE means multi-page ordering is positionally meaningful (arch §3). Page numbering must be stable and 1-based.
-- Write per-doc `ocr_meta.json`: page count, **`mineru_version`**, **`ocr_device`** (`cuda` | `cpu`), **`preprocessing_date`** (ISO 8601, arch §8a), resolution cap used, per-page OCR failure/low-confidence flags, and **detected table row counts per page** (consumed by the list-completeness signal in SPEC_09).
+- Write per-doc `ocr_meta.json`: page count, **`mineru_version`**, **`ocr_device`** (`cuda`; `cpu` appears only on corpora predating the GPU-only rule), **`preprocessing_date`** (ISO 8601, arch §8a), resolution cap used, per-page OCR failure/low-confidence flags, and **detected table row counts per page** (consumed by the list-completeness signal in SPEC_09).
 - Idempotent — skip if processed output exists, the source checksum is unchanged, **and** the MinerU version and device match; a change to either forces reprocessing.
 - Make MinerU invocation configurable (subprocess or library call); keep the interface swappable.
 - CLI: `--source-ids ... | --all-unprocessed`, `--doc-type`, `--force-reprocess`.
@@ -93,3 +93,18 @@ Consequences, all enforced in code:
 - [ ] Running `render_only` over an **already-OCR'd** document re-renders its images but **preserves the OCR metadata** — `table_row_counts` survives and the document is not relabelled `render_only`. Overwriting it silently switched off the SPEC_09 detected-row cross-check while the `page_*.md` files still sat there.
 - [ ] `find_unprocessed` applies the same render-only test `process_document` does. Counting a render-only `ocr_meta.json` as done filtered the document out of `--all-unprocessed`, so it was never OCR'd and the CLI reported nothing to do.
 - [ ] The `_reprocessed` marker is added to the **returned** metadata only, never written to Blob — persisting it made the skip path read it straight back, so `process_batch` reported every skipped document as processed.
+
+---
+
+## Current implementation (2026-09-27)
+
+- **MinerU 1.x**, installed by the `ocr` dependency group as `magic-pdf[full]>=1.3,<2` — the code imports
+  `magic_pdf` and records the `magic-pdf` version, and MinerU 2.x renamed the package. Model weights are a
+  separate download (MinerU's `download_models_hf.py`); `setup_pod.sh ocr` prints the step.
+- **GPU only**, with no CPU option (see the GPU section above and `common/gpu.py` for the same rule on every
+  other model step).
+- **Render-only documents** (`ocr_meta.render_only: true`, rendered for labeling without OCR) and documents
+  whose meta records **no pages** are skipped by the corpus build with a logged reason; they are never
+  built into `ocr_plus_image` rows with blank text.
+- On the pod, `run_mineru`, `render_only` and all three importers run **detached in tmux**
+  (`orchestration/detach.py`) — a closed laptop does not stop an OCR batch.

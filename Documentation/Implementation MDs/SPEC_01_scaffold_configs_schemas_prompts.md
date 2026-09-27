@@ -12,13 +12,13 @@ Scaffold the `insurance-extraction-finetuning` repo and create every config file
 
 ### 1. Repo root
 - `README.md` — project overview, setup steps, how to run each pipeline stage (stub with section headings + the module map from master §5). State prominently that this repo implements the **L3 VLM layer** of the Fideon pipeline and that its output schema is owned by **Fideon SPEC_00** (master §1.1).
-- `pyproject.toml` — Python 3.11+, dependencies grouped by extra: `[data]` (azure-storage-blob, pypdf, pillow, python-dotenv, pydantic), `[train]` (ms-swift, transformers, peft, bitsandbytes, accelerate, deepspeed, trl, flash-attn), `[serve]` (vllm), `[eval]` (numpy, scikit-learn, jsonschema), `[track]` (mlflow or wandb), `[dev]` (pytest, ruff, mypy). Pin major versions; comment that exact versions are verified at implementation time.
-- `requirements.txt` — generated equivalent for pip installs on RunPod.
-- `.env.example` — every required env var with placeholder: `AZURE_STORAGE_CONNECTION_STRING`, `AZURE_BLOB_CONTAINER`, `AZURE_RAW_CONTAINER` (separately-permissioned raw-documents container, master §8), `RUNPOD_API_KEY`, `RUNPOD_ENDPOINT_ID`, `RUNPOD_VOLUME_ID`, `RUNPOD_VOLUME_MOUNT` (default `/runpod-volume`, the staging volume — master §12a), `HF_TOKEN`, `HF_MODEL_REVISION`, `MLFLOW_TRACKING_URI` / `WANDB_API_KEY` (optional), `DEFAULT_TENANT_ID` (single-tenant default), `ALLOW_EXTERNAL_PREANNOTATION` (default `false`), plus any external-endpoint URLs. Comment each.
+- `pyproject.toml` — Python 3.11+. **The only place versions are declared**, in dependency groups: `[data]`, `[ocr]` (MinerU 1.x), `[train]`, `[serve]`, `[quantize]`, `[eval]`, `[track]`, `[dev]`. See *Current implementation* below for the pinned versions and why each group is separate.
+- `requirements.txt` and `requirements-{ocr,train,serve,quantize}.txt` — one per machine, each only `-e .[groups]`: they choose groups, never versions. Installed on a pod by `scripts/setup_pod.sh <role>`.
+- `.env.example` — every required env var with placeholder: `AZURE_STORAGE_CONNECTION_STRING`, `AZURE_BLOB_CONTAINER`, `AZURE_RAW_CONTAINER` (separately-permissioned raw-documents container, master §8), `RUNPOD_API_KEY`, `RUNPOD_ENDPOINT_ID`, `RUNPOD_VOLUME_ID`, `RUNPOD_VOLUME_MOUNT` (default `/runpod-volume`, the staging volume — master §12a), `HF_TOKEN`, `HF_MODEL_REVISION`, `MLFLOW_TRACKING_URI` / `WANDB_API_KEY` (optional), `DEFAULT_TENANT_ID` (single-tenant default), `ALLOW_EXTERNAL_PREANNOTATION` (default `false`), `FIDEON_BASE_MODEL_DIR` (overrides the local base-model directory), `FIDEON_ALLOW_OFF_POD` (train on a non-RunPod GPU host), `FIDEON_NO_DETACH` (run one command in the foreground on the pod), plus any external-endpoint URLs. Comment each. `tests/test_repo_contracts.py` fails when the code reads a variable the template does not list, or the template lists one nothing reads.
 - `.gitignore` — Python, `.env`, model weights, `*.pdf`, `results/`, `metrics/`, `ocr_cache/`, `calibration_store/`, `__pycache__`.
 
 ### 2. `configs/`
-- **`base_model.yaml`** — `model_id: Qwen/Qwen3-VL-8B-Instruct`, `revision: <pin>`, quantization block (**`load_in_4bit: false` by default — the base is held in bf16**; the `bnb_4bit_*` keys stay populated so flipping the flag on a VRAM-constrained pod needs no other edit, and are read only when it is true, per arch §9.2), `attn_implementation: flash_attention_2`, resolution cap (`max_image_long_side_px: 1792`, valid range 1536–2048 per arch §11), `max_seq_len` (comment: **set from the 95th-percentile token count measured on the real corpus**, not guessed).
+- **`base_model.yaml`** — `model_id: Qwen/Qwen3-VL-8B-Instruct`, `revision: <pin>`, **`local_dir: /workspace/models`** (where the pod keeps the weights; every loader reads them from there), quantization block (**`load_in_4bit: false` by default — the base is held in bf16**; the `bnb_4bit_*` keys stay populated so flipping the flag on a VRAM-constrained pod needs no other edit, and are read only when it is true, per arch §9.2), `attn_implementation: flash_attention_2`, resolution cap (`max_image_long_side_px: 1792`, valid range 1536–2048 per arch §11), `max_seq_len` (comment: **set from the 95th-percentile token count measured on the real corpus**, not guessed).
 - **`configs/training/foundation.yaml`** — the full parameter set from arch §11, not just the summary:
   - LoRA: rank 64, alpha 128, dropout 0.05, `bias: none`, target modules from master §2.
   - Optimization: LR `2e-4` (range 1e-4–2e-4), cosine schedule, warmup ratio 0.03–0.05, epochs 3 (range 2–3), **optimizer AdamW paged 8-bit**, β₁ 0.9, β₂ 0.999, ε 1e-8, weight decay 0.01, max grad norm 1.0.
@@ -34,7 +34,7 @@ Scaffold the `insurance-extraction-finetuning` repo and create every config file
   - `phase3_rank.yaml` — Foundation rank `{32, 64, 128}`; **secondary, not run by default** — only if F1 plateaus.
   - Comment the total budget: **~9–12 training runs before the first production run**, and that **every sweep run writes a full run manifest** (SPEC_02) so sweeps are first-class registry entries, not untracked side experiments.
 - **`configs/deepspeed/zero2.json`** and **`zero3.json`** — ZeRO-2 default, ZeRO-3 for VRAM-constrained multi-GPU.
-- **`configs/inference/vllm_serving.yaml`** — resolution cap (**must match `base_model.yaml`**), max_seq_len, adapter routing map (doc_type → adapter path), `enable_logprobs: true`, served model tag, classifier confidence threshold, **review confidence threshold (default 0.7, arch §5)**, long-document page-count threshold (default `>5` pages, arch §7).
+- **`configs/inference/vllm_serving.yaml`** — resolution cap (**must match `base_model.yaml`**), max_seq_len, adapter routing map (doc_type → adapter path), `enable_logprobs: true`, served model tag, classifier confidence threshold, **review confidence threshold (default 0.7, arch §5)**. The long-document page threshold is **not** set here any more: it is `common.constants.DEFAULT_LONG_DOC_PAGE_THRESHOLD`, the value the corpus build planned its training windows with, so serving cannot drift from training.
 
 ### 3. `schemas/` — JSON Schemas (Draft 2020-12)
 
@@ -155,3 +155,34 @@ Each schema must be loadable by `jsonschema` and validate a correct example. Inc
 - [ ] `configs/inference/vllm_serving.yaml` resolution cap equals `configs/base_model.yaml` — assert this in a test.
 - [ ] `.env.example` lists every env var used anywhere in the design.
 - [ ] `ruff` and `mypy` pass on `common/`.
+
+---
+
+## Current implementation (2026-09-27)
+
+**Dependencies** (`pyproject.toml`; resolved for Linux with `uv` — the resolver found three failures that
+would have broken the pods, fixed below):
+
+| Group | Holds | Why separate |
+|---|---|---|
+| `data` | azure-storage-blob, pypdf, pillow, PyMuPDF | Blob and page rendering, everywhere |
+| `ocr` | `magic-pdf[full]>=1.3,<2` | MinerU 1.x: the code imports `magic_pdf`, which 2.x removed |
+| `train` | torch `>=2.8,<2.9`, transformers `>=4.57`, peft, bitsandbytes, accelerate, deepspeed, ms-swift `>=3.9,<4`, qwen-vl-utils | torch pinned to the minor vLLM 0.11 pins: the training pod also runs vLLM |
+| `serve` | vLLM `==0.11.0`, transformers `>=4.57` | exact, and the same on both pods: calibration is fitted on the training pod's vLLM |
+| `quantize` | `llmcompressor>=0.8` (its PyPI name) | needs datasets `>=4` (ms-swift 3 needs `<4`) and a transformers range vLLM 0.11 excludes: its own environment |
+| `eval`, `track`, `dev` | numpy/scikit-learn, mlflow, pytest/ruff/mypy/pyarrow | |
+
+flash-attn is in no group: it must be built against the installed torch with `--no-build-isolation`,
+which `scripts/setup_pod.sh train` does as a second step. `tests/test_dependencies.py` fails when the code
+imports a package no group installs (MinerU was exactly that), or a requirements file names an unknown group.
+
+**Pod roles** (`scripts/setup_pod.sh ocr|train|serve|quantize|dev`): installs in order, builds flash-attn,
+installs tmux, checks every expected package and that torch sees CUDA. On the pod it runs itself in tmux.
+
+**Vision budget** (`configs/shared/vision.yaml`): budgets are whole 32×32 visual tokens — `max_pixels`
+`2483200` (was `2483712`, a Qwen2.5 28×28 figure that made `MAX_PIXELS` and `IMAGE_MAX_TOKEN_NUM` name
+different budgets). `common.config.pixel_budget()` is the one source for the trainer's env and the vLLM
+engine's `mm_processor_kwargs`, and refuses a non-multiple.
+
+**Section map** (`configs/schema_sections.yaml`): the policy section groups (decl, arrays, lineblk, dtd),
+their page rules and identifying keys, read by the window planner in training and serving.

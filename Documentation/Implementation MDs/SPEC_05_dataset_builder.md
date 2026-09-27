@@ -35,13 +35,13 @@ Until resolved: the corpus manifest records `deidentified: false` and `image_red
 - **Not yet computed:** the page-1 layout perceptual hash. No image-hash dependency is installed, so same-template documents with different text group only through a declared `template_id`.
 - Ratio scales with per-type volume (arch §8), configurable, seeded, logged:
 
-| Volume per doc type | Split | Note |
+| Volume per doc type | Train / Val / Test | Note |
 |---|---|---|
-| Pilot (~25–30/type) | ~70 / 18 / 12 | ≈17–21 train / 4–5 val / 3–4 test. **Treat metrics as directional** — the batch's job is proving the pipeline works, not measuring model quality. |
-| 200–1000/type | 75/15/10 or 80/10/10 | Val/test now large enough for stable metrics |
+| under 200 (pilot, ~25–30/type) | 70 / 18 / 12 | ≈17–21 train / 4–5 val / 3–4 test. **Treat metrics as directional** — the batch's job is proving the pipeline works, not measuring model quality. |
+| 200–999 | 75 / 15 / 10 | Val/test now large enough for stable metrics |
+| 1000+ | 80 / 10 / 10 | Target state: 10% is ≥100 documents per split |
 
-**Every triple must sum to 1.0**, and `common.constants` asserts it at import. The splitter assigns by hash threshold, so a triple summing to 1.05 gives the test split 10% while `ratios_by_doc_type` — copied verbatim into the corpus manifest — records 15%. Every downstream reader then believes the eval population is half again as large as it is.
-| 1000+/type | 80/10/10 | Target state |
+**Every triple must sum to 1.0**, and `common.constants` asserts it at import. The splitter assigns by hash threshold, so a triple summing to 1.05 gives the test split 10% while `ratios_by_doc_type` — copied verbatim into the corpus manifest — records 15%. Every downstream reader then believes the eval population is half again as large as it is. **Both split edges must also only rise from band to band** (`split_groups.assert_bands_only_grow_train`, at import), so crossing a band moves groups only toward train.
 
 - Output: a deterministic `source_id → split` assignment, saved for reproducibility.
 - **Splitting is tenant-scoped** — never build a split spanning tenants.
@@ -100,13 +100,13 @@ Writes `manifest.json` per corpus version — this is what training and eval rea
 ## Page pairing and the noise budget
 
 - `SourceDocument.ocr_pages` holds **one markdown string per page**, never a joined blob. The corpus row's user turn is interleaved per page (master §9), so a training row and a serving request — including a page-routed one — have the same structure.
-- `noisy_ocr_image` corruption is budgeted **per document, not per page** (`corrupt_ocr_pages`). Calling the single-page corrupter once per page multiplies the noise by the page count: a 20-page policy would take up to 40 corruptions instead of 2, and the "nothing changed" fallback would fire on every page. That is not a louder version of the same signal — a corpus where every page is garbage teaches the model to ignore OCR entirely, degrading the 50% `ocr_plus_image` regime that never sees noise.
+- `noisy_ocr_image` corruption is budgeted **per document, not per page** (`corrupt_ocr_pages`) — and for a windowed policy, **per window**: each window row gets the budget over its own pages, seeded by window, after routing (otherwise one budget over a 200-page policy left almost every noisy window byte-identical to its clean twin). Calling the single-page corrupter once per page multiplies the noise by the page count: a 20-page policy would take up to 40 corruptions instead of 2, and the "nothing changed" fallback would fire on every page. That is not a louder version of the same signal — a corpus where every page is garbage teaches the model to ignore OCR entirely, degrading the 50% `ocr_plus_image` regime that never sees noise.
 - Corruption details record **which page** the noise landed on, so SPEC_08's `ocr_arbitration_accuracy` can match a corruption to the field it affected.
 
 ## Acceptance checklist
 - [ ] No `source_id` crosses splits (automated assertion).
 - [ ] No corpus file contains rows from more than one `tenant_id`.
-- [ ] Each source produces exactly 3 rows with the correct modality distribution across the dataset (50/20/30).
+- [ ] Each train document appears once per epoch file with the drawn modality (50/20/30 across draws); val/test documents carry all three modes.
 - [ ] `noisy_ocr_image` rows have corrupted OCR but **correct** golden JSON targets, tagged with corruption types.
 - [ ] `image_only` rows contain no OCR text and use the image-only prompt; `noisy_ocr_image` renders the same prompt as `ocr_plus_image`.
 - [ ] Corpus rows interleave each page image with that page's own markdown; no two pages' markdown are joined.
@@ -117,3 +117,46 @@ Writes `manifest.json` per corpus version — this is what training and eval rea
 - [ ] `confusable_example_count` is reported per canonical field, and a zero count warns.
 - [ ] `manifest.json` counts match actual JSONL row counts, and record `mineru_version`, `schema_version`, `prompt_template_version`, tenant list, de-id status, and edge-case coverage.
 - [ ] Rebuild with the same seed produces byte-identical output.
+
+---
+
+## Current implementation (2026-09-27)
+
+**Policy windows.** A canonical policy is built as one row per *(section group × page window)*, planned by
+`policy_windows.plan_windows` — the same function serving uses, so every served window is a shape a
+training row had. The declarations group leads with pages 1–3 **plus the detected declarations page** in
+one window (a policy behind a fax cover sheet has it on page 4–5); routed groups pack page runs without
+setting pages 1–3 apart. `plan_pages` reports the declarations page for short documents too. Each window's
+target is its sections restricted to its pages (`window_target`).
+
+**Blank pages** get one placeholder text in training and serving (`input_builder.EMPTY_PAGE_TEXT`) instead
+of an empty block in training and a placeholder at serving.
+
+**Size estimate** (`cap_check.estimate_text_tokens`): digits count one token each (Qwen splits numbers into
+digits), the rest at 3.5 characters per token; the output reservation is checked with the same estimate.
+The real tokenizer re-measures every staged row before launch (SPEC_06).
+
+**Split, per line of business** (`split_groups.assign_group_splits`):
+- the band (table above) is chosen on the **document type's** volume; placement is by stable hash **within
+  each line of business** (`GroupRecord.line`, from the policy's `lob`), so every line lands near the ratio;
+- a line with **fewer than 5 documents trains whole** and is listed in `train_only_lines`; a measured line
+  with 3+ families always gets at least one val and one test family;
+- **any family with a synthetic member stays in train** (the old rule — synthetic only if *every* member
+  was — let a mixed family carry generated labels into test);
+- **carriers are compared normalised** (`common.normalize.normalize_carrier`: "The Travelers Indemnity
+  Company" = "TRAVELERS"), so a held-out carrier is not still in train under another spelling;
+- `counts_by_line` and `train_only_lines` are recorded in the manifest's `split_assignment`.
+
+Example — 1,920 personal-lines policies: ≈1,523 train / 206 val / 191 test, each measured line near 80/10/10.
+
+**After the eval set is frozen** (SPEC_08): the build drops the frozen documents **and every document in
+their families**, splits new documents into **train and val only** (train:val kept in proportion, no
+carrier held out), and warns when a carrier the frozen set held out starts training.
+
+**Guards**: render-only and zero-page documents are skipped with a reason; a build with no train rows is
+refused before anything is written, and a real (non-dry) build with no val rows — or no test rows while
+the eval set is not frozen — is refused too.
+
+**Manifest**: LoB coverage reads each document's line from metadata (canonical policy labels carry none);
+the `modality_mix` counts **train rows only** (`modality_mix_basis: "train rows"`), since val/test carry
+every mode by design.

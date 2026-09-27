@@ -31,7 +31,8 @@ A clean, low-level inference engine: given a resolved model version + a prepared
   - `image_only` carries the markers and no markdown. The guarantee is *no OCR text*, not *no text at all*.
 - Handles `image_only` (omit the OCR block, use the image-only prompt with its explicit "no OCR provided" declaration) vs `ocr_plus_image` (arch §6).
 - **Multi-page inputs:** accepts an ordered list of page images and emits them as ordered `image` blocks with concatenated OCR text. **Page order is positionally meaningful** under Interleaved-MRoPE (arch §3) — ordering must be explicit and stable, never set-like.
-- Applies the **resolution cap from config** to any image passed in — identical to the cap used at corpus build (arch §11). Assert the cap matches `configs/base_model.yaml`; a silent mismatch between training prep and inference is a correctness bug, not a tuning knob.
+- Applies the **resolution cap from config** to any image passed in — identical to the cap used at corpus build (arch §11). Assert the cap matches `configs/base_model.yaml`; a silent mismatch between training prep and inference is a correctness bug, not a tuning knob. The vLLM engine additionally receives the **pixel budget** as `mm_processor_kwargs` from `common.config.pixel_budget()`, the function training takes its budget from.
+- A page whose OCR text is blank gets `EMPTY_PAGE_TEXT` — the same placeholder in training rows and serving requests.
 - Exposes `prompt_template_version` and `schema_version` on the built message set so callers can verify they match the corpus the model was trained on.
 
 ### 3. `inference_core/span_map.py`
@@ -61,3 +62,22 @@ A clean, low-level inference engine: given a resolved model version + a prepared
 - [ ] `generate(...)` returns text + aligned token logprobs.
 - [ ] `map_field_spans(...)` correctly maps a scalar field, a `null` field, and a `claims[i].amount` list-row field on a sample generation; an unmappable field is reported, not dropped.
 - [ ] Module imports without pulling in calibration/serving/eval/testing.
+
+---
+
+## Current implementation (2026-09-27)
+
+- **vLLM backend**: refuses to build an engine without CUDA (`common.gpu.require_cuda`); passes
+  `mm_processor_kwargs={"min_pixels", "max_pixels"}` from `pixel_budget()`; `close()` releases the engine
+  (tears down vLLM's parallel state, collects, empties the CUDA cache) and `release_model(model)` calls it.
+  The pipeline releases each engine before the next stage loads one — checkpoint selection, calibration
+  per format and the golden eval each load a model on one card.
+- **HF backend**: `device_map="cuda"`, never `"auto"` (which silently offloads layers to the CPU when VRAM
+  runs short); refuses without CUDA.
+- **Base weights** resolve to the pod's local copy (`common.config.base_model_source()`); the registry used
+  to hand vLLM the identity string `model_id@revision`, which no loader accepts.
+- **Dates**: generations are post-processed to `MM/DD/YYYY` (`common.canonical.with_output_dates`); a field is
+  a date by a whole word of its name (`date`, `dates`, `dated`, `dob`), list elements included.
+- **Pinned**: vLLM `==0.11.0` on both the training and the serving pod — calibration is fitted on the logprobs
+  one build produces, so serving runs the same build. 0.11 still has `GuidedDecodingParams`; moving to
+  `structured_outputs` is required before raising the pin.

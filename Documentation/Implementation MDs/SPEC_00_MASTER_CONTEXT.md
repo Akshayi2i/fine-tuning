@@ -26,6 +26,12 @@
 > | **Trainer stack corrected**: ms-swift's own `Seq2SeqTrainer` on the HF Trainer, not TRL | Factual correction — TRL is an ms-swift dependency for RLHF trainers, not the SFT loop | 06 |
 >
 > This supersedes the earlier spec set derived from `qwen3vl-insurance-extraction-finetuning-architecture.md`.
+>
+> **Implementation update, 2026-09-27.** The build has moved past several statements below. Where a
+> statement was wrong it is corrected in place; what the code now does that the original spec set never
+> described is in **§13 Current implementation** at the end of this file, and each module spec carries its
+> own "Current implementation" section. Read §13 before trusting any version number, split ratio or
+> path in an older note.
 
 ---
 
@@ -158,21 +164,21 @@ The same real-world field appears under many surface labels across documents. Th
 
 | Decision | Value |
 |---|---|
-| Base model | `Qwen/Qwen3-VL-8B-Instruct`, pinned HF revision |
+| Base model | `Qwen/Qwen3-VL-8B-Instruct`, pinned HF revision (`configs/base_model.yaml`). **Loaded from the pod's local copy** under `model.local_dir` (default `/workspace/models`) by training, the tokenizer, the merge and vLLM — never from the Hub at run time (§13) |
 | Fine-tuning technique | **LoRA on a bf16 base** — bf16 frozen base weights, LoRA adapters in bf16. Both serving paths hold the base in bf16/fp16 (merged model per SPEC_10, vLLM LoRA hot-swap per SPEC_11), so training in bf16 means the adapter is applied to exactly the weights it trained against. **4-bit NF4 QLoRA remains a live flag** (`quantization.load_in_4bit`) for VRAM-constrained pods — arch §9.2 |
 | Trainable components | **Projector + LLM decoder** via LoRA. **Vision Encoder (ViT) frozen by default** — escalated only via the eval gate (arch §3). **When the ViT is trained it gets a LoRA — never a full fine-tune** (arch §3). |
 | Adapter strategy | **ONE unified LoRA** (rank 64, alpha 128), trained across all document types, all tasks and all modality regimes, then merged. The task, type and schema are always in the prompt, so cross-type interference is controlled by conditioning rather than by separate weights. Per-type adapters return only through the §4.2 **graduation gate** (≥500 labeled docs of that type AND a measured >2pp win outside the bootstrap CI), trained on the merged foundation, decoder-only, **never stacked** — vLLM applies one LoRA per request, so the v1 Foundation-plus-per-type stack was unservable. |
-| Trainer stack | **Layer 3 ms-swift** (what you invoke) → **Layer 2 ms-swift's `Seq2SeqTrainer`** (the real loop) → **Layer 1 PyTorch/Transformers/PEFT/bitsandbytes/Accelerate+DeepSpeed**. Locked, one option per layer (arch §10). |
+| Trainer stack | **Layer 3 ms-swift** (what you invoke) → **Layer 2 ms-swift's `Seq2SeqTrainer`** (the real loop) → **Layer 1 PyTorch/Transformers/PEFT/bitsandbytes/Accelerate+DeepSpeed**. Locked, one option per layer (arch §10). **Pinned:** ms-swift `>=3.9,<4` (ms-swift 3 argument names), transformers `>=4.57`, torch `2.8.x` (§13). |
 | Trainer fallback | Dropping to ms-swift's `Seq2SeqTrainer` directly at Layer 3 is a **contingency**, permitted only if ms-swift lacks a required Qwen3-VL capability at implementation time — not a parallel option. |
 | Collator | ms-swift provides multimodal collation and `-100` masking; `training/data_collator.py` is an **override hook only** (arch §10). |
 | LoRA target modules | `q_proj, k_proj, v_proj, o_proj, gate_proj, up_proj, down_proj` in every decoder layer + vision-language projector/merger (justified per-module in arch §9a). |
 | Attention impl | `flash_attention_2`. |
-| Confidence | Per-token logprobs → per-field aggregation (default **min token prob** in span) → **post-hoc calibration** (temperature scaling default / isotonic). List fields also get a **row-completeness** signal. Review threshold ≈ 0.7, tuned. |
+| Confidence | Per-token logprobs → **per-field feature vectors** (min/mean/first-token logprob, token count, OCR agreement against the value *as printed*, rule checks) → **per-field-type calibrators** → **risk-controlled review thresholds** chosen on a separate validation half (arch v2.1 §5). Min-token-prob alone was length-biased and a fixed 0.7 was tied to no measured error rate; both are gone. List fields also get a **row-completeness** signal. |
 | Quantization | **vLLM-native serving formats**: bf16 merged (reference, and cycle 1's serving format) then **FP8 W8A8** via llm-compressor from cycle 2; AWQ INT4 only under VRAM constraint. The vision tower, mergers and `lm_head` stay bf16 in every format. GGUF is an on-request **edge** export, validated in llama.cpp, never the serving path — it is llama.cpp's format and the endpoint runs vLLM. Thresholds are absolute percentage points against bf16, per field class (arch v2.1 §13a-b). |
 | Artifact storage | **Azure Blob** — all weights/corpus/PDFs. Repo holds code only. |
-| Compute | **RunPod** — ephemeral training pods + a persistent Serverless vLLM inference endpoint. Business logic lives outside RunPod. |
+| Compute | **RunPod** — ephemeral training pods + a persistent Serverless vLLM inference endpoint. Business logic lives outside RunPod. **GPU only:** every step that runs a model refuses to start without CUDA rather than fall back to the CPU (§13). **On the pod every long job runs detached in tmux**, so a closed laptop or dropped Wi-Fi cannot stop it (§13). |
 | Schema contract | Target JSON = Fideon SPEC_00 canonical schema; audit gate Fideon SPEC_07 Stage 3 validates every inference call (§1.1). |
-| LoB detection | VLM outputs `line_of_business` per the Fideon SPEC_00 LOB enum; ≥20% corpus coverage per value; own gating metric (§1.3). |
+| LoB detection | VLM outputs `line_of_business` per the Fideon SPEC_00 LOB enum; ≥20% corpus coverage per value; own gating metric (§1.3). For a **policy**, the line is supplied by the caller (`lob` on the request) and selects the line's canonical schema; the LoB metric is not applicable to policy scopes. |
 | Tenant isolation | `tenant_id` path prefix reserved per Fideon SPEC_12; single-tenant for this build. No cross-tenant mixing in a corpus file (§8 below). |
 | De-identification | **BLOCKED — do not implement.** Arch §8b requires Presidio de-identification of Foundation training data, but text-only de-identification corrupts the training signal. See §8 and SPEC_05. |
 | MinerU | Version **pinned per corpus version**; inference must use the same version as the corpus (§7 below, arch §8a). |
@@ -208,15 +214,17 @@ azure-blob://insurance-extraction/
   raw-documents/{tenant_id}/{doc_type}/{source_id}/original.pdf, metadata.json   # immutable, tightest RBAC
   processed/{tenant_id}/{doc_type}/{source_id}/page_*.png, page_*.md, ocr_meta.json
   golden-labels/{tenant_id}/{doc_type}/{source_id}/golden.json, label_metadata.json
-  corpus/{tenant_id}/v{n}/{doc_type}/{train,val,test}.jsonl
+  corpus/{tenant_id}/v{n}/train/epoch_{1..4}.jsonl                # one modality draw per epoch
+  corpus/{tenant_id}/v{n}/{val,test}/{val,test}.jsonl               # all doc types together
+  corpus/{tenant_id}/v{n}/val/scope/{scope}/val.jsonl               # a scope's view (scoped runs)
   corpus/{tenant_id}/v{n}/manifest.json
 
   # ---- shared / no tenant data ----
   base-models/qwen3-vl-8b-instruct/                                  # cached from HF, pinned revision
-  adapters/foundation/v{n}/                                          # de-identified training data ONLY
-  adapters/{doc_type}/v{n}/                                          # tagged w/ dependent foundation version
-  merged-models/{doc_type|unified}/v{n}/                             # fp16/bf16
-  quantized-models/{doc_type|unified}/v{n}/gguf/{format}/            # one subfolder per format
+  adapters/foundation/v{n}/                                          # the unified adapter
+  adapters/scope/{scope}/v{n}/                                       # a scoped run's adapter
+  merged-models/{unified|scope/{scope}}/v{n}/                        # bf16, post merge_and_unload
+  quantized-models/{unified|scope/{scope}}/v{n}/vllm/{format}/       # fp8 / awq (gguf only as edge export)
   registry/foundation/{run_id}/run_manifest.json
   registry/adapters/{doc_type}/{run_id}/run_manifest.json
   registry/registry_index.json
@@ -224,7 +232,13 @@ azure-blob://insurance-extraction/
   eval-reports/v{n}/summary.json                                     # EvalReport.as_dict()
   eval-reports/v{n}/{doc_type}/report.json
   eval-reports/v{n}/gate_decision.json                              # the gate's verdict, NOT the report
-  golden-eval-set/                                                   # frozen, versioned separately
+  eval-reports/v{n}/scope/{scope}/{summary,gate_decision,checkpoint_selection}.json
+  releases/{tenant_id}/{release_id}/bundle.json                      # the unit of promotion
+  releases/{tenant_id}/{release_id}/calibration/{format}/calibrators.json
+  releases/{tenant_id}/{release_id}/gate/{format}/gate_decision.json
+  releases/{tenant_id}/release_index.json
+  golden-eval-set/{source_id}/golden.json, metadata.json, page_N.png, page_N.md
+  golden-eval-set/manifest.json                                      # frozen ONCE from a corpus test split (§13)
 ```
 
 **`gate_decision.json` is a separate key on purpose.** The promotion gate writes its verdict — pass/fail, per-metric deltas, failed gates — and the scored `EvalReport` writes `summary.json`. Sharing one key meant the gate overwrote the report it had just read, taking `by_doc_type` and every per-document error record with it; `vit_gate` then saw zero image-only and zero scanned documents and returned `insufficient_data` for ever. Two writers, two keys.
@@ -242,7 +256,8 @@ azure-blob://insurance-extraction/
 ```
 insurance-extraction-finetuning/
 ├── README.md
-├── pyproject.toml / requirements.txt
+├── pyproject.toml                       versions declared ONCE, in dependency groups
+├── requirements.txt, requirements-{ocr,train,serve,quantize}.txt   groups per pod (§13)
 ├── .env.example
 ├── configs/            base_model.yaml, training/*.yaml, sweeps/*.yaml (deferred),
 │                       deepspeed/*.json, inference/vllm_serving.yaml                   → SPEC_01
@@ -277,8 +292,10 @@ insurance-extraction-finetuning/
 │                       page_router.py, confidence_postprocess.py, pipeline.py          → SPEC_11
 ├── testing/            run_extraction.py, prompts/, (test_data, ocr_cache, results,
 │                       metrics, extraction_registry.json)                              → SPEC_12
-├── orchestration/      run.py (the 3+1 command surface), runpod_controller.py,
-│                       pipeline_dag.py, config/                                        → SPEC_13
+├── orchestration/      run.py (the 3+1 command surface + freeze-eval-set),
+│                       runpod_controller.py, pipeline_dag.py, detach.py, config/      → SPEC_13
+├── scripts/            setup_pod.sh (install per pod role), pod_run.sh (tmux jobs),
+│                       phase0_spike.py                                                  → SPEC_13
 ├── pilot/              zero_shot_baseline.py, smoke_test.py, pilot_report.py           → SPEC_15
 └── tests/              test_*.py, fixtures/                                            → SPEC_14
 ```
@@ -433,13 +450,15 @@ Within the Foundation corpus, per source document generate 3 rows (arch §6):
 
 The system prompt **explicitly declares which mode is active** rather than silently omitting the OCR block — that explicit signal is what lets the model switch behavior reliably instead of guessing which mode it is in.
 
-**Split at `source_id` level BEFORE modality expansion** to prevent leakage. Split ratio scales with per-type volume (arch §8):
+**Split at FAMILY (group) level BEFORE modality expansion** to prevent leakage — renewals and same-template documents stay in one split (arch v2.1 §8.2). Split ratio scales with per-type volume (arch §8), `common/constants.py::SPLIT_RATIOS_BY_VOLUME`:
 
-| Data volume per doc type | Split |
+| Data volume per doc type | Train / Val / Test |
 |---|---|
-| Pilot batch (~25–30/type) | ~70 / 18 / 12 — metrics are directional, not final |
-| 200–1000/type | 75/15/10 |
-| 1000+/type (target state) | 80/10/10 |
+| under 200 (pilot, ~25–30/type) | 70 / 18 / 12 — metrics are directional, not final |
+| 200–999 | 75 / 15 / 10 |
+| 1000+ (target state) | 80 / 10 / 10 |
+
+The band is chosen per **document type** (the gate's metrics are per type) and applied **per line of business** (SPEC_05 §Current implementation): a line under 5 documents trains whole; a measured line always reaches val and test. The band table is checked at import to only ever raise both split edges, so crossing a band never moves a trained document into val or test. Once the golden eval set is frozen (§13), new documents split into **train and val only**.
 
 ---
 
@@ -455,11 +474,15 @@ A cycle is run through **three commands plus one umbrella command**, all from `o
 | **—** | `all` | `finetune` then `package` | Same as command 2 |
 
 ```bash
-python -m orchestration.run finetune --input ./intake --out-version v2 --gpu a100-80
-python -m orchestration.run package  --version v2 --formats bf16 fp8
+python -m orchestration.run finetune --input ./intake --corpus-version v1 --out-version v2
+python -m orchestration.run package  --version v2 --release-id release-2026.10.1 --formats bf16
 python -m orchestration.run extract  --model base|v1|v2 --input testing/test_data/
-python -m orchestration.run all      --input ./intake --out-version v2 --formats bf16 fp8
+python -m orchestration.run all      --input ./intake --out-version v2 --release-id release-2026.10.1
+python -m orchestration.run freeze-eval-set --corpus v1        # once: the gate's frozen eval set
 ```
+
+On the pod every one of these (except the seconds-long endpoint switches) starts itself in tmux and
+returns with the job's name; see §13.
 
 **`all` never includes `extract`.** Extraction is a separate concern from building a model — it runs against any chosen version, including models trained weeks earlier and the untuned base.
 
@@ -473,7 +496,7 @@ python -m orchestration.run all      --input ./intake --out-version v2 --formats
 
 | | **Staging volume** | **Registry** |
 |---|---|---|
-| Where | RunPod network volume at `/runpod-volume/staging/` | Azure Blob `registry/` |
+| Where | RunPod network volume at `$RUNPOD_VOLUME_MOUNT/staging/` (default `/runpod-volume`; set `/workspace` when the pod mounts the volume there) | Azure Blob `registry/` |
 | Holds | Working copies of adapters, merged model, eval reports between commands 1 and 2 | Durable `run_manifest.json` per run |
 | Lifetime | Cleared after a verified push | Permanent |
 | Guarantee | **None** — working storage | Lineage of record (arch §12) |
@@ -492,3 +515,58 @@ RunPod pods are ephemeral (arch §14), so persistence between commands 1 and 2 c
 4. Each spec ends with an **Acceptance checklist** — verify it before moving on.
 5. **SPEC_15 is executed, not built** — run it after SPEC_14 as the pilot validation protocol before committing to full corpus annotation.
 6. This master file is the context; when a spec says "per master context", it means this file.
+
+---
+
+## 13. Current implementation (2026-09-27)
+
+What the build does now that the sections above did not describe. Each module spec has its own
+"Current implementation" section with the detail; this is the index.
+
+### 13.1 Output and prompts
+- **Policies output the client's canonical JSON** (`configs/canonical schema/LOB Schema/*.json`): FieldValue
+  envelopes `{raw, parsed, confidence{score,source}, page_ref, flagged}`. The model writes only `raw`,
+  `parsed`, `page_ref`, and only for fields the document states; confidence and flags are added after.
+- **Dates are `MM/DD/YYYY`** in every output (`common/canonical.py::with_output_dates`), for any field with
+  the word `date`/`dates`/`dated`/`dob` in its name — a test runs over all LOB schemas.
+- **Long policies are read as windows**: section group (`configs/schema_sections.yaml`: decl, arrays,
+  lineblk, dtd) × page window, planned by ONE function shared by training and serving
+  (`data_pipeline/dataset_builder/policy_windows.py`) and merged at serving (`serving/policy_merge.py`).
+  200+ page policies are supported; windows run as one vLLM batch and a failed window is contained.
+- **Prompt hash** covers every template, every schema and the section map; serving refuses at cold start to
+  serve a release packaged with different prompt inputs.
+
+### 13.2 Data and splits
+- Group-level split, band per type, placement **per line of business**; lines under 5 documents train
+  whole; crossing a band only moves groups toward train (§10).
+- **The golden eval set is frozen once** from a corpus build's test split
+  (`python -m orchestration.run freeze-eval-set --corpus vN`); refused twice, and refused below 100 test
+  documents per type unless `--allow-small`. Later builds exclude its documents and their families and
+  split new documents into train/val only.
+- Render-only and zero-page documents are skipped from training; a build with no train rows is refused,
+  and a real build with no val rows, or no test rows while the eval set is not yet frozen.
+
+### 13.3 Training, merge, packaging
+- ms-swift 3 CLI; staged rows in ms-swift's own format on the pod volume; before launch the real tokenizer
+  and resize rule measure every row against `max_length` and each task's output reservation, and label
+  masking is verified on encoded rows.
+- Checkpoint selection by generated field accuracy on val; calibration fitted on one val half, thresholds
+  on the other; the golden eval runs through the serving pipeline for the gate.
+- PEFT `merge_and_unload` on the GPU into the pinned local base; `package` refuses a version whose gate did
+  not pass and uploads the real adapter, merged model and quantized formats.
+
+### 13.4 The pod
+- **Dependencies** (`pyproject.toml` groups; `requirements-*.txt` per pod; `scripts/setup_pod.sh <role>`):
+  training pod = ms-swift 3.x + torch 2.8 + **vLLM 0.11.0** (checkpoint selection and calibration run vLLM
+  in the same process) + flash-attn built against that torch; serving pod = the same **vLLM 0.11.0**;
+  OCR pod = MinerU 1.x (`magic-pdf[full]`); quantization = `llmcompressor` in its own environment (its
+  `datasets`/`transformers` ranges conflict with ms-swift and vLLM).
+- **Base model** in `/workspace/models` (`model.local_dir`, or `FIDEON_BASE_MODEL_DIR`); a real launch is
+  refused when it is configured and absent.
+- **GPU only** (`common/gpu.py`): training, merge, quantization, the vLLM engine, the HF backend and MinerU
+  refuse to start without CUDA; models load with `device_map="cuda"`, never `"auto"` (which offloads to CPU).
+- **Jobs survive a disconnect** (`orchestration/detach.py`, `scripts/pod_run.sh`): on the pod
+  (`RUNPOD_POD_ID`, `/etc/rp_environment`, or Linux with `/workspace` mounted and a GPU) every long entry
+  point re-launches itself in tmux and returns; logs and exit codes live in `/workspace/logs`. Nothing
+  stops a job except `pod_run.sh stop <name>`, which asks for confirmation. A test fails if a new
+  long-running entry point lacks the guard.

@@ -80,12 +80,14 @@ There is no `--force`. There **is** an override (§15.5), requiring a named pers
 RunPod **pods are ephemeral** — a pod clones the repo, works, pushes, and terminates (arch §14). Persistence between commands 1 and 2 therefore comes from a **RunPod network volume**, mounted at `/runpod-volume` and attached to every pod the controller launches.
 
 ```
-/runpod-volume/staging/
-  adapters/foundation/v{n}/
-  adapters/{doc_type}/v{n}/
-  merged-models/{doc_type|unified}/v{n}/
+$RUNPOD_VOLUME_MOUNT/staging/            # default /runpod-volume; /workspace when mounted there
+  adapters/foundation/v{n}/              # unified run: ms-swift output, checkpoint-* inside
+  adapters/scope/{scope}/v{n}/           # a scoped run
+  merged-models/{unified|scope/{scope}}/v{n}/
+  quantized-models/{unified|scope/{scope}}/v{n}/vllm/{format}/
+  train-data/{scope}/v{n}/               # the run's staged ms-swift JSONL
+  train-images/{tenant}/{corpus}/        # page images, one cache per corpus version
   eval-reports/v{n}/
-  run_manifests/{run_id}.json          # working copy
 ```
 
 The layout deliberately mirrors the Blob layout (master §4) so `package` copies rather than translates.
@@ -103,7 +105,7 @@ The layout deliberately mirrors the Blob layout (master §4) so `package` copies
 Runs: **quantize → push adapters + merged model + quantized model(s) to Azure Blob → update the run manifest.**
 
 - Reads `--version v{n}` from the staging volume. If that version is not staged, **fail loudly** naming the expected path and the remediation (re-run `finetune --from-stage merge`, or `--from-blob` if adapters were pushed with `--push-adapters`).
-- Quantizes per `--formats` (default: `fp16` baseline + `fp8` serving target, per SPEC_10). Produces the `mmproj` file for the multimodal path.
+- Quantizes per `--formats` (default: **bf16 alone** — it is the merged model; FP8 only once the spike has verified it, per SPEC_10). GGUF, and its `mmproj`, is an on-request edge export, never a `package` output.
 - Pushes **all three artifact classes** to their respective Blob locations (master §4):
 
 | Artifact | Blob destination |
@@ -196,7 +198,7 @@ The 13 stages (arch v2.1 §13) as reusable, individually addressable stage funct
 - Every training, evaluation, and quantization job produces a **run manifest** (SPEC_02).
 - **Stages are idempotent and resumable.** `--from-stage` re-enters mid-pipeline; a completed stage re-run is a no-op, not a duplicate.
   - **Ingestion is the exception, and always runs.** There is no cheap correct completion check for it — comparing an input directory against ingested checksums costs the same as ingesting — and the approximate one that used to be here ("has anything ever been ingested?") was true from cycle two onward, so a second `finetune --input ./new_batch` skipped the stage and built the corpus from the previous batch. `ingest_directory` is checksum-deduped, so re-running it writes nothing and reports duplicates. An approximate guard on cheap idempotent work buys nothing and can be wrong in the direction that loses documents.
-- **Stage 6 is a hard stop.** Promotion requires matching or beating the current production version on every gating metric. **No manual override path** — do not implement `--force-deploy`.
+- **The gate (stage 10) is a hard stop.** Promotion requires every gating metric to pass. There is no `--force-deploy`; the only exception is the recorded written override (§2). `package` reads the recorded gate decision and refuses a version whose gate did not pass — running `package` after a blocked gate used to publish it.
 
 ## 9. `orchestration/config/`
 - GPU class per stage, corpus/version tags, staging volume id and mount, schedule, notification hooks, retry policy.
@@ -209,15 +211,15 @@ The 13 stages (arch v2.1 §13) as reusable, individually addressable stage funct
 - `finetune` always writes its run manifest to Blob even when weights stay staged.
 - Orchestration runs on cheap CPU infra **outside** RunPod; only GPU-bound work runs on RunPod (arch §14).
 - Secrets from env only. Logs PII-scrubbed before leaving the pod.
-- No override path around the evaluation gate.
+- No flag around the evaluation gate; only a recorded, attributed override (§2).
 
 ## Acceptance checklist
 - [ ] `run finetune` executes stages 1→7 on a tiny fixture set and leaves adapters + merged model on the staging volume.
 - [ ] `finetune` reports the unlabeled backlog and trains on the labeled subset; it aborts when labels are below `--min-labels-per-type`.
-- [ ] `finetune` launches Foundation first, then one pod per doc type, and never starts an adapter before its Foundation has passed evaluation.
-- [ ] **A failed gate stops `finetune` before merge, exits non-zero, and prints per-metric deltas.**
+- [ ] `finetune` launches **one** training job (one unified adapter, or one scope).
+- [ ] **A failed gate stops `package` before anything is published, exits non-zero, and prints per-metric deltas;** `package` run on its own refuses a version whose recorded gate did not pass.
 - [ ] `finetune` writes a run manifest to Blob with `artifacts.status: "staged"` even though weights are not pushed.
-- [ ] `run package --version v2` quantizes and pushes adapters, merged model, and each GGUF format to their correct Blob paths, then flips the manifest to `"published"`.
+- [ ] `run package --version v2` pushes the **real** selected adapter, the merged model and each non-bf16 serving format to their Blob paths, then flips the manifest to `"published"`.
 - [ ] `package` fails loudly with remediation when the requested version is not on the staging volume.
 - [ ] `run extract --model base` runs the untuned base model with no adapter; `--model v2` resolves that version's merged model, plus a graduated per-type adapter where the routed type has one.
 - [ ] `run all` chains 1 and 2, **never runs extraction**, and does not reach `package` when the gate fails.
@@ -232,3 +234,43 @@ The 13 stages (arch v2.1 §13) as reusable, individually addressable stage funct
 - [ ] `deploy-endpoint --model vN` updates the serving endpoint; `rollback-endpoint` restores the previous promoted version.
 - [ ] *(deferred)* Quantization thresholds gate `package`; the sweep sequence runs Phase 1 → 2 and promotes the winning config.
 - [ ] A Foundation version bump produces the dependent-adapter re-validation work list and blocks promotion until it passes.
+
+---
+
+## Current implementation (2026-09-27)
+
+**Commands** (`orchestration/run.py`): `finetune`, `package`, `all`, `extract`, `deploy-endpoint`,
+`rollback-endpoint`, and **`freeze-eval-set --corpus vN [--allow-small]`** (SPEC_08).
+
+**Every long job survives a disconnect** (`orchestration/detach.py`, `scripts/pod_run.sh`):
+- On the pod — `RUNPOD_POD_ID` set, or RunPod's `/etc/rp_environment`, or Linux with `/workspace` mounted
+  and a GPU present (a laptop with a GPU and a `workspace` folder is not the pod) — every long entry point
+  re-launches itself in a tmux session and returns at once with the job's name. Covered: every
+  `orchestration.run` command except the endpoint switches, `training.train`, `training.sweep`,
+  `evaluation.run_eval`, OCR and rendering, the three importers, pre-annotation, active learning, the
+  Phase 0 spike and `setup_pod.sh`. The guard runs after argument parsing, so `--help` and bad arguments
+  answer at once.
+- Inside tmux, or inside a `pod_run.sh` run (`FIDEON_DETACHED=1`), a command runs in place — never a second
+  copy. Off the pod nothing changes. `FIDEON_NO_DETACH=1` opts one command out.
+- `pod_run.sh start|attach|status|tail|list|stop`: logs and exit codes in `/workspace/logs`; one run per
+  name; nothing ends a run except `stop`, which asks for the run's name. It cannot survive the pod itself
+  stopping — `status` then reports the run as interrupted and `--from-stage` resumes.
+- `tests/test_detach.py` fails if a new entry point is neither guarded nor listed as quick.
+
+**Stage behaviour added since this spec**:
+- **Deterministic failures are not retried** (`TrainingError`, `StagingError`, `LengthCheckError`,
+  `CorpusViewError`, `CalledProcessError`); only transient faults are.
+- Training raises when a real run leaves no checkpoint; `checkpoint_eval` rediscovers checkpoints on a
+  resumed run; merge reads the selection from Blob when resuming, and refuses a real run with none.
+- Engines are released between stages (checkpoint selection → merge → calibration per format → golden eval),
+  so each finds the card free.
+- `package` requires a passed recorded gate, finds calibrators in Blob on resume, and uploads real weights
+  through `artifact_registry/transfer.py` (SPEC_10).
+- `--push-adapters` uploads the real best-loss adapter after training (non-dry runs), not a placeholder.
+- The dataset build excludes frozen eval documents and their families once the set is frozen (SPEC_05).
+
+**Pod setup** (`scripts/setup_pod.sh ocr|train|serve|quantize|dev`): installs the role's requirements file,
+builds flash-attn against the installed torch, installs tmux, checks packages and CUDA.
+
+**RunPod backend**: `RunPodBackend` (launching pods through the API) is still unimplemented;
+`LocalBackend` runs the DAG in-process on whatever machine starts it — on the pod, inside tmux.

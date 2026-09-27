@@ -10,7 +10,7 @@ Evaluate any model/adapter version against the **frozen golden eval set** and ga
 
 ## The gate is a hard stop (arch §13)
 
-A candidate is promoted only if it **matches or exceeds** the current production version on **every** gating metric for the relevant document type(s). **There is no manual override path that skips it.** Build it that way — a `--force` flag on the gate is a design error, not a convenience.
+A candidate is promoted only if it passes **every** gating metric for the relevant document type(s): the absolute floors, and paired-bootstrap non-inferiority against the current production version (arch v2.1 §15). **There is no `--force` flag.** The one exception path is a **recorded written override** (arch v2.1 §15.5): a named approver, a written reason and the gates it waives, stored in the gate decision and the release bundle. `package` reads the recorded decision and refuses a version whose gate did not pass.
 
 ## Deliverables
 
@@ -51,7 +51,7 @@ One definition of "matches", applied **consistently in the promotion gate, the t
 **`mode_accuracy.py` specifics:** must also classify errors as **perception** (misread characters, missed checkboxes) vs **schema/reasoning** (right value, wrong field), because SPEC_06's `vit_gate` needs that distinction, not just the accuracy number.
 
 ### 3. `evaluation/run_eval.py`
-- Given `--model vN` (resolved via SPEC_02) + the frozen golden eval set, run inference **via the SPEC_07 inference core** across all eval docs and all relevant modes, compute every metric, and write `eval-reports/v{n}/{doc_type}/report.json` plus a top-level summary. Broken down **per doc_type and per modality mode**.
+- Given `--model vN` (resolved via SPEC_02) + the frozen golden eval set, run inference **through the serving pipeline** (`serving.pipeline.extract`, built on the SPEC_07 inference core — so windows, merge, date formatting and calibrated confidence are what is measured) across all eval docs and all three modes, compute every metric, and write `eval-reports/v{n}/{doc_type}/report.json` plus a top-level summary. Broken down **per doc_type and per modality mode**.
 - Runs the eval subsets explicitly: `image_only`, `scanned`, `noisy_ocr`, `long_policy`, plus the full set.
 - Records per-document error records (field, expected, got, error class) so `vit_gate` and failure-mode analysis have real material rather than aggregates.
 - **The golden eval set is frozen and versioned separately, human-double-verified, and held constant across corpus versions** so model versions compare apples-to-apples over time (arch §8). Never train on it — assert no eval `source_id` appears in any corpus split.
@@ -68,7 +68,7 @@ One definition of "matches", applied **consistently in the promotion gate, the t
 
 - **Additional gate for `--continue-from` Foundation runs (arch §12):** a minor incremental patch that continued from the previous Foundation checkpoint must additionally show **no regression on the *other* document types**, not just the type it was patching. The gate reads the manifest flag SPEC_06 sets and demands that cross-type evidence before passing.
 - Writes the decision, per-metric deltas, and `gated_against` into the candidate's `RunManifest` (SPEC_02).
-- **No override flag.** A failed gate is a failed gate.
+- **No override flag.** A failed gate is a failed gate unless a written, attributed override is recorded with it (above).
 
 ## Constraints
 - Golden eval set is frozen + versioned separately; never train on it — assert it.
@@ -92,3 +92,43 @@ One definition of "matches", applied **consistently in the promotion gate, the t
 - [ ] A `--continue-from` candidate without cross-type regression evidence is blocked.
 - [ ] No code path allows overriding a failed gate.
 - [ ] Promotion decision + per-metric deltas written to the RunManifest.
+
+---
+
+## Current implementation (2026-09-27)
+
+**The frozen golden eval set** (`evaluation/freeze_eval_set.py`,
+`python -m orchestration.run freeze-eval-set --corpus vN [--allow-small]`):
+- copies one corpus build's **test split** — golden label, metadata, every page image and OCR page — into
+  `golden-eval-set/{source_id}/`, with `golden-eval-set/manifest.json` (source corpus, commit, documents
+  per type and per line of business, held-out carriers). `golden.json` is written last per document, so an
+  interrupted freeze leaves nothing half-copied;
+- **refused a second time** (the set is the yardstick every version is compared on), and **refused when
+  any type would freeze fewer than 100 documents** unless `--allow-small`: the set cannot grow once frozen,
+  and at ~100 documents a rate near 80% is known to about ±4 points;
+- after freezing, every corpus build excludes the frozen documents and their families and splits new
+  documents into train/val only (SPEC_05).
+
+Before this, nothing read the corpus test split and nothing populated `golden-eval-set/`, so the gate had
+no documents.
+
+**The golden eval** (`evaluation/golden_eval.py::evaluate_version`): asserts the set is disjoint from the
+corpus, runs every document in all three modes through `serving.pipeline.extract` with the release's bf16
+calibrators, scores failures as `{}` with the error recorded, and writes the report where the gate reads
+it. The gate stage produces it when no report exists.
+
+**Validation-based scoring** (checkpoint selection, calibration): `evaluation/validation_generation.py`.
+A pass in which more than **10%** of rows failed to generate is **refused**, not scored — scoring failures
+as empty answers turned a broken setup into a checkpoint "chosen" at 0.0 and a calibrator fitted on
+nothing. Images are localised to the pod cache first (vLLM opens paths, the rows hold Blob keys).
+
+**Scoring corrections** (`evaluation/metrics/`):
+- a value the golden label does not state is **scored wrong** (canonical targets are sparse, so a loop over
+  golden paths alone never saw an invented field); empty extra values cost nothing;
+- **tables are found at any depth** (`auto.vehicles`) and rows compared on **values**, not envelopes;
+- **misattribution** is checked on flattened nested paths;
+- **LoB** is not scored for a label that carries none (canonical policies), and the LoB metric is not
+  applicable to a policy-only scope;
+- field accuracy is **pooled per document reading** (source × mode), then averaged over documents — a
+  60-window policy counts once, not 60 times; a window with nothing to score adds nothing;
+- the classifier metric is not applicable while the corpus builds no classify rows (`common.tasks.CORPUS_TASKS`).

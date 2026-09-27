@@ -1,5 +1,10 @@
 > # ⚠ SUPERSEDED BY v2.1
 >
+> **Update 2026-09-27:** v2.1 now carries a *Revision v2.2 — Implementation Update* section (canonical LOB
+> output with `MM/DD/YYYY` dates, policy windows for 200+ page documents, the frozen golden eval set, the
+> per-line split, the pinned dependency stack, GPU-only model compute, tmux-detached pod jobs); the
+> module-level detail is in `Implementation MDs/SPEC_00_MASTER_CONTEXT.md` §13.
+>
 > **This document is historical.** The current architecture is
 > **`finetuning-architecture-v2.1.docx`**, and the codebase implements that one.
 >

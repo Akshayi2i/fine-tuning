@@ -157,3 +157,17 @@ Combined with the `results/{version}/` layout, anyone can see at a glance that `
 - [ ] `extraction_registry.json` links result → model version → run manifest.
 - [ ] `testing/prompts/*.prompt.txt` render identically to `common.prompts` for the same inputs (asserted, not assumed).
 - [ ] **Output equals the serving pipeline's output on the same input** (parity test).
+
+---
+
+## Current implementation (2026-09-27)
+
+- `testing/run_extraction.py` validates its arguments and points to the operator command, which is the
+  supported entry: `python -m orchestration.run extract --model base|vN --input ... [--mode image_only]`.
+  Extraction goes through `serving.pipeline.extract` — windows and merge for canonical policies, calibrated
+  confidence, dates in `MM/DD/YYYY` — so test output is production output.
+- A policy request should carry its line of business (`lob`); without it the fallback canonical schema is
+  used.
+- On the pod `extract` runs detached in tmux like every long job; it survives a closed laptop.
+- The gate's numbers no longer come from this harness: they come from the frozen golden eval set
+  (SPEC_08 `golden_eval.evaluate_version`), through the same serving pipeline.

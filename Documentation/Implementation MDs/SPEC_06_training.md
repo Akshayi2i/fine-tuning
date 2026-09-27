@@ -36,14 +36,14 @@ TRL's `SFTTrainer` is **not** in this stack: ms-swift builds its own `Seq2SeqTra
 Replaces v1's `train_foundation.py` and `train_adapter.py`. One entrypoint, one run type (`unified`), run id `extractor-v{n}`.
 
 - **Config:** `configs/training/unified.yaml` + `configs/base_model.yaml`. There are no per-type training configs.
-- **Base precision** from `training/base_precision.py`. Default is a **bf16 frozen base** (`quantization_bit: 0`, passed explicitly rather than omitted, and every `bnb_4bit_*` argument suppressed so the run log never carries settings describing nothing the run did). `load_in_4bit: true` in `configs/base_model.yaml` switches to NF4 with double quantization and bf16 compute. The manifest's `technique` (`LoRA`/`QLoRA`) and `base_quantization` are derived from the same config, never defaulted.
+- **Base precision** from `training/base_precision.py`. Default is a **bf16 frozen base**: no quantization argument at all (ms-swift 3 has no `quantization_bit`), and every `bnb_4bit_*` argument suppressed so the run log never carries settings describing nothing the run did. Under `load_in_4bit` it renders `quant_method: bnb`, `quant_bits: 4` and the `bnb_4bit_*` set. `load_in_4bit: true` in `configs/base_model.yaml` switches to NF4 with double quantization and bf16 compute. The manifest's `technique` (`LoRA`/`QLoRA`) and `base_quantization` are derived from the same config, never defaulted.
 - **LoRA:** rank 64 / alpha 128, dropout **0.10** at pilot scale (0.05 from ≥200 docs per type), `bias: none`. Targets are the attention and MLP projections of the **language-model decoder only** — `q/k/v/o_proj`, `gate/up/down_proj`. No `merger`.
 - **Frozen:** `freeze_vit: true` (unless `--train-vit`, the §3 escalation — LoRA-on-ViT, never full fine-tune) and `freeze_aligner: true` always.
 - **Optimisation (§11.1):** AdamW (`adamw_torch`), LR **1e-4**, cosine, **`warmup_steps: 10`** (steps, not a ratio — a ratio rounds to zero warmup at pilot volume), weight decay **0.0** (decay on a low-rank adapter is a shrinkage prior on the update, not regularisation), max grad norm 1.0, per-device batch 1 × accumulation 8 = **effective batch 8**, gradient checkpointing, bf16.
-- **Memory (§9.3):** `use_logits_to_keep`, `padding_free`, `length_grouped_sampling`. `max_length` is the largest task cap **including `by_doc_type` overrides** (policy extraction is 32,768). If a cap does not fit one card, **sequence parallelism comes first**; DeepSpeed is off by default, because under LoRA ZeRO-2 shards ~1.5 GB of adapter optimizer state and is close to a no-op.
+- **Memory (§9.3):** `use_logits_to_keep`, `padding_free`, `group_by_length`. `max_length` is the largest task cap **including `by_doc_type` overrides** (policy extraction is 32,768). If a cap does not fit one card, **sequence parallelism comes first**; DeepSpeed is off by default, because under LoRA ZeRO-2 shards ~1.5 GB of adapter optimizer state and is close to a no-op.
 - **Datasets.** **Epochs are files, and ms-swift runs one pass over them** (§6.1). `dataset` is the first `num_train_epochs` of `corpus/{tenant}/v{n}/train/epoch_{1..4}.jsonl`, and ms-swift is given **`num_train_epochs: 1`**. Each file already holds every train document once in that epoch's modality draw, so the concatenation *is* the N-epoch run; also telling ms-swift N looped the N files N times — nine passes for a "3 epoch" run. The manifest records the logical count. Fewer epoch files than epochs is refused. `val_dataset` is `corpus/{tenant}/v{n}/val/val.jsonl`, passed separately (see below). The corpus is read for `--tenant`, never silently from the default tenant. (ms-swift shuffles across the concatenation, so epoch-2 rows can precede epoch-1 rows; each document is still seen exactly N times, each time in its drawn regime.)
-- **Evaluation during training** is validation **loss**, for early stopping only (`eval_steps`/`save_steps` 50, `save_total_limit: 4`, `metric_for_best_model: eval_loss`, `greater_is_better: false`, patience 3). **Loss never selects what ships** — see §11.2 below.
-- **Staging:** the adapter and its `checkpoint-*` directories go to the RunPod staging volume under `staging/adapters/foundation/v{n}/` (the slot name is historical; the manifest's `run_type` says `unified`). Pushed to Blob by `package`, or immediately with `finetune --push-adapters`.
+- **Evaluation during training** is validation **loss** (`eval_steps` = `save_steps`, `save_total_limit: 4`, `metric_for_best_model: eval_loss`, `greater_is_better: false`, `load_best_model_at_end`). The interval is the configured one **shrunk so a run gets at least 5 evaluations** (`_eval_interval`), so a short pilot run still leaves several checkpoints to choose from. ms-swift 3 takes no early-stopping patience argument; none is passed. **Loss never selects what ships** — see §11.2 below.
+- **Staging:** the adapter and its `checkpoint-*` directories go to the RunPod staging volume under `staging/adapters/foundation/v{n}/` (unified; `staging/adapters/scope/{scope}/v{n}/` for a scoped run). Pushed to Blob by `package` (the checkpoint selection chose), or immediately with `finetune --push-adapters` (the best-loss checkpoint, before selection).
 - **Manifest:** a `RunManifest` (SPEC_02) is written at status **`training`** before launch; `launch_and_record` flips it to `trained` when ms-swift returns, or **`failed`** when it raises, so the registry never claims weights a crashed run never wrote. It records the full config, data stats, LoB coverage, seed, git commit, corpus version, MinerU version, schema/prompt template versions, and the de-identification flag (recorded, not asserted, while de-identification is blocked — SPEC_05 §1).
 - **Every value in the YAML's `evaluation:` block reaches ms-swift.** `metric_for_best_model`, `greater_is_better` and `load_best_model_at_end` are passed into `swift_early_stopping_args`, which is unpacked **first** so explicit keys win.
 
@@ -52,7 +52,7 @@ Flags: `--corpus vN`, `--out-version vN`, `--tenant`, `--deepspeed zero2|zero3`,
 **Versioning rule (arch §12) — enforced in code:**
 - **Major corpus expansion** → retrain **from the original HF base model** on the full accumulated corpus. Continued training on an existing LoRA compounds drift across cycles.
 - **Minor incremental patch** → continuing from the current checkpoint is acceptable, **but promotion requires cross-type regression evidence** against the frozen golden eval set (SPEC_08). `--continue-from` sets `continued_from` on the manifest, which the gate reads.
-- **`--continue-from` takes a checkpoint DIRECTORY, never a registry run-id.** It reaches ms-swift as `resume_from_checkpoint`, which reads a path; given a run-id, ms-swift finds nothing, trains from base, and the manifest records a lineage that never happened. `assert_checkpoint_path` refuses the run-id shapes this repo generates (`extractor-v2`, `extractor-v2.1`, `foundation-v…`, `{doc_type}-adapter-v…`).
+- **`--continue-from` takes a checkpoint DIRECTORY, never a registry run-id.** It reaches ms-swift 3 as `adapters: [<dir>]` (it used to be `resume_from_checkpoint`, which restored the old run's optimizer, schedule and step), which reads a path; the directory must hold an `adapter_config.json`; given a run-id, ms-swift finds nothing, trains from base, and the manifest records a lineage that never happened. `assert_checkpoint_path` refuses the run-id shapes this repo generates (`extractor-v2`, `extractor-v2.1`, `foundation-v…`, `{doc_type}-adapter-v…`).
 
 ### 2. `training/merge.py`
 
@@ -136,14 +136,61 @@ The trainer receives **`--dataset` (the epoch files) and `--val_dataset` (val) a
 - [ ] `dataset` is the first `num_train_epochs` epoch files, ms-swift gets `num_train_epochs: 1`, and fewer files than epochs is refused.
 - [ ] Every file training reads exists after a real dataset build (`tests/test_orchestration.py`).
 - [ ] Train and val are passed as **separate** datasets; no path puts the validation split into `--dataset`.
-- [ ] Under the default config the rendered CLI carries `quantization_bit 0` and no `bnb_4bit_*` argument; `load_in_4bit: true` switches to NF4, and the manifest's `technique` follows.
+- [ ] Under the default config the rendered CLI carries no quantization and no `bnb_4bit_*` argument; `load_in_4bit: true` switches to NF4 (`quant_method bnb`, `quant_bits 4`), and the manifest's `technique` follows.
 - [ ] Target modules contain no `merger`; `freeze_aligner` is always true; `--train-vit` renders `--freeze_vit false` and records a ViT **LoRA**.
 - [ ] `max_length` covers the largest task cap including `by_doc_type` overrides.
 - [ ] The assistant span **includes** the end-of-turn token, so EOS is supervised.
 - [ ] **Label masking verified**: loss only on assistant tokens; a mutated masking implementation fails the test.
-- [ ] `early_stopping_patience` is emitted, not merely configured.
+- [ ] Every flag in the rendered command is one ms-swift 3's own parser accepts (Phase 0 spike `check_ms_swift` parses the exact command with `HfArgumentParser(TrainArguments)`).
 - [ ] `--continue-from` refuses a run-id and marks the manifest so the gate demands cross-type regression evidence.
 - [ ] Checkpoints are discovered from the versioned output directory after training, and selection scores them with the gate's metric, not loss.
 - [ ] Adapter lands on the staging volume; the RunManifest lands in **Blob** with `artifacts.status: "staged"`, LoB coverage, and seed recorded.
 - [ ] `vit_gate` fires only when errors are perception errors, never on schema/reasoning errors alone.
 - [ ] `sweep.py` refuses below production volume, writes one manifest per candidate with `is_sweep_run: true`, conditions each phase on the previous winner, excludes unscored candidates, and leaves phase 3 off by default.
+
+---
+
+## Current implementation (2026-09-27)
+
+**ms-swift 3 command** (`build_training_config`): `model` (the local base directory — see below —
+else the Hub id, with `model_revision` only for a Hub id), `use_hf`, `target_modules`, `attn_impl:
+flash_attn`, `torch_dtype: bfloat16`, `group_by_length`, `split_dataset_ratio: 0.0` (validation is ours,
+never carved from train), `eval_strategy`/`save_strategy: steps`, `report_to: none`, `adapters` for
+`--continue-from`, `truncation_strategy: delete` with `strict: true` (a row over `max_length` is an error,
+never silently shortened). No `model_type` (ms-swift infers it). `--train-vit` is **refused**: the LoRA
+targets are decoder projection names and ms-swift applies `freeze_vit=false` only when expanding
+`all-linear`, so it trained the same decoder-only adapter while recording `vit_trainable`.
+
+**Staging** (`training/stage_data.py`): the corpus rows are rewritten into ms-swift's own format —
+string content with `<image>` placeholders and an `images` list — as local JSONL under
+`staging/train-data/{scope}/v{n}/`, and their page images are fetched once into a per-corpus-version
+cache (`staging/train-images/{tenant}/{corpus}/`, atomic unique `.part` downloads). Older corpus
+versions' caches are pruned (the current one and the most recent other are kept). A run is refused if its
+run id already exists in any state but `training`/`failed`.
+
+**Before launch, on the pod**:
+1. **Length**: every staged row is measured with the real tokenizer and the real resize rule
+   (smart_resize, factor 32) against `max_length` **and** against its task's reserved output tokens
+   (`training/length_check.py`); any over is refused with the rows named.
+2. **Masking**: a sample of staged rows is encoded with ms-swift's own template and
+   `data_collator.verify_staged_rows` asserts exactly the assistant content plus `<|im_end|>` is
+   supervised.
+3. **Where**: `assert_on_pod` refuses a real launch without CUDA (`common/gpu.py`), without the staging
+   volume, or when `model.local_dir` is configured and holds no model. `FIDEON_ALLOW_OFF_POD=1` opts a
+   non-RunPod GPU host in.
+
+**Pixel budget**: one budget per run from `common.config.pixel_budget(scope.tasks)`, passed to ms-swift as
+both `MAX_PIXELS`/`MIN_PIXELS` and `IMAGE_MAX_TOKEN_NUM`/`IMAGE_MIN_TOKEN_NUM` (whole 32×32 tokens), the
+same function the vLLM engine takes its budget from.
+
+**Base model**: loaded from `model.local_dir` in `configs/base_model.yaml` (default `/workspace/models`;
+the directory itself, a folder named after the model, or a Hugging Face cache snapshot), overridable with
+`FIDEON_BASE_MODEL_DIR`. The manifest still records `model_id@revision` as the identity.
+
+**Environment**: the ms-swift subprocess gets the pod environment minus credentials it has no use for
+(Azure, RunPod, anything named `*SECRET*`, `*PASSWORD*`, `*API_KEY*`, …); `HF_TOKEN` is kept.
+
+**Manifest**: `data_stats.train_examples` is the actual row count of the epochs used; `tenant_id` is
+recorded.
+
+**On the pod** `training.train` and `training.sweep` run detached in tmux like every long job.

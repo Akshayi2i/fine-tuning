@@ -113,3 +113,20 @@ This is the **minimum experiment that tests the architecture's generalisation cl
 - [ ] Pilot run evaluates against all six pilot criteria and names any that fail with its diagnosis path.
 - [ ] Every pilot training run produces a `RunManifest`.
 - [ ] `pilot_report` renders the three experiments as one go/no-go summary.
+
+---
+
+## Current implementation (2026-09-27)
+
+- **Pilot split**: under 200 documents per type the band is 70/18/12, applied **per line of business**; a
+  line with fewer than 5 documents trains whole and is not measured (listed in the manifest's
+  `train_only_lines`). At pilot volume many lines fall below that — their pilot numbers do not exist, by
+  design, rather than being noise.
+- **Alias hold-out** (above) is still done by choosing documents deliberately; it is not automatic — the
+  hash split does not know which surface label to hold out.
+- **Freezing a pilot eval set** needs `freeze-eval-set --allow-small`: under 100 test documents per type the
+  set is directional, and once frozen it is the yardstick for every later version. Prefer to freeze from the
+  first build at real scale; if a pilot set is frozen, replacing it later is a deliberate delete-and-refreeze
+  after which older scores are not comparable.
+- **Pod runs**: every pilot command started on the pod runs detached in tmux (SPEC_13); install each pod with
+  `bash scripts/setup_pod.sh <role>` and run `python scripts/phase0_spike.py` first.

@@ -35,7 +35,7 @@ Generation ──> token logprobs ──> map to field spans ──> aggregate p
 
 ### 1. `calibration/logprob_confidence.py`
 - Consumes field spans + logprobs from SPEC_07 `span_map` and aggregates to a raw per-field confidence.
-- **Default aggregation = minimum token probability within the span** — most sensitive to the weakest link, which is what you want for flagging risky fields. Pluggable (`min` | `mean` | `geomean`); the exact choice is an empirical tuning detail, not an architectural one, so make it a config value and record which was used.
+- **Superseded as the confidence itself (arch v2.1 §5.1).** The minimum token probability is length-biased — the minimum of *n* draws falls as *n* grows, so a long correct policy number scores below a short wrong year. It is now **one feature among several** handed to a per-field-type calibrator; see *Current implementation* below.
 - Handles nested fields and list fields (per-value confidence within each row).
 - **`line_of_business` gets confidence like any other field** (arch §0b) and is emitted in the same `{value, confidence}` shape.
 - Costs nothing extra at training or inference time — the logprobs are already there.
@@ -89,3 +89,35 @@ This matters most for **Loss Runs**, where a missed claim row is both easy to ma
 - [ ] A flagged list is routed to review even when every per-value confidence is high.
 - [ ] Calibrated confidence is available with **no ground truth** — the inference-time case that makes production review routing possible.
 - [ ] Fitting on data overlapping the training split fails the assertion.
+
+---
+
+## Current implementation (2026-09-27)
+
+This spec's §1–§3 describe v1's single-number calibration. What runs now (arch v2.1 §5):
+
+1. **Features per field** (`calibration/features.py::build_document_features`): min / mean / first-token
+   logprob, token count, **OCR agreement**, **rule checks**, null flag, cross-mode agreement, field type.
+   - *OCR agreement* compares the page text against the value **as printed** (a canonical envelope's
+     `raw`), not the normalised `parsed` — a date rewritten to `MM/DD/YYYY` is not on the page, so every
+     reformatted value scored 0.
+   - *Page text* has ONE definition for fitting and serving (`shown_ocr_text`): the OCR text of the pages
+     the model was shown, page markers and the blank-page placeholder removed, `None` for `image_only`.
+     Fitting used to join every user text block (markers only, for image-only rows) while serving passed
+     a joined `ocr_text` that is `None` for any multi-page request.
+   - *Rule checks* read siblings beside the field (`policy.effective_date` vs `policy.expiration_date`),
+     so they fire on canonical policies; *field type* recognises an address by any path segment
+     (`carrier.address.city`).
+   - Features are built on the **value view** of the extraction (envelopes collapsed), keyed like serving.
+2. **Per-field-type calibrators** (`calibration/feature_calibrator.py`): logistic regression per field type
+   over those features, fitted on the **calibration half** of validation.
+3. **Risk-controlled thresholds** (`calibration/thresholds.py`): per field type, chosen on the **threshold
+   half** to meet the error target; a type with no calibrator, or no threshold meeting the target, routes
+   to review rather than carrying an unmeasured number.
+4. **Per serving format**: each format gets its own calibrators from its own generations (quantization
+   moves the logprob distribution), stored at `releases/{tenant}/{release}/calibration/{format}/`.
+5. **Loss Run reconciliation** (`calibration/reconciliation.py`) per policy period, alongside row
+   completeness.
+
+The calibration samples come from `evaluation/validation_generation.py` on the merged model in each format,
+with the engine released between formats. A resumed `package` finds the calibrators in Blob.

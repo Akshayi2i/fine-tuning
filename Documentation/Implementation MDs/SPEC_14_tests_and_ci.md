@@ -88,3 +88,28 @@ A test suite + CI that verifies the correctness-critical pieces without GPUs or 
 A unit test proves a module is self-consistent. Only a test that runs both sides proves they agree. The suite covers: every `GATING_METRICS` name is one `score_subset` emits (the defect that made the promotion gate unpassable); the review-queue consumer recognises the flags `list_completeness` emits; every `vllm_serving.yaml` threshold reaches a parameter `extract` accepts; both trainers honour their YAML over helper defaults; the double-annotation sample is not a subset of `train`; and the gate's verdict key differs from the eval report's.
 
 **Fix a pair, test the pair.** The trainer tests are parameterised over *both* trainers because the same class of bug — the validation-split leak, then the argument-ordering override — was twice fixed in one of two and reported as fixed in both.
+
+---
+
+## Current implementation (2026-09-27)
+
+~1,460 tests, CPU-only, no live Azure (`pytest -q`). Test files added since this spec, each guarding a
+failure that was real:
+
+| Test | Guards |
+|---|---|
+| `test_eval_integrity.py` | invented fields scored wrong; nested tables; per-document pooling; failure-rate refusal; image localisation; calibration features on canonical paths; engine release; carrier normalisation; digit-aware estimate; per-window noise spread |
+| `test_serving_parity.py` | `lob` on the request; page/image pairing; one blank-page text; one pixel budget; **every date field in every LOB schema** formatted; no serving page threshold; prompt hash over every prompt input, refused at cold start |
+| `test_freeze_eval_set.py` | freeze layout the gate reads; refused twice; refused below 100/type without `--allow-small`; a rebuild after freezing trains on none of the eval set or its families |
+| `test_split_by_line.py` | band per type, placement per line; small lines train whole; measured lines reach val and test; bands only raise edges; crossing a band never moves a trained family into evaluation |
+| `test_release_weights.py` | merge refusals; scoped push paths; off-pod refusal; the base found under `/workspace/models` in all three layouts |
+| `test_dependencies.py` | every third-party import installed by some group; requirements files name real groups; the training pod has vLLM |
+| `test_detach.py`, `test_pod_run.py` | on the pod every long entry point detaches; already-safe jobs do not re-detach; every entry point classified; the launcher never stops the pod or a run unasked; LF line endings |
+| `test_gpu_only.py` | model loaders require CUDA; no `device_map="cpu"`/`"auto"`; OCR refuses CPU; pod detection without `RUNPOD_POD_ID`, and look-alikes rejected |
+
+Contract tests also check that `.env.example` documents every variable the code reads (and nothing it
+does not), and that `SPEC_ALL_COMBINED.md` is regenerated, never hand-edited
+(`python -m scripts.combine_specs --write`).
+
+**Not testable off the pod**, and left to the Phase 0 spike: real tmux across a disconnect, a real merge, the
+masking encoder on ms-swift's template, vLLM 0.11 loading Qwen3-VL with the pixel budget, and a real upload.

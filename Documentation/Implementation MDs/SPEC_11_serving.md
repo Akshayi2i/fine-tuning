@@ -40,7 +40,7 @@ confidence calibration
 - Pulls the promoted artifact from Blob on cold start (SPEC_02); version configurable.
 - Uses SPEC_07 `model_runner` / `input_builder` for generation so output matches eval and testing exactly.
 - **Asserts the serving MinerU version matches the training corpus pin** (SPEC_03 `assert_version_matches`) — a mismatch is distribution shift and a regression trigger (arch §8a), not a warning to ignore.
-- **Every tuneable in `configs/inference/vllm_serving.yaml` must have a reader.** `serving_thresholds()` lifts `routing.classifier_confidence_threshold`, `confidence.review_threshold` and `long_documents.page_threshold` out of the config and passes them into `extract`. They were declared in that file and read by no code, so an operator could raise `review_threshold`, redeploy, and change nothing at all — the hardcoded defaults inside `extract` won silently every time. A test asserts each key the helper emits is a parameter `extract` accepts.
+- **Every tuneable in `configs/inference/vllm_serving.yaml` must have a reader.** `serving_thresholds()` lifts `routing.classifier_confidence_threshold` and `confidence.review_threshold` out of the config and passes them into `extract`. (`long_documents.page_threshold` was removed from the config: the page threshold is `common.constants.DEFAULT_LONG_DOC_PAGE_THRESHOLD`, the value the corpus build planned its training windows with, so serving cannot re-shape documents away from what was trained.) They were declared in that file and read by no code, so an operator could raise `review_threshold`, redeploy, and change nothing at all — the hardcoded defaults inside `extract` won silently every time. A test asserts each key the helper emits is a parameter `extract` accepts.
 - **Calibration is selected after classification, not before.** The handler hands the whole `{doc_type: params}` map to `extract`, which picks the entry once the classifier has said what the document is. Resolving it in the handler from the caller-supplied `doc_type` meant a lookup on `""` for every request that did not name its own type — which is every classification-driven request, the endpoint's entire purpose — and the request was refused before extraction ran. `assert_calibration_present` accepts the map and checks it is non-empty; an empty one is still no calibration.
 - **The adapter map holds adapters that exist.** `resolve_model_version(..., doc_type=…)` constructs `type_adapter` unconditionally — it is a path, not evidence anything was trained — so `build_adapter_map` confirms the directory holds an `adapter_config.json` before mapping a doc type to it. Trusting the path mapped all three types on a `--foundation-only` build, and vLLM was then handed a `LoRARequest` for a directory that does not exist, failing every request instead of serving Foundation-only with a `routing:no_adapter_available` flag.
 - **No plaintext PII in logs**; do not persist raw request/response bodies (master §8). The payload log call sits **inside** the handler's `try`: `safe_log_payload` iterates the payload, so an `input` that is not a JSON object raised straight out of the handler and RunPod returned an opaque platform error — the exact failure the structured-error contract exists to prevent.
@@ -69,7 +69,7 @@ document ──> classifier ──> confidence >= threshold ? ──> yes ──
 ### 4. `serving/page_router.py`
 Long-document handling, primarily a **Policy-document** concern (arch §7). Policy documents can run 50+ pages; each page at full resolution costs 1,000–2,000+ vision tokens, so a naive "every page image + all OCR in one prompt" approach blows the context window and wastes compute on pages containing no extractable fields.
 
-1. **Page routing** — for a document over the page threshold (default `>5` pages, from `vllm_serving.yaml`), identify which pages contain the target fields via a cheap first pass: keyword/section detection over MinerU's per-page OCR text, or a lightweight page classifier. Most policy schemas draw from a minority of pages (declarations, schedules, specific endorsements).
+1. **Page routing** — for a document over the page threshold (default `>5` pages, `common.constants.DEFAULT_LONG_DOC_PAGE_THRESHOLD`), identify which pages contain the target fields via a cheap first pass: keyword/section detection over MinerU's per-page OCR text, or a lightweight page classifier. Most policy schemas draw from a minority of pages (declarations, schedules, specific endorsements).
 2. **Scoped extraction** — run the model on the selected pages **in a single call**, interleaved `[img_3][<page 3 of 20> + md_3][img_9][<page 9 of 20> + md_9]…` (SPEC_07). One call per page was the earlier design and was wrong twice over: it asked the model to produce a complete document-level JSON from one page — a shape no training row ever had — and it prevented the model from seeing that a table on page 9 continues on page 14. Interleaving makes a routed request a **subsequence of the full document**, so the served shape is the trained shape with fewer pairs. It is also one call instead of N.
 3. **Merge — no longer on the serving path.** A single call returns one document-level object, so there is nothing to merge. The conflict rule it implemented (*the declarations page wins for policy-level fields*) is stated to the model directly in the Policy prompt block, which keeps it in one place rather than two that can disagree. `merge_page_extractions` is retained as the only implementation of that rule in code, for any future path that does produce per-page results.
 
@@ -112,3 +112,35 @@ Per request: (OCR if provided) → classify → route adapter/prompt/schema → 
 - [ ] MinerU version mismatch against the corpus pin fails loudly.
 - [ ] No PII in logs; no raw bodies persisted.
 - [ ] `serving/pipeline.py` is the single path reused by SPEC_12.
+
+---
+
+## Current implementation (2026-09-27)
+
+**Canonical policies are read as windows** (`serving/pipeline.py::_extract_policy_windows`): every
+section group × page window planned by `data_pipeline/dataset_builder/policy_windows.plan_windows` — the
+function the corpus build expanded its training rows with — generated as **one vLLM batch**, then merged by
+`serving/policy_merge.py` (the declarations window wins policy-level fields; array rows are de-duplicated
+on `configs/schema_sections.yaml` keys). This is how **200+ page policies** are served: a failed window is
+contained and flagged rather than failing the document. Other long documents keep single-call routing.
+
+**The request** (`serving/vllm_entrypoint.py::build_request`):
+- `lob` (or `line_of_business`): one line, or a list for a package policy. It selects the line's canonical
+  schema; a single line with no schema is **refused**, not quietly served against the fallback. Nothing set
+  it before, so every served policy was read against the fallback while training used its line's schema.
+- `page_texts` must number exactly pages `1..n` against the `n` images sent, or the request is refused — a
+  shifted map puts page 3's text beside page 4's image.
+- Images are paired **by page number** (`page_N.` by file name, else position); an `image_only` request no
+  longer maps every page to image 1, and a page beyond the images is an error.
+
+**Parity with training**: the same blank-page placeholder, the same pixel budget (engine
+`mm_processor_kwargs`), the same page threshold, dates in `MM/DD/YYYY` by the same word rule, and the
+calibration page text by the same definition (`calibration.features.shown_ocr_text`).
+
+**Cold start** (`assert_prompt_hash`): each release records the hash of **every prompt input** — all
+templates (`prompts/**/*.jinja`, the per-doc-type ones included), every schema (ours and the client's
+canonical files) and the section map. A release packaged with different prompt inputs is **refused**; one
+with no recorded hash is warned about.
+
+**Engine**: vLLM `==0.11.0` (the build calibration was fitted with); refuses to start without CUDA; loads the
+merged model, or the base from the pod's local copy.

@@ -165,3 +165,24 @@ Once a model version exists (arch §7 step 6, §13 step 11):
 - [ ] Double-annotation path produces an agreement score on the sampled subset.
 - [ ] `label_metadata.json` captures full provenance including draft backend and the review requirement in force.
 - [ ] `active_learning` orders a queue by ascending confidence, surfaces row-completeness flags, and refuses to run while `review_requirement` is `"full"`.
+
+---
+
+## Current implementation (2026-09-27)
+
+- **Policy labels are the client's canonical JSON** (`configs/canonical schema/LOB Schema/{line}.json`, 34
+  files; the fallback is used when the line is unknown or the policy spans several lines). Every leaf is a
+  FieldValue envelope `{raw, parsed, confidence{score,source}, page_ref, flagged}`; `raw` is the text as
+  printed, `parsed` the normalised value, `page_ref` the page(s) it was read from. The training target
+  (`common.canonical.to_model_target`) keeps only `raw`, `parsed`, `page_ref` and drops what the document
+  does not state.
+- **Dates are written `MM/DD/YYYY`** in `parsed` — in the training target and in every output
+  (`with_output_dates`). A field is a date when a whole word of its name is `date`, `dates`, `dated` or
+  `dob` (so `date_of_birth`, `date_licensed`, `report_due_dates` are; `candidate`, `update_reason` are not);
+  `tests/test_serving_parity.py` checks every date field in all LOB schemas.
+- **`page_ref` matters now**: long policies are trained and served as page windows, and a value is taught
+  only in the window that holds its page. A value with no `page_ref` in a multi-window group is reported
+  as *unplaced* and a value on pages no window reads as *unread* — both logged per document at corpus build.
+- **Line of business** for a policy comes from `label_metadata.json` (`lob`), not from the label; it
+  selects the canonical schema and is what the corpus manifest's LoB coverage counts.
+- **Synthetic documents** (`metadata.synthetic: true`) pin their whole family to train (SPEC_05).

@@ -22,6 +22,7 @@ v1's own module docstring had the right of it: *"GGUF is the portable/edge path 
 - Folds in the **checkpoint the §11.2 selector chose**, recorded on the plan. The merged weights do not say which checkpoint they came from, and once the staging volume is reclaimed nothing else does either.
 - `dtype` defaults to **bf16, not fp16**: the adapter trained in bf16 against a bf16 base, and FP8 is quantized from this artifact. Merging to fp16 would insert a precision change between training and every serving format for no reason.
 - Writes to the **staging volume**. The merged model is ~16 GB and quantization also runs on RunPod; pushing it to Azure and pulling it back is a 32 GB round trip for nothing (master §12a).
+- **Runs on the GPU** into the **pinned local base** (see *Current implementation*); written to `<output>.partial` and renamed into place only once `config.json` and the safetensors exist.
 
 ## 2. `postprocessing/quantize.py` — serving formats
 
@@ -105,3 +106,28 @@ A format exceeding **any** threshold is not served. Asking the serving gate abou
 - [ ] A format that was not measured does not pass.
 - [ ] **`assert_servable` refuses a serving format that produced no verdict at all.** `validate_quant` only returns a result for formats it was given metrics for, so a format nobody scored appears in neither `servable_formats` nor `blocked_formats`. Checking `blocked_formats` alone let it sail through to push with zero measurements — the precise inverse of the rule this module exists to enforce.
 - [ ] The threshold gate sits inside `package`, between quantize and calibrate.
+
+---
+
+## Current implementation (2026-09-27)
+
+**Merge** (`training/merge.py`), implemented:
+- refuses an adapter directory without `adapter_config.json` (a run's output root is not an adapter), and
+  a base revision still `PIN_ME` when the base would come from the Hub;
+- loads the base with `AutoModelForImageTextToText` in the merge dtype on **`device_map="cuda"`** — GPU
+  only (`require_cuda`); every engine is released before merge runs — from the pod's local copy
+  (`model.local_dir`) when present, applies the adapter with PEFT, `merge_and_unload()`, saves safetensors
+  (5 GB shards) **and the processor** (vLLM reads the chat template and image-processor config from the
+  model directory), then renames `.partial` into place;
+- merges the checkpoint `checkpoint_eval` selected, read from Blob on a resumed run; with nothing selected
+  a real run refuses rather than merging the output root.
+
+**Quantization plan is scope-aware** (`plan_quantization(..., scope=)`): a scoped run quantizes its own
+merged model into its own paths. The llm-compressor export refuses without CUDA and needs its **own
+environment** (`requirements-quantize.txt`; PyPI name `llmcompressor`): it requires `datasets>=4` where
+ms-swift 3 needs `<4`, and a transformers range vLLM 0.11 excludes.
+
+**Package uploads real weights** (`orchestration.pipeline_dag._push_weights`, through `transfer.py`): the
+selected adapter, the merged model and every non-bf16 format, instead of the placeholder JSON it wrote at
+each destination; a dry run still records where each would go. The run manifest's `quantized_model` points
+at the first quantized format — never bf16, which is not an export.

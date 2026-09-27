@@ -13,7 +13,7 @@ Provide a clean, typed interface for all Azure Blob reads/writes, and implement 
 ### 1. `artifact_registry/paths.py` (build this first)
 - The **single place** the Blob layout (master §4) is expressed. Every other function builds paths through it.
 - **Reserves the tenant prefix** (arch §8b): `raw-documents/`, `processed/`, `golden-labels/`, and `corpus/` are `{tenant_id}`-prefixed; `base-models/`, `adapters/`, `registry/`, `golden-eval-set/` are never prefixed. `tenant_id` **defaults from `DEFAULT_TENANT_ID`** — the build is single-tenant and the prefix exists so no migration is needed later.
-- Distinguishes the two adapter lineages: `adapters/foundation/v{n}/` and `adapters/{doc_type}/v{n}/`. A per-tenant lineage is **not built** until a broker requires one.
+- Distinguishes the adapter lineages: `adapters/foundation/v{n}/` (unified), `adapters/scope/{scope}/v{n}/` (a scoped run) and `adapters/{doc_type}/v{n}/` (a §4.2 graduated per-type adapter). A per-tenant lineage is **not built** until a broker requires one.
 - **Also expresses the RunPod staging paths** (master §12a) — `/runpod-volume/staging/{adapters,merged-models,eval-reports,run_manifests}/` — deliberately mirroring the Blob layout so `package` (SPEC_13 command 2) copies rather than translates. Staging paths and Blob paths are built by separate functions that must never be interchanged: one is working storage, the other is the artifact of record.
 
 ### 2. `artifact_registry/blob_client.py`
@@ -114,3 +114,31 @@ CLI + functions:
 - [ ] A `staged` manifest resolves to staging-volume paths; a `published` one resolves to Blob paths.
 - [ ] `diff_manifests` surfaces a changed `corpus_version` / `mineru_version` / hyperparameter.
 - [ ] Unit tests mock the Blob client (no live Azure needed for CI).
+
+---
+
+## Current implementation (2026-09-27)
+
+**Paths added since this spec** (all in `artifact_registry/paths.py`):
+
+| Path | Holds |
+|---|---|
+| `merged-models/scope/{scope}/v{n}/`, `quantized-models/scope/{scope}/v{n}/vllm/{format}/` | a scoped run's own models |
+| `eval-reports/v{n}/scope/{scope}/{summary,gate_decision,checkpoint_selection}.json` | a scope's report, verdict and chosen checkpoint |
+| `releases/{tenant}/{release_id}/bundle.json`, `.../calibration/{format}/calibrators.json`, `.../gate/{format}/gate_decision.json`, `releases/{tenant}/release_index.json` | the release bundle — the unit of promotion |
+| `golden-eval-set/{source_id}/{golden.json,metadata.json,page_N.png,page_N.md}`, `golden-eval-set/manifest.json` | the frozen eval set (SPEC_08) |
+| staging: `{mount}/staging/train-data/{scope}/v{n}/`, `{mount}/staging/train-images/{tenant}/{corpus}/` | a run's staged JSONL; one page-image cache per corpus version, shared by every run on it |
+
+The staging root is `$RUNPOD_VOLUME_MOUNT/staging` (default `/runpod-volume`; set `/workspace` when the pod
+mounts its volume there).
+
+**`transfer.py`** gained scope-aware helpers — `push_scoped_adapter(local, scope, version)`,
+`push_merged_model(..., scope=)`, `push_quantized(..., scope=)` — which `package` uses to upload the real
+adapter, merged model and quantized formats. Each refuses a missing source directory instead of creating
+an empty prefix that would read as a published model.
+
+**Run manifest** records `tenant_id` (the field existed and nothing set it) and the manifest's
+`quantized_model` points at the first *quantized* format — bf16 is the merged model, never an export.
+
+**Blob `upload_dir`/`download_dir`** are what staging, localisation and package use; images are fetched
+into the per-corpus cache atomically (unique `.part` names, renamed into place).
