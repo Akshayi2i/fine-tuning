@@ -129,4 +129,5 @@ This is the **minimum experiment that tests the architecture's generalisation cl
   first build at real scale; if a pilot set is frozen, replacing it later is a deliberate delete-and-refreeze
   after which older scores are not comparable.
 - **Pod runs**: every pilot command started on the pod runs detached in tmux (SPEC_13); install each pod with
-  `bash scripts/setup_pod.sh <role>` and run `python scripts/phase0_spike.py` first.
+  `bash scripts/pod_bootstrap.sh` (both environments, the base model and the spike), and run OCR in
+  `/workspace/venv-ocr` before any pipeline command.

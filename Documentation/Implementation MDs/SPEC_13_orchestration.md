@@ -272,5 +272,18 @@ The 13 stages (arch v2.1 §13) as reusable, individually addressable stage funct
 **Pod setup** (`scripts/setup_pod.sh ocr|train|serve|quantize|dev`): installs the role's requirements file,
 builds flash-attn against the installed torch, installs tmux, checks packages and CUDA.
 
+**Pod bootstrap** (`scripts/pod_bootstrap.sh [--pdf <policy.pdf>]`): one command for a fresh H200 SXM pod,
+detached in tmux and safe to re-run. In order: GPU (warns if not an H200), `/workspace` mounted, the repo on
+the volume, 150 GB free (`FIDEON_MIN_FREE_GB`); `.env` keys `RUNPOD_VOLUME_MOUNT=/workspace`, `HF_HOME`,
+`MINERU_TOOLS_CONFIG_JSON=/workspace/magic-pdf.json`, filled only when unset, blank or the template's
+default, and a refusal if the connection string is unquoted; `/workspace/venv` (`setup_pod.sh train`) and
+`/workspace/venv-ocr` (`setup_pod.sh ocr`); MinerU's config onto the volume and to cuda; the base model at
+the pinned revision into `/workspace/models`; the spike in the training environment (`--skip-mineru`) and,
+with `--pdf`, its MinerU checks in the OCR environment (`--only-mineru`). It ends with what is still to do.
+
+**OCR before `finetune`**: `stage_preprocessing` refuses with a `PipelineError` naming the OCR environment's
+command when documents still need OCR and MinerU is not importable (the training environment). With nothing
+pending it needs no MinerU.
+
 **RunPod backend**: `RunPodBackend` (launching pods through the API) is still unimplemented;
 `LocalBackend` runs the DAG in-process on whatever machine starts it — on the pod, inside tmux.

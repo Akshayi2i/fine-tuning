@@ -300,7 +300,7 @@ insurance-extraction-finetuning/
 │                     adapter_router  release_router
 ├── orchestration/    run  pipeline_dag  runpod_controller  detach
 │                     settings  config/pipeline.yaml
-├── scripts/          setup_pod.sh  pod_run.sh  phase0_spike.py
+├── scripts/          pod_bootstrap.sh  setup_pod.sh  pod_run.sh  phase0_spike.py
 │                     combine_specs.py  derive_aliases_from_canonical.py
 ├── testing/          run_extraction  render_prompts  prompts/
 ├── pilot/            zero_shot_baseline  smoke_test  pilot_run
@@ -579,7 +579,13 @@ What the build does now that the sections above did not describe. Each module sp
   OCR pod = MinerU 1.x (`magic-pdf[full]`, wired in `data_pipeline/ocr/run_mineru.py`); quantization = `llmcompressor` in its own environment (its
   `datasets`/`transformers` ranges conflict with ms-swift and vLLM).
 - **Base model** in `/workspace/models` (`model.local_dir`, or `FIDEON_BASE_MODEL_DIR`); a real launch is
-  refused when it is configured and absent.
+  refused when it is configured and absent. Pinned to revision `0c351dd01ed87e9c1b53cbc748cba10e6187ff3b`.
+- **The pod is one H200 SXM with a network volume at `/workspace`**, prepared by
+  `scripts/pod_bootstrap.sh`: GPU/mount/150 GB checks, `.env` keys, **two environments** on the volume
+  (`/workspace/venv` for training and serving; `/workspace/venv-ocr` for MinerU, which cannot share one
+  with vLLM 0.11 / torch 2.8), MinerU's config on the volume set to cuda, the pinned base model, the spike.
+  OCR runs first in the OCR environment; `finetune` then finds nothing to OCR, and refuses with that
+  command if documents are still pending.
 - **GPU only** (`common/gpu.py`): training, merge, quantization, the vLLM engine, the HF backend and MinerU
   refuse to start without CUDA; models load with `device_map="cuda"`, never `"auto"` (which offloads to CPU).
 - **Jobs survive a disconnect** (`orchestration/detach.py`, `scripts/pod_run.sh`): on the pod

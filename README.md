@@ -74,8 +74,50 @@ pip install -r requirements.txt   # data pipeline, eval, test tooling - CPU only
 pytest -q                         # fixture-driven, no GPU or live Azure needed
 ```
 
+### The H200 pod: one command
+
+Clone the repo onto the network volume and run the bootstrap. It runs in tmux,
+so the laptop can close while it installs and downloads, and it is safe to
+re-run: after a pod stop it only checks what is already there.
+
+```bash
+cd /workspace && git clone https://github.com/Akshayi2i/fine-tuning.git && cd fine-tuning
+bash scripts/pod_bootstrap.sh --pdf /workspace/sample_policy.pdf   # --pdf is optional
+```
+
+It checks the GPU, the `/workspace` mount and 150 GB free; fills `.env`
+(`RUNPOD_VOLUME_MOUNT=/workspace`, `HF_HOME`, `MINERU_TOOLS_CONFIG_JSON`) without
+overwriting a value you set; builds **two environments** on the volume; moves
+MinerU's config onto the volume and sets it to cuda; downloads the base model at
+the pinned revision into `/workspace/models`; and runs the Phase 0 spike. It ends
+with a list of anything still to do (the Azure connection string, MinerU's
+weights).
+
+| Environment | For | Why separate |
+|---|---|---|
+| `/workspace/venv` | training, `finetune`, `package`, serving (torch 2.8, ms-swift, vLLM 0.11, flash-attn) | |
+| `/workspace/venv-ocr` | OCR only (MinerU 1.x) | MinerU 1.x cannot share an environment with vLLM 0.11 / torch 2.8 |
+
+Everything is on `/workspace` because the container disk is wiped when the pod
+stops. Keep the Azure connection string in **double quotes** in `.env`: it is
+sourced by bash, which would otherwise cut it at the first `;`.
+
+**OCR runs first, in its own environment**, then the pipeline:
+
+```bash
+/workspace/venv-ocr/bin/python -m data_pipeline.ocr.run_mineru --doc-type policy --all-unprocessed
+source /workspace/venv/bin/activate
+python -m orchestration.run finetune --scope personal_lines --skip-ingest --corpus-version v1 --out-version v1
+```
+
+`finetune` finds every document already OCR'd and skips that stage. If documents
+still need OCR it stops with the command above rather than failing on an import.
+
+### One role at a time
+
 On a RunPod pod, one command per role installs its dependencies in the order
-that works and checks CUDA afterwards:
+that works and checks CUDA afterwards (the bootstrap calls it for `train` and
+`ocr`):
 
 | Pod | Command | Installs |
 |---|---|---|
@@ -235,11 +277,10 @@ process, which is why CI covers this much without a pod.
   de-identification corrupts the training signal - resolve before production.
 - **Field glosses need SME review.** They are prompt text; changing one after the
   first corpus build forces a rebuild and retrain.
-- **`configs/base_model.yaml` revision is unpinned** (`PIN_ME`). Phase 0.
 - **The dependency spike has not run.** ms-swift with Qwen3-VL, flash-attn,
-  vLLM multi-LoRA, MinerU on GPU, and whether GPU and CPU MinerU produce
-  different markdown - the last one decides whether `ocr_device` joins
-  `mineru_version` as a corpus pin (SPEC_03).
+  vLLM multi-LoRA, MinerU on GPU and its determinism. `scripts/pod_bootstrap.sh`
+  runs it; the base model is pinned to `0c351dd01ed87e9c1b53cbc748cba10e6187ff3b`
+  (the Hub commit of 2025-10-15).
 - **The pilot protocol is unrun.** `python -m pilot.pilot_report` reports
   `INCOMPLETE` until Experiments A, B and C have each written a report, and a
   missing experiment blocks rather than passing.

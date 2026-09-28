@@ -750,7 +750,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--pdf", type=Path, help="a real insurance PDF for the MinerU checks")
     parser.add_argument("--out", type=Path, default=Path("spike_report.json"))
     parser.add_argument("--skip-mineru", action="store_true")
+    parser.add_argument("--only-mineru", action="store_true",
+                        help="run only the MinerU checks: for the OCR environment, which has "
+                             "MinerU but not vLLM or ms-swift")
     args = parser.parse_args(argv)
+    if args.only_mineru and (args.skip_mineru or not args.pdf):
+        parser.error("--only-mineru needs --pdf and cannot be combined with --skip-mineru")
     # On the pod, run detached in tmux: a closed laptop must not stop the spike.
     try:
         from orchestration.detach import detach_script_if_needed
@@ -760,7 +765,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     print("Phase 0 spike — every check is independent; none aborts the run.\n")
-    results = [
+    results = [] if args.only_mineru else [
         run("cuda_available", "whether anything below can run", check_gpu),
         run("flash_attn", "throughput; sdpa is the fallback", check_flash_attn),
         run("ms_swift_arguments", "the Layer-3 entrypoint; TRL SFTTrainer is the fallback (arch §10)",

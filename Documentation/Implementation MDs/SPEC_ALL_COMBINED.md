@@ -309,7 +309,7 @@ insurance-extraction-finetuning/
 │                     adapter_router  release_router
 ├── orchestration/    run  pipeline_dag  runpod_controller  detach
 │                     settings  config/pipeline.yaml
-├── scripts/          setup_pod.sh  pod_run.sh  phase0_spike.py
+├── scripts/          pod_bootstrap.sh  setup_pod.sh  pod_run.sh  phase0_spike.py
 │                     combine_specs.py  derive_aliases_from_canonical.py
 ├── testing/          run_extraction  render_prompts  prompts/
 ├── pilot/            zero_shot_baseline  smoke_test  pilot_run
@@ -588,7 +588,13 @@ What the build does now that the sections above did not describe. Each module sp
   OCR pod = MinerU 1.x (`magic-pdf[full]`, wired in `data_pipeline/ocr/run_mineru.py`); quantization = `llmcompressor` in its own environment (its
   `datasets`/`transformers` ranges conflict with ms-swift and vLLM).
 - **Base model** in `/workspace/models` (`model.local_dir`, or `FIDEON_BASE_MODEL_DIR`); a real launch is
-  refused when it is configured and absent.
+  refused when it is configured and absent. Pinned to revision `0c351dd01ed87e9c1b53cbc748cba10e6187ff3b`.
+- **The pod is one H200 SXM with a network volume at `/workspace`**, prepared by
+  `scripts/pod_bootstrap.sh`: GPU/mount/150 GB checks, `.env` keys, **two environments** on the volume
+  (`/workspace/venv` for training and serving; `/workspace/venv-ocr` for MinerU, which cannot share one
+  with vLLM 0.11 / torch 2.8), MinerU's config on the volume set to cuda, the pinned base model, the spike.
+  OCR runs first in the OCR environment; `finetune` then finds nothing to OCR, and refuses with that
+  command if documents are still pending.
 - **GPU only** (`common/gpu.py`): training, merge, quantization, the vLLM engine, the HF backend and MinerU
   refuse to start without CUDA; models load with `device_map="cuda"`, never `"auto"` (which offloads to CPU).
 - **Jobs survive a disconnect** (`orchestration/detach.py`, `scripts/pod_run.sh`): on the pod
@@ -781,6 +787,18 @@ imports a package no group installs (MinerU was exactly that), or a requirements
 
 **Pod roles** (`scripts/setup_pod.sh ocr|train|serve|quantize|dev`): installs in order, builds flash-attn,
 installs tmux, checks every expected package and that torch sees CUDA. On the pod it runs itself in tmux.
+
+**Two environments, not one.** `magic-pdf[full]` 1.x and `vllm==0.11.0` / torch 2.8 do not resolve together,
+so `ocr` and `train` are separate environments: `scripts/pod_bootstrap.sh` builds `/workspace/venv` (train,
+which includes serve) and `/workspace/venv-ocr` (ocr) on the volume and records the requirements each was
+built from, so a re-run reinstalls only what changed.
+
+**Base model revision** pinned to `0c351dd01ed87e9c1b53cbc748cba10e6187ff3b` (Hub commit of 2025-10-15, four
+safetensors shards, 17.5 GB); the bootstrap downloads exactly that into `local_dir`.
+
+**`.env.example`**: the Azure connection string is quoted — the file is sourced by bash on the pod, which
+would cut an unquoted value at its first `;`. `HF_HOME` is documented (on the pod,
+`/workspace/.cache/huggingface`) and `MINERU_TOOLS_CONFIG_JSON` may be an absolute path.
 
 **Vision budget** (`configs/shared/vision.yaml`): budgets are whole 32×32 visual tokens — `max_pixels`
 `2483200` (was `2483712`, a Qwen2.5 28×28 figure that made `MAX_PIXELS` and `IMAGE_MAX_TOKEN_NUM` name
@@ -1046,6 +1064,16 @@ Consequences, all enforced in code:
 - **MinerU 1.x**, installed by the `ocr` dependency group as `magic-pdf[full]>=1.3,<2` — the code imports
   `magic_pdf` and records the `magic-pdf` version, and MinerU 2.x renamed the package. Model weights are a
   separate download (MinerU's `download_models_hf.py`); `setup_pod.sh ocr` prints the step.
+- **Its own environment.** MinerU 1.x cannot share an environment with vLLM 0.11 / torch 2.8, so on the pod
+  it is installed in `/workspace/venv-ocr` (`scripts/pod_bootstrap.sh`) and OCR runs there first:
+  `/workspace/venv-ocr/bin/python -m data_pipeline.ocr.run_mineru --doc-type policy --all-unprocessed`.
+  The pipeline's preprocessing stage then finds every document done (`find_unprocessed` checks for
+  `ocr_meta.json`). Run from the training environment with documents still pending, it raises a
+  `PipelineError` naming that command instead of failing on `import magic_pdf`.
+- **Its config on the volume**: MinerU's download writes `~/magic-pdf.json` on the container disk, which a
+  pod stop wipes. The bootstrap moves it to `/workspace/magic-pdf.json` and sets
+  `MINERU_TOOLS_CONFIG_JSON` to that absolute path (MinerU joins it to the home directory, and an absolute
+  path wins); `HF_HOME` on the volume keeps the weights.
 - **GPU only**, with no CPU option (see the GPU section above and `common/gpu.py` for the same rule on every
   other model step).
 - **Render-only documents** (`ocr_meta.render_only: true`, rendered for labeling without OCR) and documents
@@ -2818,6 +2846,19 @@ The 13 stages (arch v2.1 §13) as reusable, individually addressable stage funct
 **Pod setup** (`scripts/setup_pod.sh ocr|train|serve|quantize|dev`): installs the role's requirements file,
 builds flash-attn against the installed torch, installs tmux, checks packages and CUDA.
 
+**Pod bootstrap** (`scripts/pod_bootstrap.sh [--pdf <policy.pdf>]`): one command for a fresh H200 SXM pod,
+detached in tmux and safe to re-run. In order: GPU (warns if not an H200), `/workspace` mounted, the repo on
+the volume, 150 GB free (`FIDEON_MIN_FREE_GB`); `.env` keys `RUNPOD_VOLUME_MOUNT=/workspace`, `HF_HOME`,
+`MINERU_TOOLS_CONFIG_JSON=/workspace/magic-pdf.json`, filled only when unset, blank or the template's
+default, and a refusal if the connection string is unquoted; `/workspace/venv` (`setup_pod.sh train`) and
+`/workspace/venv-ocr` (`setup_pod.sh ocr`); MinerU's config onto the volume and to cuda; the base model at
+the pinned revision into `/workspace/models`; the spike in the training environment (`--skip-mineru`) and,
+with `--pdf`, its MinerU checks in the OCR environment (`--only-mineru`). It ends with what is still to do.
+
+**OCR before `finetune`**: `stage_preprocessing` refuses with a `PipelineError` naming the OCR environment's
+command when documents still need OCR and MinerU is not importable (the training environment). With nothing
+pending it needs no MinerU.
+
 **RunPod backend**: `RunPodBackend` (launching pods through the API) is still unimplemented;
 `LocalBackend` runs the DAG in-process on whatever machine starts it — on the pod, inside tmux.
 
@@ -3080,4 +3121,5 @@ This is the **minimum experiment that tests the architecture's generalisation cl
   first build at real scale; if a pilot set is frozen, replacing it later is a deliberate delete-and-refreeze
   after which older scores are not comparable.
 - **Pod runs**: every pilot command started on the pod runs detached in tmux (SPEC_13); install each pod with
-  `bash scripts/setup_pod.sh <role>` and run `python scripts/phase0_spike.py` first.
+  `bash scripts/pod_bootstrap.sh` (both environments, the base model and the spike), and run OCR in
+  `/workspace/venv-ocr` before any pipeline command.

@@ -101,6 +101,16 @@ Consequences, all enforced in code:
 - **MinerU 1.x**, installed by the `ocr` dependency group as `magic-pdf[full]>=1.3,<2` — the code imports
   `magic_pdf` and records the `magic-pdf` version, and MinerU 2.x renamed the package. Model weights are a
   separate download (MinerU's `download_models_hf.py`); `setup_pod.sh ocr` prints the step.
+- **Its own environment.** MinerU 1.x cannot share an environment with vLLM 0.11 / torch 2.8, so on the pod
+  it is installed in `/workspace/venv-ocr` (`scripts/pod_bootstrap.sh`) and OCR runs there first:
+  `/workspace/venv-ocr/bin/python -m data_pipeline.ocr.run_mineru --doc-type policy --all-unprocessed`.
+  The pipeline's preprocessing stage then finds every document done (`find_unprocessed` checks for
+  `ocr_meta.json`). Run from the training environment with documents still pending, it raises a
+  `PipelineError` naming that command instead of failing on `import magic_pdf`.
+- **Its config on the volume**: MinerU's download writes `~/magic-pdf.json` on the container disk, which a
+  pod stop wipes. The bootstrap moves it to `/workspace/magic-pdf.json` and sets
+  `MINERU_TOOLS_CONFIG_JSON` to that absolute path (MinerU joins it to the home directory, and an absolute
+  path wins); `HF_HOME` on the volume keeps the weights.
 - **GPU only**, with no CPU option (see the GPU section above and `common/gpu.py` for the same rule on every
   other model step).
 - **Render-only documents** (`ocr_meta.render_only: true`, rendered for labeling without OCR) and documents

@@ -330,10 +330,46 @@ def _is_preprocessed(ctx: StageContext) -> bool:
     return not any(find_unprocessed(ctx.raw, dt, ctx.tenant_id) for dt in ctx.doc_types)
 
 
+#: The OCR environment on the pod. MinerU 1.x cannot share an environment with
+#: vLLM 0.11 / torch 2.8, so OCR has its own (scripts/pod_bootstrap.sh).
+OCR_VENV = "/workspace/venv-ocr"
+
+
+def _assert_ocr_runnable(ctx: StageContext) -> None:
+    """Refuse clearly when documents still need OCR and MinerU is not installed here.
+
+    The training environment has no MinerU. OCR runs first, in its own
+    environment; once every document has its ocr_meta.json this stage has
+    nothing to do and the pipeline carries on in the training environment.
+    """
+    import importlib.util
+
+    from data_pipeline.ocr.run_mineru import find_unprocessed
+
+    if importlib.util.find_spec("magic_pdf") is not None:
+        return
+    pending = {dt: len(find_unprocessed(ctx.raw, dt, ctx.tenant_id)) for dt in ctx.doc_types}
+    pending = {dt: n for dt, n in pending.items() if n}
+    if not pending:
+        return
+    commands = "\n".join(
+        f"  {OCR_VENV}/bin/python -m data_pipeline.ocr.run_mineru --doc-type {dt} --all-unprocessed"
+        for dt in pending
+    )
+    raise PipelineError(
+        f"documents still need OCR ({', '.join(f'{dt}: {n}' for dt, n in pending.items())}) and "
+        "MinerU is not installed in this environment. It lives in the OCR environment, "
+        f"because it cannot share one with vLLM and torch 2.8. Run OCR there first:\n{commands}\n"
+        "then re-run this command; preprocessing will find nothing left to do."
+    )
+
+
 def stage_preprocessing(ctx: StageContext) -> StageResult:
     """MinerU OCR plus page rendering at the resolution cap. **Runs on GPU.**"""
     from data_pipeline.ocr.run_mineru import MinerUEngine, find_unprocessed, process_batch
 
+    if ctx.ocr_engine is None:
+        _assert_ocr_runnable(ctx)
     engine = ctx.ocr_engine or MinerUEngine()
     processed, skipped, failed = [], [], []
     for doc_type in ctx.doc_types:

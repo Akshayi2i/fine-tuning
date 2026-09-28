@@ -179,6 +179,18 @@ imports a package no group installs (MinerU was exactly that), or a requirements
 **Pod roles** (`scripts/setup_pod.sh ocr|train|serve|quantize|dev`): installs in order, builds flash-attn,
 installs tmux, checks every expected package and that torch sees CUDA. On the pod it runs itself in tmux.
 
+**Two environments, not one.** `magic-pdf[full]` 1.x and `vllm==0.11.0` / torch 2.8 do not resolve together,
+so `ocr` and `train` are separate environments: `scripts/pod_bootstrap.sh` builds `/workspace/venv` (train,
+which includes serve) and `/workspace/venv-ocr` (ocr) on the volume and records the requirements each was
+built from, so a re-run reinstalls only what changed.
+
+**Base model revision** pinned to `0c351dd01ed87e9c1b53cbc748cba10e6187ff3b` (Hub commit of 2025-10-15, four
+safetensors shards, 17.5 GB); the bootstrap downloads exactly that into `local_dir`.
+
+**`.env.example`**: the Azure connection string is quoted — the file is sourced by bash on the pod, which
+would cut an unquoted value at its first `;`. `HF_HOME` is documented (on the pod,
+`/workspace/.cache/huggingface`) and `MINERU_TOOLS_CONFIG_JSON` may be an absolute path.
+
 **Vision budget** (`configs/shared/vision.yaml`): budgets are whole 32×32 visual tokens — `max_pixels`
 `2483200` (was `2483712`, a Qwen2.5 28×28 figure that made `MAX_PIXELS` and `IMAGE_MAX_TOKEN_NUM` name
 different budgets). `common.config.pixel_budget()` is the one source for the trainer's env and the vLLM

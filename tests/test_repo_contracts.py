@@ -81,6 +81,8 @@ LIBRARY_OWNED_VARS = frozenset({
     "RUNPOD_ENDPOINT_ID",
     # MinerU's own: the name of its config file under the home directory.
     "MINERU_TOOLS_CONFIG_JSON",
+    # Hugging Face's cache location, kept on the volume on the pod.
+    "HF_HOME",
 })
 
 

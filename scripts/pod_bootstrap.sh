@@ -1,0 +1,223 @@
+#!/usr/bin/env bash
+# One command to make a fresh H200 SXM pod ready to train.
+#
+#   bash scripts/pod_bootstrap.sh [--pdf /workspace/sample.pdf]
+#
+# Run it from the repo, cloned onto the network volume (/workspace/fine-tuning).
+# It is safe to re-run: every step checks what is already there and does only
+# what is missing, so after a pod stop it finishes in minutes.
+#
+# What it does, in order:
+#   1. checks: a GPU (an H200 expected), /workspace mounted, >= 150 GB free
+#   2. .env: fills the pod's keys without touching any value already set
+#   3. /workspace/venv      training + serving (torch 2.8, ms-swift, vLLM 0.11, flash-attn)
+#   4. /workspace/venv-ocr  OCR (MinerU 1.x). Two environments because MinerU 1.x
+#                           cannot share one with vLLM 0.11 / torch 2.8.
+#   5. MinerU's config onto the volume, device-mode cuda
+#   6. the base model at the pinned revision into /workspace/models
+#   7. the Phase 0 spike (plus the MinerU checks when --pdf is given)
+#
+# Everything lives on /workspace because the container disk is wiped when the
+# pod stops. On the pod it runs detached in tmux: closing the laptop does not
+# stop it. Watch it with: bash scripts/pod_run.sh attach <name it prints>
+set -euo pipefail
+
+cd "$(dirname "$0")/.."
+REPO="$(pwd)"
+WORKSPACE="${FIDEON_WORKSPACE:-/workspace}"
+VENV="$WORKSPACE/venv"
+VENV_OCR="$WORKSPACE/venv-ocr"
+MODELS="$WORKSPACE/models"
+MIN_FREE_GB="${FIDEON_MIN_FREE_GB:-150}"
+MINERU_CONFIG="$WORKSPACE/magic-pdf.json"
+
+pdf=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --pdf) pdf="${2:?--pdf needs a path}"; shift 2 ;;
+    -h|--help) sed -n '2,24p' "$0"; exit 0 ;;
+    *) echo "usage: bash scripts/pod_bootstrap.sh [--pdf <a real policy PDF>]" >&2; exit 2 ;;
+  esac
+done
+if [ -n "$pdf" ] && [ ! -f "$pdf" ]; then
+  echo "pod_bootstrap: no PDF at $pdf" >&2; exit 2
+fi
+
+# --- detach: an install or download cut off by a closed laptop is half done ----
+on_pod=0
+if [ -n "${RUNPOD_POD_ID:-}" ] || [ -f /etc/rp_environment ] \
+   || { [ "$(uname -s)" = Linux ] && mountpoint -q "$WORKSPACE" 2>/dev/null \
+        && { [ -e /dev/nvidia0 ] || command -v nvidia-smi >/dev/null 2>&1; }; }; then
+  on_pod=1
+fi
+if [ "$on_pod" = 1 ] && [ -z "${TMUX:-}" ] && [ "${FIDEON_DETACHED:-}" != "1" ] \
+   && [ "${FIDEON_NO_DETACH:-}" != "1" ]; then
+  name="bootstrap-$(date -u +%Y%m%d-%H%M%S)"
+  args=(); [ -n "$pdf" ] && args=(--pdf "$pdf")
+  bash scripts/pod_run.sh start "$name" -- bash scripts/pod_bootstrap.sh "${args[@]}"
+  echo "Bootstrap is running in tmux as '$name'; closing the laptop will not stop it."
+  echo "  status: bash scripts/pod_run.sh status $name"
+  echo "  watch:  bash scripts/pod_run.sh attach $name   (Ctrl-b then d to leave it running)"
+  exit 0
+fi
+
+step() { echo; echo "=== $* ==="; }
+die() { echo "pod_bootstrap: $*" >&2; exit 1; }
+PENDING=()
+
+# --- 1. the pod ----------------------------------------------------------------
+step "1/7 checking the pod"
+[ "$(uname -s)" = Linux ] || die "run this on the RunPod pod, not the laptop"
+command -v nvidia-smi >/dev/null 2>&1 || die "no nvidia-smi: this pod has no GPU (every stage is GPU only)"
+gpu="$(nvidia-smi --query-gpu=name,memory.total --format=csv,noheader | head -n1)"
+echo "GPU: $gpu"
+case "$gpu" in
+  *H200*) ;;
+  *) echo "WARNING: expected an H200 SXM; the configs are sized for its 141 GB." ;;
+esac
+mountpoint -q "$WORKSPACE" || die "$WORKSPACE is not a mounted volume. Attach the network volume at $WORKSPACE: \
+the container disk is wiped when the pod stops, and the environments and model must survive that."
+case "$REPO/" in
+  "$WORKSPACE"/*) ;;
+  *) die "the repo is at $REPO, on the container disk, which is wiped on stop. Clone it under $WORKSPACE." ;;
+esac
+free_gb="$(df -BG --output=avail "$WORKSPACE" | tail -n1 | tr -dc '0-9')"
+echo "free on $WORKSPACE: ${free_gb} GB"
+[ "$free_gb" -ge "$MIN_FREE_GB" ] || die "only ${free_gb} GB free on $WORKSPACE; need ${MIN_FREE_GB} GB \
+(two environments ~25 GB, base model 17.5 GB, checkpoints, the staged corpus). Grow the network volume."
+
+# --- 2. .env ---------------------------------------------------------------------
+step "2/7 .env"
+[ -f .env ] || { cp .env.example .env; echo "created .env from .env.example"; }
+
+# Set KEY to VALUE only when it is unset, empty, or still the template's default:
+# a value the operator chose is never overwritten.
+ensure_env() {
+  local key="$1" value="$2" template_default="${3:-}" current
+  if grep -qE "^${key}=" .env; then
+    current="$(grep -E "^${key}=" .env | tail -n1 | cut -d= -f2-)"
+    if [ -n "$current" ] && [ "$current" != "$template_default" ]; then
+      [ "$current" = "$value" ] || echo "  keeping $key=$current (expected $value on this pod)"
+      return
+    fi
+    sed -i "s|^${key}=.*|${key}=${value}|" .env
+  else
+    printf '%s=%s\n' "$key" "$value" >> .env
+  fi
+  echo "  set $key=$value"
+}
+ensure_env RUNPOD_VOLUME_MOUNT "$WORKSPACE" /runpod-volume
+ensure_env HF_HOME "$WORKSPACE/.cache/huggingface"
+ensure_env MINERU_TOOLS_CONFIG_JSON "$MINERU_CONFIG"
+# .env is sourced by bash (here and by pod_run.sh): an unquoted connection string
+# is cut at its first ';' and every Blob call would fail with a confusing error.
+azure_line="$(grep -E '^AZURE_STORAGE_CONNECTION_STRING=' .env | tail -n1 || true)"
+azure_value="${azure_line#AZURE_STORAGE_CONNECTION_STRING=}"
+case "$azure_value" in
+  \"*|\'*) ;;
+  *\;*) die "AZURE_STORAGE_CONNECTION_STRING in .env contains ';' but is not quoted. Wrap the \
+value in double quotes: bash would otherwise cut it at the first ';'." ;;
+esac
+set -a; . ./.env; set +a
+export HF_HOME MINERU_TOOLS_CONFIG_JSON RUNPOD_VOLUME_MOUNT
+case "${AZURE_STORAGE_CONNECTION_STRING:-}" in
+  ""|*AccountName=...*)
+    PENDING+=("set AZURE_STORAGE_CONNECTION_STRING in $REPO/.env (every stage reads and writes Blob)") ;;
+esac
+
+# --- 3 and 4. the two environments -------------------------------------------------
+# A marker records the requirements an environment was built from; an unchanged
+# environment is not reinstalled on a re-run.
+make_venv() {
+  local venv="$1" role="$2" requirements="$3" stamp marker
+  stamp="$(cat "$requirements" pyproject.toml | sha256sum | cut -c1-16)"
+  marker="$venv/.fideon-$role"
+  if [ -f "$marker" ] && [ "$(cat "$marker")" = "$stamp" ] && [ -x "$venv/bin/python" ]; then
+    echo "$venv is up to date ($role)"
+    return
+  fi
+  if [ ! -x "$venv/bin/python" ]; then
+    python3 -m venv "$venv" 2>/dev/null || {
+      apt-get update -qq && apt-get install -y -qq "python3.$(python3 -c 'import sys; print(sys.version_info[1])')-venv" >/dev/null
+      python3 -m venv "$venv"
+    }
+  fi
+  PATH="$venv/bin:$PATH" VIRTUAL_ENV="$venv" FIDEON_DETACHED=1 bash scripts/setup_pod.sh "$role"
+  echo "$stamp" > "$marker"
+}
+step "3/7 training + serving environment: $VENV"
+make_venv "$VENV" train requirements-train.txt
+step "4/7 OCR environment: $VENV_OCR"
+make_venv "$VENV_OCR" ocr requirements-ocr.txt
+
+# --- 5. MinerU's config --------------------------------------------------------------
+step "5/7 MinerU config"
+# MinerU's model download writes ~/magic-pdf.json, on the container disk. Keep it
+# on the volume, where MINERU_TOOLS_CONFIG_JSON points, so a restart keeps it.
+if [ ! -f "$MINERU_CONFIG" ] && [ -f "$HOME/magic-pdf.json" ]; then
+  mv "$HOME/magic-pdf.json" "$MINERU_CONFIG"
+  echo "moved ~/magic-pdf.json to $MINERU_CONFIG"
+fi
+mineru_ready=0
+if [ -f "$MINERU_CONFIG" ]; then
+  "$VENV_OCR/bin/python" -m data_pipeline.ocr.mineru_config --cuda && mineru_ready=1
+else
+  PENDING+=("download MinerU 1.x's model weights with its download_models_hf.py, run with \
+$VENV_OCR/bin/python (HF_HOME keeps the weights on the volume), then re-run this script")
+  echo "no MinerU config yet (see the list at the end)"
+fi
+
+# --- 6. the base model ---------------------------------------------------------------
+step "6/7 base model"
+"$VENV/bin/python" - "$MODELS" <<'PY'
+import sys
+from pathlib import Path
+
+from common.config import base_model_config
+
+model = base_model_config()["model"]
+model_id, revision = str(model["model_id"]), str(model["revision"])
+if revision in ("", "PIN_ME"):
+    sys.exit("configs/base_model.yaml has no pinned revision")
+target = Path(sys.argv[1]) / model_id.rsplit("/", 1)[-1]
+marker = target / ".fideon-revision"
+if marker.is_file() and marker.read_text().strip() == revision and (target / "config.json").is_file():
+    print(f"{model_id}@{revision[:12]} already in {target}")
+    sys.exit(0)
+
+from huggingface_hub import snapshot_download
+
+print(f"downloading {model_id}@{revision} to {target} (~17.5 GB; resumes if interrupted)")
+snapshot_download(repo_id=model_id, revision=revision, local_dir=str(target))
+shards = sorted(target.glob("*.safetensors"))
+if not (target / "config.json").is_file() or not shards:
+    sys.exit(f"download incomplete: {target} has no config.json or no weight shards")
+marker.write_text(revision + "\n")
+print(f"ok: {len(shards)} shards, {sum(p.stat().st_size for p in shards) / 1e9:.1f} GB")
+PY
+
+# --- 7. the spike -----------------------------------------------------------------------
+step "7/7 Phase 0 spike"
+mkdir -p "$WORKSPACE/logs"
+spike_status=0
+"$VENV/bin/python" scripts/phase0_spike.py --skip-mineru --out "$WORKSPACE/logs/spike_report.json" \
+  || spike_status=$?
+if [ -n "$pdf" ] && [ "$mineru_ready" = 1 ]; then
+  "$VENV_OCR/bin/python" scripts/phase0_spike.py --only-mineru --pdf "$pdf" \
+    --out "$WORKSPACE/logs/spike_report_mineru.json" || spike_status=$?
+elif [ -z "$pdf" ]; then
+  PENDING+=("run the MinerU spike checks: bash scripts/pod_bootstrap.sh --pdf <a real policy PDF>")
+fi
+
+echo
+echo "=== bootstrap summary ==="
+echo "training + serving: $VENV     (source $VENV/bin/activate)"
+echo "OCR:                $VENV_OCR (OCR runs here, before finetune)"
+echo "base model:         $MODELS"
+echo "spike report:       $WORKSPACE/logs/spike_report.json (exit $spike_status)"
+if [ ${#PENDING[@]} -gt 0 ]; then
+  echo "Still to do:"
+  for item in "${PENDING[@]}"; do echo "  - $item"; done
+fi
+[ "$spike_status" = 0 ] || die "the spike reported a failed check; read $WORKSPACE/logs/spike_report.json"
+echo "pod_bootstrap: done"

@@ -5,7 +5,9 @@ model:
   # Pin the revision. A floating revision means two training runs can silently
   # use different weights, which makes a regression impossible to attribute.
   model_id: "Qwen/Qwen3-VL-8B-Instruct"
-  revision: "PIN_ME"                    # TODO Phase 0: set to a concrete commit SHA
+  # The Hub commit of 2025-10-15 (4 safetensors shards, 17.5 GB).
+  # scripts/pod_bootstrap.sh downloads exactly this into local_dir.
+  revision: "0c351dd01ed87e9c1b53cbc748cba10e6187ff3b"
   trust_remote_code: true
   # Where the pod holds the base weights. Everything that LOADS the base reads
   # them from here — training, the tokenizer, the merge, vLLM — and never from

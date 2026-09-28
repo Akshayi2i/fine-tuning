@@ -84,7 +84,9 @@ PY
 
 if [ "$role" = "ocr" ]; then
   # MinerU takes its device from its own config, not from the GPU being there.
-  if [ -f "$HOME/${MINERU_TOOLS_CONFIG_JSON:-magic-pdf.json}" ]; then
+  # Where MinerU reads it: ~/magic-pdf.json, or MINERU_TOOLS_CONFIG_JSON (a name
+  # under the home directory, or an absolute path such as /workspace/magic-pdf.json).
+  if [ -f "$(python -c 'from data_pipeline.ocr.mineru_config import config_path; print(config_path())')" ]; then
     python -m data_pipeline.ocr.mineru_config --cuda
   else
     echo "Next: download MinerU's model weights (see the MinerU 1.x docs: download_models_hf.py),"
