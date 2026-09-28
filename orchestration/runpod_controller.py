@@ -35,22 +35,14 @@ log = logging.getLogger(__name__)
 
 PodStatus = Literal["pending", "running", "terminated", "failed"]
 
-#: GPU class per stage. MinerU does not need an A100 — layout detection and the
-#: OCR models saturate a much cheaper card — and reserving the A100 for Foundation
-#: training is what keeps preprocessing inexpensive (SPEC_13 §7).
-#: Fallbacks keyed by the stage names the DAG actually uses; `pipeline.yaml`
-#: overrides them. Both were keyed by v1 lineage names (train_foundation /
-#: train_adapter) that no stage asks for, so every training pod fell back to the
-#: default card while the A100-80G line described a request nobody made.
+#: GPU class per stage — fallbacks for ``orchestration/config/pipeline.yaml``,
+#: keyed by the stage names the DAG uses. The deployment runs every GPU stage on
+#: one H200 SXM (141 GB) pod, in process: moving a corpus between an OCR pod and
+#: a training pod costs more than a cheaper OCR card saves.
 GPU_CLASS_BY_STAGE: dict[str, str] = {
-    "preprocessing": "L40S",
-    "dataset_build": "L40S",
-    "training": "A100-80G",
-    "checkpoint_eval": "A100-40G",
-    "merge": "A100-40G",
-    "quantize": "L40S",
-    "calibrate": "A100-40G",
-    "evaluation_gate": "A100-40G",
+    stage: "H200-SXM"
+    for stage in ("preprocessing", "dataset_build", "training", "checkpoint_eval", "merge",
+                  "quantize", "calibrate", "evaluation_gate")
 }
 
 DEFAULT_VOLUME_MOUNT = "/runpod-volume"
@@ -149,7 +141,7 @@ class PodSpec:
     gpu_class: str
     volume_id: str | None
     volume_mount: str = DEFAULT_VOLUME_MOUNT
-    image: str = "runpod/pytorch:2.4.0-py3.11-cuda12.4.1-devel-ubuntu22.04"
+    image: str = "runpod/pytorch:2.8.0-py3.11-cuda12.8.1-cudnn-devel-ubuntu22.04"
     #: The pod clones the repo fresh at this commit; code is never resident on a
     #: pod between jobs, so the manifest's commit is the only source of truth.
     git_commit: str | None = None
@@ -296,7 +288,7 @@ class RunPodController:
         return PodSpec(
             name=f"{stage}-pod",
             stage=stage,
-            gpu_class=gpu_class or gpu_class_for(stage, GPU_CLASS_BY_STAGE.get(stage, "L40S")),
+            gpu_class=gpu_class or gpu_class_for(stage, GPU_CLASS_BY_STAGE.get(stage, "H200-SXM")),
             volume_id=self.volume_id,
             volume_mount=self.volume_mount,
             git_commit=self.git_commit,

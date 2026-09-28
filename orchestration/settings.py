@@ -29,7 +29,7 @@ def pipeline_config(path: Path | None = None) -> dict[str, Any]:
     return load_yaml(path or CONFIG_PATH)
 
 
-def gpu_class_for(stage: str, fallback: str = "L40S", *, scope: str | None = None) -> str:
+def gpu_class_for(stage: str, fallback: str = "H200-SXM", *, scope: str | None = None) -> str:
     """The GPU class a stage runs on, optionally for one training scope.
 
     A scope override wins over the stage default: whether a run fits on a card is

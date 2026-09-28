@@ -2706,7 +2706,7 @@ Runs `finetune`, then `package`, sharing `--out-version`. Halts if the gate fail
 ## 7. `orchestration/runpod_controller.py`
 
 **Training — ephemeral pods (arch §14):**
-- Launch an on-demand RunPod **GPU Pod** per preprocessing/training/eval/quantize job. Sizing configurable: **A100 80GB for the unified training run**, and a **cheaper class (L4 / A10 / L40S) for OCR** — MinerU does not need an A100, and reserving it for training keeps the preprocessing stage inexpensive.
+- **Deployment (2026-09-28): one RunPod H200 SXM (141 GB) pod runs every GPU stage in process** — OCR, training, checkpoint selection, merge, calibration and the gate share the card, each vLLM engine released before the next loads. Classes per stage stay configurable (`orchestration/config/pipeline.yaml`) for a future per-stage launcher; the original plan put OCR on a cheaper L4/L40S card.
 - **Stages 2, 4 and 5 all want a GPU**, so `finetune` provisions **one pod for the whole command** rather than shuttling a corpus between machines. That is cheaper than three pod launches and removes two Blob round trips.
 - **Training code lives in the private git repo; the pod clones it fresh at job start** at a pinned commit — code is never permanently resident on a pod.
 - Every launched pod has the staging volume attached (§3).

@@ -127,7 +127,7 @@ logging:
 seed: 42
 
 distributed:
-  # Single A100 80GB by default. If a task cap does not fit, ms-swift SEQUENCE
+  # One H200 SXM 141GB in this deployment (sized originally for an A100 80GB). If a task cap does not fit, ms-swift SEQUENCE
   # PARALLELISM comes first (§9.3) - DeepSpeed ZeRO is not used unless that is
   # exhausted too, because under LoRA ZeRO-2 shards ~1.5GB of adapter optimizer
   # state and is close to a no-op.

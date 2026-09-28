@@ -18,17 +18,20 @@ gpu_class_by_stage:
   # asks for "training" - so every training pod silently fell back to L40S and
   # the A100-80G line described a card nothing requested.
   #
-  # MinerU does not need an A100 - a cheaper card saturates on layout detection
-  # and the OCR models, and reserving the A100 for training is what keeps
-  # preprocessing inexpensive.
-  preprocessing: L40S
-  dataset_build: L40S
-  training: A100-80G
-  checkpoint_eval: A100-40G
-  merge: A100-40G
-  quantize: L40S
-  calibrate: A100-40G
-  evaluation_gate: A100-40G
+  # The deployment runs every GPU stage on ONE H200 SXM (141 GB) pod, in
+  # process, inside tmux (orchestration/detach.py): OCR, training, checkpoint
+  # selection, merge, calibration and the gate share the card, and each vLLM
+  # engine is released before the next stage loads one. These classes are what
+  # the (not yet wired) RunPodBackend would request per stage; OCR alone could
+  # run on a cheaper card, but moving a corpus between pods costs more than it saves.
+  preprocessing: H200-SXM
+  dataset_build: H200-SXM
+  training: H200-SXM
+  checkpoint_eval: H200-SXM
+  merge: H200-SXM
+  quantize: H200-SXM
+  calibrate: H200-SXM
+  evaluation_gate: H200-SXM
 
 # Per-scope overrides, applied over gpu_class_by_stage. A scope whose largest
 # task cap is 32k (policy extraction) may not fit a card that a 20480-cap scope
@@ -36,7 +39,10 @@ gpu_class_by_stage:
 gpu_class_by_scope: {}
 
 pod:
-  image: runpod/pytorch:2.4.0-py3.11-cuda12.4.1-devel-ubuntu22.04
+  # CUDA 12.8 / torch 2.8: the stack pyproject pins (vLLM 0.11.0 is built on
+  # torch 2.8). Confirm the tag in RunPod's template list; any CUDA 12.8 devel
+  # image with Python 3.11 works, since setup_pod.sh installs torch itself.
+  image: runpod/pytorch:2.8.0-py3.11-cuda12.8.1-cudnn-devel-ubuntu22.04
   # The pod clones the repo fresh at a pinned commit; code is never resident on
   # a pod between jobs, so the manifest's commit is the only source of truth.
   clone_at_pinned_commit: true

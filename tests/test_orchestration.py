@@ -750,11 +750,11 @@ def test_run_job_reports_a_failure_instead_of_leaking_a_pod(controller):
     assert controller.active_pods == []
 
 
-def test_ocr_does_not_get_the_a100(controller):
-    """MinerU saturates a much cheaper card; reserving the A100 for training is
-    what keeps preprocessing inexpensive (SPEC_13 §7)."""
-    assert "A100" not in GPU_CLASS_BY_STAGE["preprocessing"]
-    assert GPU_CLASS_BY_STAGE["training"].startswith("A100")
+def test_every_gpu_stage_runs_on_the_one_h200_pod(controller):
+    """The deployment runs every GPU stage on one H200 SXM pod, in process: OCR,
+    training, selection, merge, calibration and the gate share the card, and a
+    corpus never moves between pods. (The earlier plan put OCR on a cheaper card.)"""
+    assert set(GPU_CLASS_BY_STAGE.values()) == {"H200-SXM"}
 
 
 def test_every_gpu_stage_has_a_declared_class(controller):
@@ -1141,7 +1141,7 @@ def test_the_config_file_is_actually_read():
     """A config file nothing reads documents a policy the system does not follow."""
     from orchestration import settings
 
-    assert settings.gpu_class_for("training").startswith("A100")
+    assert settings.gpu_class_for("training").startswith("H200")
     assert "A100" not in settings.gpu_class_for("preprocessing")
     assert settings.retry_policy()["retry_on_gate_block"] is False
     assert settings.defaults()["formats"] == ["bf16"]

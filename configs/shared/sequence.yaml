@@ -54,7 +54,7 @@ tasks:
         composition: "schema 3-6k + <=6 routed pages x ~2.4k + OCR text + output <=3k"
         note: >
           The largest cap in the system. Phase 0 spike item 5 measures whether it
-          fits on one A100 80GB with gradient checkpointing; if not, ms-swift
+          fits on one 80GB+ card (an H200 141GB here) with gradient checkpointing; if not, ms-swift
           sequence parallelism over 2 GPUs comes before any ZeRO-3 config.
 
   lossrun_header:
