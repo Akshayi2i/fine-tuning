@@ -221,6 +221,7 @@ One source PDF yields **~3 compiled JSONL rows**, so N source documents produce 
 azure-blob://insurance-extraction/
   # ---- tenant-partitioned (PII-bearing) ----
   raw-documents/{tenant_id}/{doc_type}/{source_id}/original.pdf, metadata.json   # immutable, tightest RBAC
+  intake/{batch}/{document}/*.pdf, golden.json, metadata.json      # raw container: a delivered batch, staged by azcopy
   processed/{tenant_id}/{doc_type}/{source_id}/page_*.png, page_*.md, ocr_meta.json
   golden-labels/{tenant_id}/{doc_type}/{source_id}/golden.json, label_metadata.json
   corpus/{tenant_id}/v{n}/train/epoch_{1..4}.jsonl                # one modality draw per epoch
@@ -1064,6 +1065,13 @@ Consequences, all enforced in code:
 - **MinerU 1.x**, installed by the `ocr` dependency group as `magic-pdf[full]>=1.3,<2` — the code imports
   `magic_pdf` and records the `magic-pdf` version, and MinerU 2.x renamed the package. Model weights are a
   separate download (MinerU's `download_models_hf.py`); `setup_pod.sh ocr` prints the step.
+- **Delivered batches travel through Blob** (the ~20 GB training folder cannot go through git): staged by
+  azcopy under `intake/{batch}/` in the **raw container** (`paths.intake_batch_dir`; `requires_raw_container`
+  covers `intake/`, so only an ingestion or OCR client can read it), pulled onto the volume by
+  `python -m data_pipeline.ingestion.pull_intake --batch <batch>` (to `/workspace/intake/<batch>`, 16 parallel
+  downloads, `.part` then rename, PDFs already present skipped, labels always re-fetched, `--refresh` for
+  everything), then imported from that folder. `import_labeled_pdfs --from-blob <batch>` pulls and imports in
+  one command. Both run detached on the pod.
 - **Its own environment.** MinerU 1.x cannot share an environment with vLLM 0.11 / torch 2.8, so on the pod
   it is installed in `/workspace/venv-ocr` (`scripts/pod_bootstrap.sh`) and OCR runs there first:
   `/workspace/venv-ocr/bin/python -m data_pipeline.ocr.run_mineru --doc-type policy --all-unprocessed`.

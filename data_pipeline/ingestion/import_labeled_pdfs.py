@@ -32,6 +32,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import sys
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -292,7 +293,11 @@ def main(argv: list[str] | None = None) -> int:  # pragma: no cover - thin CLI
         description="Import labeled PDFs (document.pdf + golden.json per directory). "
                     "MinerU runs later, on the GPU pod, as pipeline stage 2."
     )
-    parser.add_argument("--input", required=True, type=Path)
+    source = parser.add_mutually_exclusive_group(required=True)
+    source.add_argument("--input", type=Path, help="a local folder of document folders")
+    source.add_argument("--from-blob", metavar="BATCH",
+                        help="a batch staged under intake/BATCH/ in the raw container: pulled onto "
+                             "the volume first (data_pipeline.ingestion.pull_intake), then imported")
     parser.add_argument("--doc-type", required=True, choices=list(ACTIVE_DOC_TYPES))
     parser.add_argument("--tenant", default=None)
     parser.add_argument("--validate-only", action="store_true",
@@ -305,8 +310,23 @@ def main(argv: list[str] | None = None) -> int:  # pragma: no cover - thin CLI
         return 0
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
+    raw_client = for_ingestion()
+    input_dir = args.input
+    if args.from_blob:
+        from data_pipeline.ingestion.pull_intake import IntakeError, pull_intake
+
+        try:
+            pulled = pull_intake(raw_client, args.from_blob)
+        except (IntakeError, ValueError) as exc:
+            print(exc, file=sys.stderr)
+            return 1
+        print(pulled.describe())
+        if pulled.failed:
+            print("Some files did not download; re-run to retry. Nothing was imported.", file=sys.stderr)
+            return 1
+        input_dir = pulled.local_dir
     report = import_batch(
-        args.input, args.doc_type, BlobClient(), for_ingestion(),
+        input_dir, args.doc_type, BlobClient(), raw_client,
         tenant_id=args.tenant, validate_only=args.validate_only,
     )
     print(report.describe())

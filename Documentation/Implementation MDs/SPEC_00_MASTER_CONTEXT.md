@@ -212,6 +212,7 @@ One source PDF yields **~3 compiled JSONL rows**, so N source documents produce 
 azure-blob://insurance-extraction/
   # ---- tenant-partitioned (PII-bearing) ----
   raw-documents/{tenant_id}/{doc_type}/{source_id}/original.pdf, metadata.json   # immutable, tightest RBAC
+  intake/{batch}/{document}/*.pdf, golden.json, metadata.json      # raw container: a delivered batch, staged by azcopy
   processed/{tenant_id}/{doc_type}/{source_id}/page_*.png, page_*.md, ocr_meta.json
   golden-labels/{tenant_id}/{doc_type}/{source_id}/golden.json, label_metadata.json
   corpus/{tenant_id}/v{n}/train/epoch_{1..4}.jsonl                # one modality draw per epoch

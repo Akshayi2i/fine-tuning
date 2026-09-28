@@ -200,6 +200,35 @@ scope, `page_ref` inside the PDF), checks each labelled value against the text o
 totals, and draws a 5% spot-check sample per line. Fix and re-run until it exits 0. The report and CSVs go to
 `data/audit_report/`, which is git-ignored: they quote label values.
 
+## Getting the data to the pod: through Blob, not git
+
+The training folder (~20 GB) never goes through git. Stage it in Blob from the
+laptop with [azcopy](https://learn.microsoft.com/azure/storage/common/storage-use-azcopy-v10),
+then pull and import it on the pod:
+
+```powershell
+# laptop, after the audit passes. <raw container> is AZURE_RAW_CONTAINER; the SAS needs
+# read, write and list on it. Re-run the same command to resume or to push corrections.
+azcopy sync "D:\Fine-Tuning\data\training data" "https://<account>.blob.core.windows.net/<raw container>/intake/personal-v1?<SAS>" --recursive
+```
+
+```bash
+# pod (runs in tmux; re-run to resume)
+python -m data_pipeline.ingestion.pull_intake --batch personal-v1        # -> /workspace/intake/personal-v1
+python -m data_pipeline.audit --input /workspace/intake/personal-v1      # optional second check
+python -m data_pipeline.ingestion.import_labeled_pdfs --input /workspace/intake/personal-v1 --doc-type policy --validate-only
+python -m data_pipeline.ingestion.import_labeled_pdfs --input /workspace/intake/personal-v1 --doc-type policy
+# or pull and import in one: import_labeled_pdfs --from-blob personal-v1 --doc-type policy
+```
+
+`intake/` sits in the **raw container**, under the raw layer's access rule: it is
+the delivered PDFs with their PII, readable only by ingestion. The pull runs 16
+downloads in parallel, writes each file as `.part` and renames it when complete,
+skips PDFs already on the volume, and always re-fetches labels, so a label fixed
+and re-synced after an audit is never stale on the pod. The upload itself runs on
+the laptop, which has to stay on for it; azcopy is parallel and resumable, and
+everything after it runs on the pod.
+
 ## Scopes
 
 A training run covers a **scope** (`configs/scopes.yaml`): `unified` (every type), `policy`, `lossrun`, and

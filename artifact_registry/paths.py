@@ -681,6 +681,20 @@ def tenant_of(blob_path: str) -> str | None:
     return parts[1] if len(parts) >= 2 and parts[0] in TENANT_SCOPED else None
 
 
+#: Staging for delivered batches, in the raw container: ``intake/{batch}/{document}/``
+#: holding the PDF, golden.json and metadata.json exactly as delivered. Uploaded
+#: with azcopy; pulled onto the pod by data_pipeline.ingestion.pull_intake.
+INTAKE_PREFIX = "intake"
+_BATCH_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+
+
+def intake_batch_dir(batch: str) -> str:
+    """``intake/{batch}`` — one delivered batch, staged before import."""
+    if not _BATCH_RE.match(batch or "") or ".." in batch:
+        raise ValueError(f"intake batch {batch!r} must be letters, digits, '.', '_' or '-'")
+    return _join(INTAKE_PREFIX, batch)
+
+
 def requires_raw_container(blob_path: str) -> bool:
     """Whether a path belongs in the separately-permissioned raw container.
 
@@ -691,4 +705,7 @@ def requires_raw_container(blob_path: str) -> bool:
     # one classified "raw-documents" itself as non-raw, so `list("raw-documents")`
     # from a training context bypassed the AccessDeniedError guard entirely.
     normalised = str(blob_path).strip("/")
-    return normalised == "raw-documents" or normalised.startswith("raw-documents/")
+    # intake/ is the staging area for delivered batches (PDFs and their labels,
+    # uploaded with azcopy before import): the same unredacted PII, the same rules.
+    return any(normalised == layer or normalised.startswith(layer + "/")
+               for layer in ("raw-documents", INTAKE_PREFIX))
