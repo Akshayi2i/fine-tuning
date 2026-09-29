@@ -487,7 +487,7 @@ def _vllm_output(text, pieces, token_ids=None):
 
     token_ids = token_ids or list(range(len(pieces)))
     steps = [{tid: NS(decoded_token=piece, logprob=-0.1 * i, rank=1)}
-             for i, (tid, piece) in enumerate(zip(token_ids, pieces))]
+             for i, (tid, piece) in enumerate(zip(token_ids, pieces, strict=True))]
     completion = NS(text=text, token_ids=token_ids, logprobs=steps, finish_reason="stop")
     return NS(outputs=[completion])
 
