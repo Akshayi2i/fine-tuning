@@ -63,7 +63,12 @@ if [ "$role" = "train" ]; then
   # Built against the torch just installed. With build isolation pip compiles it
   # against a throwaway torch in a temporary env, which fails or produces a
   # library that does not load. MAX_JOBS bounds the compile's memory use.
-  MAX_JOBS="${MAX_JOBS:-8}" python -m pip install "flash-attn>=2.7,<3" --no-build-isolation
+  # --no-cache-dir: flash-attn's setup downloads its prebuilt wheel into the
+  # build directory (under TMPDIR) and renames it into pip's wheel cache. With
+  # the cache on the network volume and TMPDIR on the container disk that
+  # rename crosses filesystems and fails ("Invalid cross-device link"); without
+  # a cache both sides are under TMPDIR.
+  MAX_JOBS="${MAX_JOBS:-8}" python -m pip install "flash-attn>=2.7,<3" --no-build-isolation --no-cache-dir
 fi
 
 python - "$role" <<'PY'
