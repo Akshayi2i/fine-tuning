@@ -84,6 +84,13 @@ cmd_start() {
     # Credentials and settings from the repo's .env, as an interactive shell would have them.
     echo 'if [ -f .env ]; then set -a; . ./.env; set +a; fi'
     echo 'export PYTHONUNBUFFERED=1'
+    # The caller's PATH and virtualenv. A tmux session takes its environment from
+    # the tmux server, started by whichever job came first — not from the shell
+    # that starts this run — so without these a job launched from the training
+    # venv would not find that venv's `swift`, and one from the OCR venv would
+    # run its tools from the wrong environment.
+    printf 'export PATH=%q\n' "$PATH"
+    if [ -n "${VIRTUAL_ENV:-}" ]; then printf 'export VIRTUAL_ENV=%q\n' "$VIRTUAL_ENV"; fi
     # Tells the command it is already detached, so it does not detach again.
     echo 'export FIDEON_DETACHED=1'
     printf 'echo "=== %s started $(date -u +%%FT%%TZ) on $(hostname) ==="\n' "$name"

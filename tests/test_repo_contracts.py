@@ -89,7 +89,11 @@ LIBRARY_OWNED_VARS = frozenset({
 #: Set by the runtime around the code, never by an operator: tmux sets TMUX in
 #: every session it runs. Documenting them in .env.example would invite setting
 #: them by hand, which would make a foreground job believe it was detached.
-RUNTIME_SET_VARS = frozenset({"TMUX"})
+RUNTIME_SET_VARS = frozenset({
+    "TMUX",
+    # The OS's own: read so ms-swift is found next to the running Python.
+    "PATH",
+})
 
 
 def env_vars_in_code() -> set[str]:

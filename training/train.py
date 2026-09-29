@@ -849,10 +849,17 @@ def launch_and_record(
 
 def launch(config: SwiftConfig) -> None:
     """Launch ms-swift. The training loop lives there, not here (arch v2.1 §10)."""
+    import os
     import shutil
     import subprocess
+    import sys
 
-    if shutil.which("swift") is None:
+    # The environment this Python runs in comes first: ms-swift is installed next
+    # to it, and PATH alone can point elsewhere (an unactivated venv, a tmux
+    # session whose PATH came from the tmux server).
+    search_path = os.pathsep.join(filter(None, (os.path.dirname(sys.executable), os.environ.get("PATH"))))
+    swift = shutil.which("swift", path=search_path)
+    if swift is None:
         raise TrainingError(
             "the `swift` CLI is not on PATH. ms-swift is the Layer-3 entrypoint (arch v2.1 §10); "
             'install the [train] extra on the pod: pip install -e ".[train]"\n'
@@ -861,11 +868,11 @@ def launch(config: SwiftConfig) -> None:
             "the template, collator and masking against the §10.2 parity tests. A contingency, "
             "not a layer swap."
         )
-    import os
-
-    argv = config.to_cli()
+    argv = [swift, *config.to_cli()[1:]]
     log.info("launching: %s (env %s)", " ".join(argv), config.env)
-    subprocess.run(argv, check=True, env={**trainer_environment(os.environ), **config.env})
+    # swift starts its own workers (torchrun, python) by name: the same PATH.
+    env = {**trainer_environment(os.environ), **config.env, "PATH": search_path}
+    subprocess.run(argv, check=True, env=env)
 
 
 #: Environment names the trainer never needs and must never hold. ms-swift runs

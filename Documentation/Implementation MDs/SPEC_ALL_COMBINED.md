@@ -2838,6 +2838,10 @@ The 13 stages (arch v2.1 §13) as reusable, individually addressable stage funct
   name; nothing ends a run except `stop`, which asks for the run's name. It cannot survive the pod itself
   stopping — `status` then reports the run as interrupted and `--from-stage` resumes.
 - `tests/test_detach.py` fails if a new entry point is neither guarded nor listed as quick.
+- **A run keeps its caller's environment**: each run records the caller's `PATH` and `VIRTUAL_ENV`, because a
+  tmux session otherwise takes them from the tmux server (started by whichever job came first); training finds
+  `swift` next to the running Python before searching `PATH`. The bootstrap builds its venvs with Python >= 3.11
+  (`FIDEON_PYTHON` overrides), since `python3` on Ubuntu 22.04 can be the system 3.10.
 
 **Stage behaviour added since this spec**:
 - **Deterministic failures are not retried** (`TrainingError`, `StagingError`, `LengthCheckError`,

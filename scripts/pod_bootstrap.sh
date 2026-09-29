@@ -81,6 +81,19 @@ case "$REPO/" in
   "$WORKSPACE"/*) ;;
   *) die "the repo is at $REPO, on the container disk, which is wiped on stop. Clone it under $WORKSPACE." ;;
 esac
+# The repo needs Python >= 3.11 (pyproject). On Ubuntu 22.04 `python3` can be the
+# system 3.10 even when the image's `python` is 3.11, so choose explicitly.
+PYTHON="${FIDEON_PYTHON:-}"
+if [ -z "$PYTHON" ]; then
+  for candidate in python3.11 python3.12 python3 python; do
+    if command -v "$candidate" >/dev/null 2>&1 \
+       && "$candidate" -c 'import sys; sys.exit(sys.version_info < (3, 11))' 2>/dev/null; then
+      PYTHON="$(command -v "$candidate")"; break
+    fi
+  done
+fi
+[ -n "$PYTHON" ] || die "no Python >= 3.11 on this pod (the repo requires it); set FIDEON_PYTHON"
+echo "Python: $PYTHON ($("$PYTHON" -c 'import platform; print(platform.python_version())'))"
 free_gb="$(df -BG --output=avail "$WORKSPACE" | tail -n1 | tr -dc '0-9')"
 echo "free on $WORKSPACE: ${free_gb} GB"
 [ "$free_gb" -ge "$MIN_FREE_GB" ] || die "only ${free_gb} GB free on $WORKSPACE; need ${MIN_FREE_GB} GB \
@@ -137,9 +150,9 @@ make_venv() {
     return
   fi
   if [ ! -x "$venv/bin/python" ]; then
-    python3 -m venv "$venv" 2>/dev/null || {
-      apt-get update -qq && apt-get install -y -qq "python3.$(python3 -c 'import sys; print(sys.version_info[1])')-venv" >/dev/null
-      python3 -m venv "$venv"
+    "$PYTHON" -m venv "$venv" 2>/dev/null || {
+      apt-get update -qq && apt-get install -y -qq "python3.$("$PYTHON" -c 'import sys; print(sys.version_info[1])')-venv" >/dev/null
+      "$PYTHON" -m venv "$venv"
     }
   fi
   PATH="$venv/bin:$PATH" VIRTUAL_ENV="$venv" FIDEON_DETACHED=1 bash scripts/setup_pod.sh "$role"
@@ -200,10 +213,13 @@ PY
 step "7/7 Phase 0 spike"
 mkdir -p "$WORKSPACE/logs"
 spike_status=0
-"$VENV/bin/python" scripts/phase0_spike.py --skip-mineru --out "$WORKSPACE/logs/spike_report.json" \
+# Each environment's bin on PATH: the spike looks for `swift` by name.
+PATH="$VENV/bin:$PATH" VIRTUAL_ENV="$VENV" \
+  "$VENV/bin/python" scripts/phase0_spike.py --skip-mineru --out "$WORKSPACE/logs/spike_report.json" \
   || spike_status=$?
 if [ -n "$pdf" ] && [ "$mineru_ready" = 1 ]; then
-  "$VENV_OCR/bin/python" scripts/phase0_spike.py --only-mineru --pdf "$pdf" \
+  PATH="$VENV_OCR/bin:$PATH" VIRTUAL_ENV="$VENV_OCR" \
+    "$VENV_OCR/bin/python" scripts/phase0_spike.py --only-mineru --pdf "$pdf" \
     --out "$WORKSPACE/logs/spike_report_mineru.json" || spike_status=$?
 elif [ -z "$pdf" ]; then
   PENDING+=("run the MinerU spike checks: bash scripts/pod_bootstrap.sh --pdf <a real policy PDF>")
