@@ -80,13 +80,19 @@ tasks:
   # short policies; these are what a 60-page policy is read with, because a
   # 6-page routed read of one silently drops everything past the sixth page.
   policy_declarations:
-    max_seq_len: 24576
-    max_output_tokens: 2048
+    max_seq_len: 32768
+    max_output_tokens: 4096
     composition: "policy schema 3-6k + <=3 declarations pages x ~2.4k + OCR + output"
+    note: >
+      Measured on the pod (smoke run, 2026-09-29): complete declarations targets -
+      every field of the reviewed gold - reach ~2,550 tokens, over the 2,048 first
+      reserved, and a third of the documents were set aside for it. The window is
+      already just the declarations pages, so the answer is reserved, not the
+      window shrunk. 32,768 total fits one H200 (the spike measured 99 GB peak).
 
   policy_schedule:
-    max_seq_len: 24576
-    max_output_tokens: 4096
+    max_seq_len: 32768
+    max_output_tokens: 8192
     composition: "row schema ~1k + window pages + rows output"
     note: >
       OUTPUT-bound, like lossrun_rows: the window is sized so the estimated rows

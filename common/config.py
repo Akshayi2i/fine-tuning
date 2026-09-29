@@ -323,6 +323,13 @@ def assert_task_budgets_are_coherent() -> None:
                     f"task {label!r} reserves {output} output tokens inside a {cap}-token cap, "
                     "leaving nothing for the schema, the page images or the OCR text."
                 )
+            serving = int(serving_config().get("generation", {}).get("max_new_tokens", 0))
+            if serving and output > serving:
+                raise ConfigError(
+                    f"task {label!r} reserves {output} output tokens, but serving generates at "
+                    f"most {serving} (vllm_serving.yaml generation.max_new_tokens): an answer "
+                    "training teaches in full would be cut off at serving."
+                )
 
 
 def resolution_cap_px() -> int:

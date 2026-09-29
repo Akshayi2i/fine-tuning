@@ -24,7 +24,9 @@ generation:
   # both reproducibility and the confidence calibration fitted on it.
   temperature: 0.0
   top_p: 1.0
-  max_new_tokens: 4096         # long Loss Runs need room for every claim row
+  # At least every task's reserved max_output_tokens (configs/shared/sequence.yaml):
+  # a smaller limit would cut at serving an answer training taught in full.
+  max_new_tokens: 8192         # Loss Run rows and policy schedules reserve 8,192
   seed: 42
 
   # Mandatory. Per-token logprobs are the entire basis of per-field confidence

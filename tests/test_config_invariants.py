@@ -149,10 +149,10 @@ def test_the_output_budget_always_fits_inside_the_cap():
 
 
 def test_lossrun_rows_reserves_the_largest_output_budget():
-    """The one task where OUTPUT, not input, is the binding constraint: the
-    window planner shrinks the page window until the estimated row output fits.
-    If some other task out-reserved it, that planner would be sizing against the
-    wrong limit."""
+    """An OUTPUT-bound task: the window planner shrinks the page window until the
+    estimated row output fits. No task may out-reserve it, or that planner would
+    be sizing against the wrong limit. Policy schedules, the other output-bound
+    task, may equal it (both 8,192 since the smoke run measured complete labels)."""
     from common.tasks import Task
 
     rows = int(config.sequence_for_task(str(Task.LOSSRUN_ROWS))["max_output_tokens"])
@@ -160,7 +160,7 @@ def test_lossrun_rows_reserves_the_largest_output_budget():
         str(t): int(config.sequence_for_task(str(t))["max_output_tokens"])
         for t in Task if t is not Task.LOSSRUN_ROWS
     }
-    assert rows > max(others.values()), f"lossrun_rows reserves {rows}, others {others}"
+    assert rows >= max(others.values()), f"lossrun_rows reserves {rows}, others {others}"
 
 
 def test_an_unknown_task_is_refused_rather_than_silently_defaulted():
@@ -196,3 +196,13 @@ def test_policy_extraction_gets_a_larger_budget_than_acord():
 def test_an_unknown_doc_type_falls_back_to_the_task_budget():
     """A new document type must not silently inherit Policy's 32k cap."""
     assert config.seq_cap_for_task("extract", "binder") == config.seq_cap_for_task("extract")
+
+
+def test_serving_generates_at_least_every_tasks_reserved_answer():
+    """A task reserving more output than serving generates would be taught a full
+    answer in training and cut off in production."""
+    from common.tasks import Task
+
+    serving = int(config.serving_config()["generation"]["max_new_tokens"])
+    for task in Task:
+        assert int(config.sequence_for_task(str(task))["max_output_tokens"]) <= serving, str(task)
