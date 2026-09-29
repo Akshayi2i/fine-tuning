@@ -308,45 +308,41 @@ def check_swift_image_budget(r: Result) -> None:
     processor honours neither, it resizes to its own default, and the model trains
     on pages a different size from the ones it is served.
 
-    Encodes one letter-size page through ms-swift's template with the env set
-    exactly as a training run sets it, and compares the image tokens it produced
-    with training.length_check's prediction — the same arithmetic the pre-launch
-    length check relies on, so a mismatch here invalidates that check too.
+    Measured in a FRESH process with the budget in its environment from the
+    start, exactly as ``swift sft`` is launched. ms-swift reads these settings
+    once, when its template is first built, and keeps them: measured in this
+    process, after another check has built a template without them, it reports
+    its own default (16384 tokens) whatever the budget says.
     """
     import os
-    import tempfile
-
-    from PIL import Image
-    from swift.llm import get_model_tokenizer, get_template
+    import subprocess
+    import textwrap
 
     from common.scopes import default_scope
     from training.length_check import image_tokens
     from training.train import _pixel_budget
 
     env = _pixel_budget(default_scope())
-    # Restored afterwards: the checks share one process, and a budget left in
-    # the environment would silently resize every image a later check encodes.
-    saved = {key: os.environ.get(key) for key in env}
-    os.environ.update(env)
-    try:
-        page = Path(tempfile.mkdtemp()) / "page.png"
-        Image.new("RGB", (1700, 2200), "white").save(page)   # US Letter at 200 dpi
-
-        _model, processor = get_model_tokenizer(MODEL_ID, load_model=False)
+    code = textwrap.dedent(f'''
+        import tempfile
+        from pathlib import Path
+        from PIL import Image
+        from swift.llm import get_model_tokenizer, get_template
+        page = Path(tempfile.mkdtemp()) / 'page.png'
+        Image.new('RGB', (1700, 2200), 'white').save(page)
+        _m, processor = get_model_tokenizer({MODEL_ID!r}, load_model=False)
         template = get_template(processor.model_meta.template, processor)
-        encoded = template.encode({
-            "messages": [{"role": "user", "content": "<image>page"},
-                         {"role": "assistant", "content": "{}"}],
-            "images": [str(page)],
-        })
-    finally:
-        for key, value in saved.items():
-            if value is None:
-                os.environ.pop(key, None)
-            else:
-                os.environ[key] = value
-    pad_id = processor.tokenizer.convert_tokens_to_ids("<|image_pad|>")
-    measured = sum(1 for token in encoded["input_ids"] if token == pad_id)
+        encoded = template.encode({{'messages': [{{'role': 'user', 'content': '<image>page'}},
+            {{'role': 'assistant', 'content': '{{}}'}}], 'images': [str(page)]}})
+        pad = processor.tokenizer.convert_tokens_to_ids('<|image_pad|>')
+        print('MEASURED', sum(1 for t in encoded['input_ids'] if t == pad))
+    ''')
+    out = subprocess.run([sys.executable, "-c", code], env={**os.environ, **env},
+                         capture_output=True, text=True, timeout=900)
+    line = next((row for row in out.stdout.splitlines() if row.startswith("MEASURED ")), None)
+    if line is None:
+        raise RuntimeError(f"the measuring process failed (exit {out.returncode}): {out.stderr[-600:]}")
+    measured = int(line.split()[1])
     predicted = image_tokens(
         1700, 2200, min_pixels=int(env["MIN_PIXELS"]), max_pixels=int(env["MAX_PIXELS"])
     )
