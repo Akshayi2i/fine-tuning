@@ -250,7 +250,26 @@ def test_mineru_config_must_say_cuda(tmp_path, monkeypatch):
         assert_on_cuda()
     set_cuda()
     assert_on_cuda()
-    assert json.loads(config.read_text(encoding="utf-8")) == {"device-mode": "cuda", "models-dir": "/m"}
+    assert json.loads(config.read_text(encoding="utf-8")) == {
+        "device-mode": "cuda", "models-dir": "/m", "formula-config": {"enable": False}}
+
+
+def test_mineru_formula_recognition_must_be_off(tmp_path, monkeypatch):
+    """Policies carry no equations, and MinerU 1.3's UniMERNet fails under
+    transformers 4.57 on every page; the whole corpus is OCR'd with it off."""
+    from data_pipeline.ocr.mineru_config import MinerUConfigError, assert_on_cuda, set_cuda
+
+    config = tmp_path / "magic-pdf.json"
+    monkeypatch.setenv("MINERU_TOOLS_CONFIG_JSON", str(config))
+    template = {"device-mode": "cuda", "formula-config": {"mfd_model": "yolo_v8_mfd",
+                                                          "mfr_model": "unimernet_small", "enable": True}}
+    config.write_text(json.dumps(template), encoding="utf-8")
+    with pytest.raises(MinerUConfigError, match="formula recognition on"):
+        assert_on_cuda()
+    set_cuda()
+    assert_on_cuda()
+    kept = json.loads(config.read_text(encoding="utf-8"))["formula-config"]
+    assert kept == {"mfd_model": "yolo_v8_mfd", "mfr_model": "unimernet_small", "enable": False}
 
 
 def test_the_engine_refuses_a_mineru_configured_for_cpu(tmp_path, monkeypatch):

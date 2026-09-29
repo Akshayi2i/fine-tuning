@@ -46,6 +46,18 @@ def assert_on_cuda(path: Path | None = None) -> None:
             f"{path} sets device-mode {mode or '(unset)'!r}, so MinerU would run on the CPU while the "
             "corpus records cuda. Fix: python -m data_pipeline.ocr.mineru_config --cuda"
         )
+    if formula_enabled(json.loads(path.read_text(encoding="utf-8"))):
+        raise MinerUConfigError(
+            f"{path} has formula recognition on. It is off for this corpus: policies carry no "
+            "equations, and MinerU 1.3's UniMERNet fails under transformers 4.57 ('cache_position'). "
+            "Every document is OCR'd with it off, so training and serving read pages alike. "
+            "Fix: python -m data_pipeline.ocr.mineru_config --cuda"
+        )
+
+
+def formula_enabled(body: dict) -> bool:
+    """MinerU's formula recognition, which is on unless its config says otherwise."""
+    return bool((body.get("formula-config") or {}).get("enable", True))
 
 
 def set_cuda(path: Path | None = None) -> Path:
@@ -55,22 +67,28 @@ def set_cuda(path: Path | None = None) -> Path:
         raise MinerUConfigError(f"no MinerU config at {path}; download MinerU's model weights first")
     body = json.loads(path.read_text(encoding="utf-8"))
     body["device-mode"] = "cuda"
+    # Formula recognition (UniMERNet) off: policies carry no equations, and under
+    # the transformers this stack pins it fails on every page ('cache_position').
+    # Layout, OCR and table recognition are unaffected.
+    formula = body.get("formula-config")
+    body["formula-config"] = {**(formula if isinstance(formula, dict) else {}), "enable": False}
     path.write_text(json.dumps(body, indent=4), encoding="utf-8")
     return path
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Check or set MinerU's device (GPU only)")
-    parser.add_argument("--cuda", action="store_true", help="set device-mode to cuda")
+    parser.add_argument("--cuda", action="store_true",
+                        help="set device-mode to cuda and formula recognition off")
     args = parser.parse_args(argv)
     try:
         if args.cuda:
-            print(f"device-mode set to cuda in {set_cuda()}")
+            print(f"device-mode set to cuda, formula recognition off, in {set_cuda()}")
         assert_on_cuda()
     except MinerUConfigError as exc:
         print(exc, file=sys.stderr)
         return 1
-    print(f"MinerU runs on cuda ({config_path()})")
+    print(f"MinerU runs on cuda, formula recognition off ({config_path()})")
     return 0
 
 
