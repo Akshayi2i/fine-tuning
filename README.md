@@ -224,6 +224,15 @@ listed in `data/bundle_exclusions.csv` (`document,reason`, git-ignored); a re-ru
 any folder an earlier run made. The audit accepts month/year dates (edition dates, kept as written) and
 word-valued indicator fields, and compares amounts by magnitude (a return is printed positive, recorded negative).
 
+**Labels come from the reviewed gold.** The generator's own labels cover ~29% of what a source's reviewed gold
+holds, and the model reads an omitted field as "not on the page". Two steps fix that without regenerating a PDF:
+the originals take their reviewed gold (fideon_synth `scripts/use_reviewed_gold.py`), and
+`python -m data_pipeline.ingestion.fill_synthetic_labels --input "data/training data" --apply` adds each synthetic
+label's missing fields from its source's reviewed gold — never changing a field the label has: unchanged values
+as they are, full dates shifted by the recorded `date_shift_days`, a replaced identity only when its new value is
+known (else left out), amounts only where the template kept them, table rows matched on unchanged values and never
+duplicated. Every merged label must pass the schema. After OCR, the audit checks every value against the page.
+
 **The delivered split is used as given.** The generator put each source document and its ten synthetic twins
 in one of Train/Val/Test, so a test layout is one the model never trained on. The corpus build takes that
 split when every document carries one (`split_groups.assign_delivered_splits`): one family per source, a source

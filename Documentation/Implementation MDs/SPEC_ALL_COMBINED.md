@@ -1140,6 +1140,23 @@ delivery where only some documents carry a split, and reports the delivered Trai
 synthetic) with the test count checked against the freeze minimum. Every document of the first delivery is a
 scan without a text layer, so the value-against-page check runs after OCR.
 
+### Completing synthetic labels (2026-09-29)
+
+The generator's labels held ~29% of the fields in their sources' reviewed gold (90,050 of ~300,000 across 1,560
+twins; coverages, forms and endorsements, premiums, vehicles almost entirely missing). Trained on them, the model
+would learn that most of a policy is absent. `data_pipeline/ingestion/fill_synthetic_labels.py` completes each
+twin's label from its source's reviewed gold without regenerating the PDF: a field the twin has is never changed;
+a missing field is added **as is** when the generator leaves such values on the page (coverage names, form numbers,
+edition dates, the carrier's own name and address), **shifted** by the recorded `date_shift_days` when a full date
+(99.6% of shared dates match that shift exactly), **swapped** when it is a replaced identity whose new value is
+known from a field both labels share, and **left out** otherwise; amounts are added only when every amount the two
+labels share is equal (89% of shared amounts are; some templates change them). Table rows are matched on unchanged
+values, and no row is added while the twin has rows that did not match, so none is listed twice. A merged label
+that fails the schema is not written. Result on the first delivery: 90,050 → 295,082 fields; 30,268 deliberately
+left out. The originals take their reviewed gold through fideon_synth's `use_reviewed_gold.py`. The audit accepts
+the reviewed gold's conventions: month/year edition dates in any layout (`05 11`, `0699`, `(06/99)`) and split
+limits (several amounts in one field).
+
 ---
 
 # SPEC_04_labeling_golden_json

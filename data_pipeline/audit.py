@@ -343,8 +343,10 @@ def _refs(envelope: dict) -> list:
     return refs if isinstance(refs, list) else [refs]
 
 
-#: A month and year with no day: 05-17, 5/2017.
-_MONTH_YEAR = re.compile(r"^\s*(0?[1-9]|1[0-2])\s*[/-]\s*(\d{2}|\d{4})\s*$")
+#: A month and year with no day, as edition dates print it: 05-17, 5/2017, 05 11, 0699, (06/99), 00/00.
+_MONTH_YEAR = re.compile(r"^\s*\(?\s*(0?[1-9]|1[0-2]|00)\s*[/. -]?\s*(\d{2}|\d{4})\s*\)?\s*$")
+#: Two or more figures in one value: a split limit ("$100,000/$300,000", "100/300").
+_FIGURES = re.compile(r"\d[\d,]*(?:\.\d+)?")
 
 
 def _check_formats(name: str, envelopes: list[tuple[str, dict]], report: AuditReport) -> None:
@@ -377,6 +379,9 @@ def _check_formats(name: str, envelopes: list[tuple[str, dict]], report: AuditRe
             # A field named like an amount that holds a word on both sides is an
             # indicator ("Additional" / "Return" premium), not a misread figure.
             if not any(ch.isdigit() for ch in f"{raw}{parsed}"):
+                continue
+            # A split limit is several amounts in one field; it has no single number.
+            if len(_FIGURES.findall(str(parsed))) >= 2:
                 continue
             try:
                 number = float(str(parsed).replace(",", ""))
