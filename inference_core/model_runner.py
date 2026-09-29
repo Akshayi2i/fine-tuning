@@ -227,6 +227,10 @@ class VLLMBackend(ModelBackend):
         if self._engine is not None:
             return self._engine
 
+        from inference_core.vllm_patches import patch_qwen3_vl_lora
+
+        # Before vLLM is imported (inference_core.vllm_patches).
+        patch_qwen3_vl_lora()
         from vllm import LLM
 
         from common.gpu import require_cuda
