@@ -206,6 +206,40 @@ if marker.is_file() and marker.read_text().strip() == revision and (target / "co
     print(f"{model_id}@{revision[:12]} already in {target}")
     sys.exit(0)
 
+# A copy put there some other way (a serving setup, a manual download) is used
+# when every file is the pinned revision's, by size and, for the weights, by
+# SHA-256 - not re-downloaded; a copy that differs is replaced below.
+if (target / "config.json").is_file():
+    import hashlib
+
+    from huggingface_hub import HfApi
+
+    print(f"verifying the copy in {target} against {revision[:12]} (hashes ~17.5 GB, a few minutes)")
+    info = HfApi().model_info(model_id, revision=revision, files_metadata=True)
+    problems = []
+    for sibling in info.siblings:
+        path = target / sibling.rfilename
+        if not path.is_file():
+            problems.append(f"missing {sibling.rfilename}")
+            continue
+        if sibling.size is not None and path.stat().st_size != sibling.size:
+            problems.append(f"size of {sibling.rfilename}")
+            continue
+        lfs = sibling.lfs
+        want = (lfs.get("sha256") if isinstance(lfs, dict) else getattr(lfs, "sha256", None)) if lfs else None
+        if want:
+            digest = hashlib.sha256()
+            with path.open("rb") as fh:
+                for chunk in iter(lambda: fh.read(1 << 24), b""):
+                    digest.update(chunk)
+            if digest.hexdigest() != want:
+                problems.append(f"content of {sibling.rfilename}")
+    if not problems:
+        marker.write_text(revision + "\n")
+        print(f"the existing copy is {model_id}@{revision[:12]}: using it, no download")
+        sys.exit(0)
+    print(f"the existing copy differs from the pinned revision ({problems[:4]}); downloading it")
+
 from huggingface_hub import snapshot_download
 
 print(f"downloading {model_id}@{revision} to {target} (~17.5 GB; resumes if interrupted)")
