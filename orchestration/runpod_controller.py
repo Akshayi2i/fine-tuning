@@ -23,6 +23,7 @@ three launches, and it removes two Blob round trips.
 from __future__ import annotations
 
 import logging
+import os
 import re
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
@@ -297,12 +298,20 @@ class RunPodController:
 
     def launch(self, spec: PodSpec) -> PodHandle:
         """Launch one pod. Refuses without the staging volume attached."""
-        if not spec.volume_id:
+        # In process (LocalBackend) on the pod, there is no second pod whose disk
+        # could vanish: the stage writes straight to the volume mounted here, so
+        # the mount existing is the guarantee. Off the pod it does not exist, and
+        # the refusal below stands.
+        in_process_on_volume = (
+            isinstance(self.backend, LocalBackend) and os.path.isdir(spec.volume_mount)
+        )
+        if not spec.volume_id and not in_process_on_volume:
             raise PodLaunchError(
                 f"refusing to launch pod {spec.name!r} for stage {spec.stage!r} with no staging "
                 "volume attached. Without it the pod writes to pod-local disk, terminates, and "
                 "the work is gone — silently, because every write succeeded. Set RUNPOD_VOLUME_ID "
-                "(created in Phase 0) or pass volume_id explicitly (SPEC_13 §3)."
+                f"(created in Phase 0) or pass volume_id explicitly (SPEC_13 §3); running in "
+                f"this process, the staging mount {spec.volume_mount} must exist."
             )
 
         pod_id = self.backend.create(spec)

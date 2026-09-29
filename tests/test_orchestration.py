@@ -1760,3 +1760,20 @@ def test_a_corpus_with_no_training_rows_is_refused(client, controller, monkeypat
     with pytest.raises(PipelineError, match="no train"):
         pipeline_dag.stage_dataset_build(ctx)
     assert not client.exists(paths.corpus_manifest(ctx.corpus, None))
+
+
+def test_in_process_on_the_pod_the_mounted_volume_is_enough(tmp_path):
+    """On the pod, LocalBackend runs the stage here and writes to the mounted
+    volume; there is no second pod whose disk could vanish, so no volume id."""
+    controller = RunPodController(backend=LocalBackend(), volume_id=None, volume_mount=str(tmp_path),
+                                  git_commit="abc1234")
+    handle = controller.launch(controller.spec_for("training"))
+    assert handle.status == "running"
+    controller.terminate(handle)
+
+
+def test_in_process_off_the_pod_is_still_refused(tmp_path):
+    controller = RunPodController(backend=LocalBackend(), volume_id=None,
+                                  volume_mount=str(tmp_path / "no-such-mount"), git_commit="abc1234")
+    with pytest.raises(PodLaunchError, match="no staging volume attached"):
+        controller.launch(controller.spec_for("training"))
