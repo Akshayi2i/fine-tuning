@@ -120,6 +120,20 @@ def run(name: str, decides: str, fn) -> Result:
 # --------------------------------------------------------------------------
 
 
+def _struct_fields(cls) -> set[str]:
+    """A class's field names, whatever it is built with: vLLM 0.11's SamplingParams
+    is a msgspec Struct (``__struct_fields__``), not a dataclass, so looking only at
+    ``__dataclass_fields__`` found no fields at all."""
+    import contextlib
+    import inspect
+
+    fields = set(getattr(cls, "__struct_fields__", ()))
+    fields |= set(getattr(cls, "__dataclass_fields__", {}))
+    with contextlib.suppress(TypeError, ValueError):
+        fields |= set(inspect.signature(cls).parameters)
+    return fields
+
+
 def check_gpu(r: Result) -> None:
     import torch
 
@@ -282,6 +296,12 @@ def check_swift_row_format(r: Result) -> None:
 
     _model, swift_processor = get_model_tokenizer(MODEL_ID, load_model=False)
     template = get_template(swift_processor.model_meta.template, swift_processor)
+    # Training mode, as `swift sft` sets it: the default (inference) mode stops at
+    # the assistant header and leaves out the response the row trains on.
+    if hasattr(template, "set_mode"):
+        template.set_mode("train")
+    else:
+        template.mode = "train"
     encoded = template.encode({"messages": row["messages"], "images": row["images"]})
     rendered = swift_processor.tokenizer.decode(encoded["input_ids"])
 
@@ -315,7 +335,6 @@ def check_swift_image_budget(r: Result) -> None:
     its own default (16384 tokens) whatever the budget says.
     """
     import os
-    import subprocess
     import textwrap
 
     from common.scopes import default_scope
@@ -551,13 +570,20 @@ def check_peak_vram_per_cap(r: Result) -> None:
         r.detail = "no CUDA device — cannot measure"
         return
 
-    from transformers import AutoConfig, AutoModelForCausalLM
+    from peft import LoraConfig, get_peft_model
+    from transformers import AutoConfig, AutoModelForImageTextToText
 
+    # The whole model - vision tower included - with the LoRA training attaches,
+    # not the text tower alone: Qwen3-VL's text config is not a causal-LM
+    # config, and the base alone would count gradients LoRA never keeps.
     config = AutoConfig.from_pretrained(MODEL_ID, trust_remote_code=True)
-    text_config = getattr(config, "text_config", config)
-    model = AutoModelForCausalLM.from_config(
-        text_config, torch_dtype=torch.bfloat16, trust_remote_code=True
-    ).cuda()
+    with torch.device("cuda"):
+        model = AutoModelForImageTextToText.from_config(config, dtype=torch.bfloat16)
+    model = get_peft_model(model, LoraConfig(
+        r=64, lora_alpha=128, lora_dropout=0.0,
+        target_modules=["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"],
+    ))
+    model.enable_input_require_grads()
     model.gradient_checkpointing_enable()
     model.train()
 
@@ -577,8 +603,9 @@ def check_peak_vram_per_cap(r: Result) -> None:
             measured[cap] = f"error: {type(exc).__name__}"
     r.data["peak_gb_by_cap"] = measured
     r.data["note"] = (
-        "language tower only, no vision encoder and no use_logits_to_keep — a floor, not the "
-        "full training footprint. Re-measure through ms-swift for the real number."
+        "the whole model with rank-64 LoRA and gradient checkpointing, text tokens only, and "
+        "full-vocabulary logits (training's use_logits_to_keep saves most of those) - an upper "
+        "bound for a row of that length. The smoke run measures the real footprint."
     )
     r.ok = any(isinstance(v, float) for v in measured.values())
     r.detail = f"peak GB by sequence cap: {measured}"
@@ -586,20 +613,19 @@ def check_peak_vram_per_cap(r: Result) -> None:
 
 def check_sequence_parallel(r: Result) -> None:
     """ms-swift sequence parallelism — the escape hatch before any ZeRO-3 config."""
-    import shutil
+    import dataclasses
 
-    if shutil.which("swift") is None:
+    # ms-swift's own argument dataclass - what its parser accepts - not a grep of
+    # `swift sft --help`, which does not print every inherited argument.
+    try:
+        from swift.llm import TrainArguments
+    except ImportError as exc:
         r.ok = False
-        r.detail = "the `swift` CLI is not on PATH"
+        r.detail = f"not ms-swift 3 (no swift.llm.TrainArguments: {exc})"
         return
-    out = subprocess.run(["swift", "sft", "--help"], capture_output=True, text=True, timeout=120)
-    help_text = (out.stdout + out.stderr).lower()
-    flags = {
-        "sequence_parallel_size": "sequence_parallel" in help_text,
-        "use_logits_to_keep": "logits_to_keep" in help_text,
-        "padding_free": "padding_free" in help_text,
-        "freeze_aligner": "freeze_aligner" in help_text,
-    }
+    known = {f.name for f in dataclasses.fields(TrainArguments)}
+    flags = {name: name in known for name in
+             ("sequence_parallel_size", "use_logits_to_keep", "padding_free", "freeze_aligner")}
     r.data["flags"] = flags
     missing = [k for k, v in flags.items() if not v]
     r.ok = not missing
@@ -621,7 +647,7 @@ def check_structured_outputs(r: Result) -> None:
         r.data["guided_decoding_params"] = False
     from vllm import SamplingParams
 
-    fields = set(getattr(SamplingParams, "__dataclass_fields__", {}))
+    fields = _struct_fields(SamplingParams)
     r.data["sampling_fields"] = sorted(f for f in fields if "guided" in f or "structur" in f)
     r.ok = r.data["guided_decoding_params"] or bool(r.data["sampling_fields"])
     r.detail = (
@@ -641,7 +667,7 @@ def check_raw_logprobs(r: Result) -> None:
     """
     from vllm import SamplingParams
 
-    fields = set(getattr(SamplingParams, "__dataclass_fields__", {}))
+    fields = _struct_fields(SamplingParams)
     r.data["has_logprobs"] = "logprobs" in fields
     try:
         from vllm.config import ModelConfig
@@ -663,9 +689,12 @@ def check_fp8_export(r: Result) -> None:
         import llmcompressor
 
         r.data["llmcompressor"] = getattr(llmcompressor, "__version__", "installed")
-    except ImportError as exc:
-        r.ok = False
-        r.detail = f"llm-compressor not importable ({exc}); FP8 is the v2.1 serving format — add it to [serve]"
+    except ImportError:
+        # Deferred, not failed: llmcompressor has its own environment
+        # (requirements-quantize), and cycle 1 serves bf16. Run this check there.
+        r.ok = None
+        r.detail = ("deferred: llmcompressor lives in its own environment (requirements-quantize.txt) "
+                    "and cycle 1 serves bf16 - run the spike there before the first FP8 export")
         return
     try:
         from llmcompressor.modifiers.quantization import QuantizationModifier  # noqa: F401
