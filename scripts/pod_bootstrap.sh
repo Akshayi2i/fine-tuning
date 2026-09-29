@@ -180,11 +180,14 @@ if [ ! -f "$MINERU_CONFIG" ] && [ -f "$HOME/magic-pdf.json" ]; then
   echo "moved ~/magic-pdf.json to $MINERU_CONFIG"
 fi
 mineru_ready=0
+if [ ! -f "$MINERU_CONFIG" ]; then
+  # Weights and config from MinerU's own script, for the installed release.
+  bash scripts/download_mineru_models.sh || echo "MinerU model download failed (see above)"
+fi
 if [ -f "$MINERU_CONFIG" ]; then
   "$VENV_OCR/bin/python" -m data_pipeline.ocr.mineru_config --cuda && mineru_ready=1
 else
-  PENDING+=("download MinerU 1.x's model weights with its download_models_hf.py, run with \
-$VENV_OCR/bin/python (HF_HOME keeps the weights on the volume), then re-run this script")
+  PENDING+=("MinerU's model weights: bash scripts/download_mineru_models.sh, then re-run this script")
   echo "no MinerU config yet (see the list at the end)"
 fi
 
