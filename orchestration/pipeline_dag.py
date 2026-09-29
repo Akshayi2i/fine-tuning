@@ -735,20 +735,24 @@ def warn_on_held_out_carriers(manifest: dict[str, Any], documents: list[Any]) ->
         )
 
 
-def stage_dataset_build(ctx: StageContext) -> StageResult:
-    """Split, expand into modality variants, write JSONL, and pin the corpus.
+@dataclass
+class CorpusPlan:
+    """The corpus as the build would write it, held in memory."""
 
-    The split happens **before** modality expansion, so a document's three
-    variants land in one split. Reversing that order leaks a document's own
-    content into its evaluation and inflates every number downstream (arch §7).
-    """
-    from data_pipeline.corpus_manifest import build_manifest
-    from data_pipeline.dataset_builder.build_jsonl import (
-        build_corpus,
-        train_rows_by_epoch,
-        train_source_ids,
-        write_jsonl,
-    )
+    documents: list[Any]
+    by_type: dict[str, Any]
+    assignment: Any
+    built: Any
+    frozen: bool
+    delivered: bool
+    modes: Any = None
+
+
+def plan_corpus(ctx: StageContext) -> CorpusPlan:
+    """Load, split and expand the labelled documents - everything the dataset build
+    does before it writes. The build and the preflight both call this, so a
+    preflight that passes has built exactly the corpus the run will write."""
+    from data_pipeline.dataset_builder.build_jsonl import build_corpus, train_source_ids
     from data_pipeline.dataset_builder.sample_modes import assert_mix_is_close, sample_modes
     from data_pipeline.dataset_builder.split_groups import assign_group_splits
     from evaluation.freeze_eval_set import frozen_manifest, is_frozen
@@ -794,6 +798,23 @@ def stage_dataset_build(ctx: StageContext) -> StageResult:
     modes = sample_modes(train_source_ids(documents, assignment), seed=ctx.seed)
     assert_mix_is_close(modes)
     built = build_corpus(documents, assignment, seed=ctx.seed, mode_assignment=modes)
+    return CorpusPlan(documents, by_type, assignment, built, frozen, delivered, modes)
+
+
+def stage_dataset_build(ctx: StageContext) -> StageResult:
+    """Split, expand into modality variants, write JSONL, and pin the corpus.
+
+    The split happens **before** modality expansion, so a document's three
+    variants land in one split. Reversing that order leaks a document's own
+    content into its evaluation and inflates every number downstream (arch §7).
+    """
+    from data_pipeline.corpus_manifest import build_manifest
+    from data_pipeline.dataset_builder.build_jsonl import train_rows_by_epoch, write_jsonl
+
+    plan = plan_corpus(ctx)
+    documents, by_type, assignment, built, frozen, modes = (
+        plan.documents, plan.by_type, plan.assignment, plan.built, plan.frozen, plan.modes
+    )
     # Refused before anything is written. An epoch file of zero rows trains
     # nothing, and the run would still record a corpus version as built.
     needed = ("train", "val") if frozen else ("train", "val", "test")

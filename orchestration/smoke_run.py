@@ -17,7 +17,8 @@ merged. What it measures: how many rows exceed the sequence caps (the corpus
 build reports rejections) and how long a step takes. Its scores mean nothing.
 
 Steps: ``select`` (pick the documents), ``import``, ``ocr`` (in the OCR
-environment), ``check`` (post-OCR values), ``finetune``.
+environment), ``check`` (post-OCR values), ``preflight`` (everything finetune
+depends on, the corpus built in memory), ``finetune``.
 """
 
 from __future__ import annotations
@@ -31,7 +32,7 @@ import sys
 from collections import defaultdict
 from pathlib import Path
 
-STEPS = ("select", "import", "ocr", "check", "finetune")
+STEPS = ("select", "import", "ocr", "check", "preflight", "finetune")
 DEFAULT_TENANT = "smoke"
 DEFAULT_VERSION = "v0"
 WORKSPACE = Path(os.environ.get("FIDEON_WORKSPACE", "/workspace"))
@@ -104,6 +105,9 @@ def commands(*, batch_dir: Path, subset_dir: Path, tenant: str, version: str,
                 "--all-unprocessed", "--tenant", tenant],
         "check": [py, "-m", "data_pipeline.ocr_check", "--doc-type", "policy", "--tenant", tenant,
                   "--out", str(check_out)],
+        "preflight": [py, "-m", "orchestration.preflight", "--scope", "personal_lines", "--tenant", tenant,
+                      "--corpus-version", version, "--out-version", version, "--ocr-check", str(check_out),
+                      "--out", str(check_out / "preflight.json")],
         "finetune": [py, "-m", "orchestration.run", "finetune", "--scope", "personal_lines", "--skip-ingest",
                      "--corpus-version", version, "--out-version", version, "--tenant", tenant],
     }

@@ -294,6 +294,17 @@ Before the real run, a smoke run proves the whole path on a few documents, under
 python -m orchestration.smoke_run          # select -> import -> OCR -> check -> finetune, tenant "smoke", v0
 ```
 
+Before any `finetune`, the preflight checks everything it depends on in minutes, and builds the corpus in
+memory with the same function the dataset build uses (nothing written):
+
+```bash
+python -m orchestration.preflight --scope personal_lines      # exit 1 on any FAIL
+```
+
+GPU free, packages, the pinned base model, config invariants, disk, Azure write/overwrite/delete, every
+document OCR'd, the post-OCR check passed, and the corpus: rows per split, documents set aside and why, share
+over the sequence caps (WARN above 5%, FAIL above 25%). The smoke run runs it before its own `finetune`.
+
 It takes 4 train, 1 val and 1 test source document with all their twins (split intact, lines spread), never
 freezes or packages, and leaves the real data untouched. Read the corpus build's rejected-row count and the
 post-OCR report before the full `finetune`.
