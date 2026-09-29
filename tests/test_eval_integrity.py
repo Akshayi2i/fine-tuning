@@ -284,3 +284,42 @@ def test_a_long_policy_counts_once_not_once_per_window():
     cert = {"doc_type": "policy", "sections": "decl", "source_id": "c1"}
     rows = [({"a": "x"}, {"a": "x"}, policy)] * 3 + [({"a": "x"}, {"a": "y"}, cert)]
     assert build_report("v", rows).gate_metrics()["field_normalized_match"] == 0.5
+
+
+def _unusable(bad: int, total: int, kind: str = "output") -> list[ValidationGeneration]:
+    return [
+        ValidationGeneration(row={}, golden={}, extraction={} if i < bad else {"a": 1},
+                             error="JSONDecodeError: Unterminated string" if i < bad else None,
+                             failure_kind=kind if i < bad else None)
+        for i in range(total)
+    ]
+
+
+def test_unusable_json_is_a_wrong_answer_not_a_broken_pass():
+    """19 of 132 looping answers refused every checkpoint of the smoke run; a
+    checkpoint that loops more must LOSE, not drop out of the comparison."""
+    assert_generations_usable(_unusable(19, 132), what="test")
+
+
+def test_a_pass_that_is_mostly_unusable_json_is_still_refused():
+    with pytest.raises(ValidationGenerationError, match="unusable JSON"):
+        assert_generations_usable(_unusable(70, 132), what="test")
+
+
+def test_setup_failures_keep_the_ten_percent_limit():
+    with pytest.raises(ValidationGenerationError, match="19 of 132"):
+        assert_generations_usable(_unusable(19, 132, kind="setup"), what="test")
+
+
+def test_each_failure_is_classified_where_it_happens():
+    from types import SimpleNamespace as NS
+
+    from evaluation.validation_generation import _finish
+
+    looped = ValidationGeneration(row={}, golden={})
+    _finish(looped, NS(text='{"a": "xxxx', truncated=lambda: True, tokens=[], token_logprobs=[]))
+    assert looped.failure_kind == "output" and "token limit" in looped.error
+
+    refused = ValidationGeneration(row={}, golden={})
+    _finish(refused, RuntimeError("engine died"))
+    assert refused.failure_kind == "setup" and refused.extraction == {}

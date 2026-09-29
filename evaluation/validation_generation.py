@@ -39,6 +39,10 @@ class ValidationGeneration:
     extraction: dict[str, Any] | None = None
     logprobs_by_path: dict[str, list[float]] = field(default_factory=dict)
     error: str | None = None
+    #: ``"setup"`` when nothing usable came back (the row could not be prepared,
+    #: the request failed); ``"output"`` when the model answered with something
+    #: that is not a JSON object - a wrong answer, scored as one.
+    failure_kind: str | None = None
 
     @property
     def metadata(self) -> dict[str, Any]:
@@ -146,7 +150,7 @@ def generate_validation(
                 if constrain else None
             )
         except Exception as exc:  # noqa: BLE001 - one bad row must not lose the rest
-            _record_failure(entry, exc)
+            _record_failure(entry, exc, "setup")
             continue
         pending.append((entry, messages, schema))
 
@@ -170,11 +174,13 @@ def generate_validation(
     return out
 
 
-def _record_failure(entry: ValidationGeneration, exc: BaseException) -> None:
+def _record_failure(entry: ValidationGeneration, exc: BaseException, kind: str,
+                    note: str = "") -> None:
     # Scored as an empty extraction, not skipped: a model that cannot produce
     # JSON for a document has got every field on it wrong, and leaving it out
     # would score the model on the documents it managed.
-    entry.error = f"{type(exc).__name__}: {exc}"
+    entry.error = f"{note}{type(exc).__name__}: {exc}"
+    entry.failure_kind = kind
     entry.extraction = {}
     log.warning("validation generation failed for %s: %s", entry.row.get("source_id"), exc)
 
@@ -184,9 +190,10 @@ def _finish(entry: ValidationGeneration, result: Any) -> None:
     from common.canonical import collapse_spans, with_output_dates
     from inference_core.span_map import map_field_spans
 
+    if isinstance(result, BaseException):
+        _record_failure(entry, result, "setup")
+        return
     try:
-        if isinstance(result, BaseException):
-            raise result
         extraction = json.loads(result.text)
         if not isinstance(extraction, dict):
             raise TypeError(f"expected a JSON object, got {type(extraction).__name__}")
@@ -195,7 +202,9 @@ def _finish(entry: ValidationGeneration, result: Any) -> None:
         spans = collapse_spans(map_field_spans(result.text, result.tokens, result.token_logprobs))
         extraction = with_output_dates(extraction)
     except Exception as exc:  # noqa: BLE001 - one bad row must not lose the rest
-        _record_failure(entry, exc)
+        truncated = bool(getattr(result, "truncated", lambda: False)())
+        _record_failure(entry, exc, "output",
+                        "stopped at the token limit before the JSON closed - " if truncated else "")
         return
     entry.extraction = extraction
     entry.logprobs_by_path = {
@@ -260,11 +269,18 @@ def calibration_samples(
     return halves
 
 
-#: Above this share of rows failing to generate, a pass over validation is not
-#: a measurement. Scoring the failures as empty answers turned a broken setup —
-#: unreadable images, a model that would not load — into a checkpoint "chosen"
-#: at 0.0 and a calibrator fitted on nothing, with no error anywhere.
+#: Above this share of rows with nothing usable back, a pass over validation is
+#: not a measurement. Scoring the failures as empty answers turned a broken
+#: setup — unreadable images, a model that would not load — into a checkpoint
+#: "chosen" at 0.0 and a calibrator fitted on nothing, with no error anywhere.
 MAX_GENERATION_FAILURE_RATE = 0.10
+
+#: Rows the model answered with unusable JSON are wrong answers, not a broken
+#: pass, and are scored as such: a checkpoint that loops on 14% of documents has
+#: to lose to one that does not, not be dropped from the comparison. Counting
+#: them against the 10% above refused every checkpoint of the smoke run. Only
+#: when most rows are unusable is there too little left to rank on.
+MAX_UNUSABLE_OUTPUT_RATE = 0.50
 
 
 class ValidationGenerationError(RuntimeError):
@@ -275,10 +291,26 @@ def assert_generations_usable(
     generations: list[ValidationGeneration], *, what: str,
     max_failure_rate: float = MAX_GENERATION_FAILURE_RATE,
 ) -> None:
-    """Refuse a pass in which more than ``max_failure_rate`` of rows failed."""
+    """Refuse a pass that measured nothing.
+
+    More than ``max_failure_rate`` of rows with nothing back is a broken setup.
+    Rows the model answered with unusable JSON are wrong answers and stay in the
+    score, until they are most of the pass (:data:`MAX_UNUSABLE_OUTPUT_RATE`).
+    """
     if not generations:
         raise ValidationGenerationError(f"{what}: no validation rows were generated")
-    failed = [g for g in generations if g.error]
+    failed = [g for g in generations if g.error and g.failure_kind != "output"]
+    unusable = [g for g in generations if g.error and g.failure_kind == "output"]
+    if unusable:
+        log.info("%s: %d of %d row(s) answered with unusable JSON, scored as wrong answers",
+                 what, len(unusable), len(generations))
+    if len(unusable) / len(generations) > MAX_UNUSABLE_OUTPUT_RATE:
+        sample = sorted({g.error for g in unusable})[:3]
+        raise ValidationGenerationError(
+            f"{what}: {len(unusable)} of {len(generations)} validation rows came back as "
+            f"unusable JSON (e.g. {sample}). With most answers unreadable there is too little "
+            "left to rank or calibrate on."
+        )
     if len(failed) / len(generations) > max_failure_rate:
         sample = sorted({g.error for g in failed})[:3]
         raise ValidationGenerationError(
