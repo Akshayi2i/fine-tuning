@@ -130,6 +130,24 @@ Versions are declared once, in `pyproject.toml`; the requirements files only
 choose dependency groups. `tests/test_dependencies.py` fails if the code imports
 a package no group installs.
 
+`requirements.txt` is the **laptop** set (data pipeline, audit, tests). The pods
+install `requirements-{train,ocr,serve,quantize}.txt` **through their locks**,
+`requirements-*.lock`: every package, transitive ones included, resolved for
+Linux x86-64 / Python 3.11, so a pod set up next month runs the same stack.
+
+| Environment | torch | Key pins |
+|---|---|---|
+| train (`/workspace/venv`) | 2.8.0 (CUDA 12.8) | vLLM 0.11.0, transformers 4.57.6, ms-swift 3.12.6, flash-attn 2.x built on the pod |
+| ocr (`/workspace/venv-ocr`) | 2.8.0 | magic-pdf 1.3.12 |
+| serve | 2.8.0 | identical to train for every package they share |
+| quantize | 2.8.0 | llmcompressor 0.9 |
+
+pillow (11.3) and PyMuPDF (1.24) are the same in every environment: the OCR
+environment renders the pages the model trains on. After changing a dependency
+in `pyproject.toml`, run `bash scripts/lock_requirements.sh` (needs `uv`) and
+commit the locks; `tests/test_dependency_locks.py` fails on a stale lock. The pod's
+GPU driver must support CUDA 12.8 (the bootstrap checks).
+
 ## Running on the pod: closing the laptop does not stop it
 
 On the pod, every long job runs inside tmux automatically - the pipeline

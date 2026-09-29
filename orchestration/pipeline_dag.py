@@ -1723,10 +1723,10 @@ def build_release_bundle(ctx: StageContext) -> tuple[Any, list[str]]:
             waived_gates=list(ctx.gate_override.waived_gates),
         )
 
-    # No lockfile exists in this repo yet, so the dependency pins are hashed from
-    # pyproject.toml. That records the declared ranges, not the resolved
-    # versions, which is weaker than §10.2 asks for and named as such here.
-    lock = root / "uv.lock"
+    # The training environment's lock (scripts/lock_requirements.sh): every
+    # resolved version the model was trained, calibrated and gated with (§10.2).
+    # pyproject.toml only if the lock is missing, which records ranges, not versions.
+    lock = root / "requirements-train.lock"
     lockfile = lock if lock.exists() else root / "pyproject.toml"
 
     try:

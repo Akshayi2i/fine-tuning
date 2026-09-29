@@ -43,14 +43,27 @@ fi
 if ! command -v tmux >/dev/null 2>&1 && [ "$(id -u)" = "0" ] && command -v apt-get >/dev/null 2>&1; then
   apt-get update -qq && apt-get install -y -qq tmux >/dev/null
 fi
+# MinerU's layout models import OpenCV, which needs libGL and glib from the OS;
+# a slim image lacks them and OCR then fails at import.
+if [ "$role" = "ocr" ] && [ "$(id -u)" = "0" ] && command -v apt-get >/dev/null 2>&1    && ! ldconfig -p 2>/dev/null | grep -q 'libGL.so.1'; then
+  apt-get update -qq && apt-get install -y -qq libgl1 libglib2.0-0 >/dev/null
+fi
 python -m pip install --upgrade pip wheel setuptools packaging ninja
-python -m pip install -r "$requirements"
+# Installed through the role's lock (scripts/lock_requirements.sh): every package,
+# transitive ones included, at the version resolved for the pod, so two pods set
+# up months apart run the same stack. The laptop's dev role has no lock.
+lock="${requirements%.txt}.lock"
+if [ -f "$lock" ]; then
+  python -m pip install -r "$requirements" -c "$lock"
+else
+  python -m pip install -r "$requirements"
+fi
 
 if [ "$role" = "train" ]; then
   # Built against the torch just installed. With build isolation pip compiles it
   # against a throwaway torch in a temporary env, which fails or produces a
   # library that does not load. MAX_JOBS bounds the compile's memory use.
-  MAX_JOBS="${MAX_JOBS:-8}" python -m pip install "flash-attn>=2.7" --no-build-isolation
+  MAX_JOBS="${MAX_JOBS:-8}" python -m pip install "flash-attn>=2.7,<3" --no-build-isolation
 fi
 
 python - "$role" <<'PY'

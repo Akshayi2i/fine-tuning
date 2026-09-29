@@ -75,6 +75,14 @@ case "$gpu" in
   *H200*) ;;
   *) echo "WARNING: expected an H200 SXM; the configs are sized for its 141 GB." ;;
 esac
+# torch 2.8 is built for CUDA 12.8; an older driver makes torch see no GPU at all.
+# nvidia-smi prints the highest CUDA version the driver supports.
+driver_cuda="$(nvidia-smi | grep -o 'CUDA Version: [0-9.]*' | grep -o '[0-9.]*$' || true)"
+echo "driver supports CUDA ${driver_cuda:-unknown}"
+if [ -n "$driver_cuda" ] && ! awk -v v="$driver_cuda" 'BEGIN { split(v, a, "."); exit !(a[1] > 12 || (a[1] == 12 && a[2] >= 8)) }'; then
+  die "the GPU driver supports CUDA $driver_cuda, but torch 2.8 needs 12.8 or newer. Redeploy the pod with \
+RunPod's CUDA filter set to 12.8+."
+fi
 mountpoint -q "$WORKSPACE" || die "$WORKSPACE is not a mounted volume. Attach the network volume at $WORKSPACE: \
 the container disk is wiped when the pod stops, and the environments and model must survive that."
 case "$REPO/" in
@@ -143,7 +151,7 @@ esac
 # environment is not reinstalled on a re-run.
 make_venv() {
   local venv="$1" role="$2" requirements="$3" stamp marker
-  stamp="$(cat "$requirements" pyproject.toml | sha256sum | cut -c1-16)"
+  stamp="$(cat "$requirements" "${requirements%.txt}.lock" pyproject.toml 2>/dev/null | sha256sum | cut -c1-16)"
   marker="$venv/.fideon-$role"
   if [ -f "$marker" ] && [ "$(cat "$marker")" = "$stamp" ] && [ -x "$venv/bin/python" ]; then
     echo "$venv is up to date ($role)"

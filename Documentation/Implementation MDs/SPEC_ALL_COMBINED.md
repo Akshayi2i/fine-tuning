@@ -794,6 +794,16 @@ so `ocr` and `train` are separate environments: `scripts/pod_bootstrap.sh` build
 which includes serve) and `/workspace/venv-ocr` (ocr) on the volume and records the requirements each was
 built from, so a re-run reinstalls only what changed.
 
+**Lock files** (`requirements-{train,ocr,serve,quantize}.lock`, from `scripts/lock_requirements.sh` with uv, for
+Linux x86-64 / Python 3.11): `setup_pod.sh` installs each role with `-c <lock>`, so every package is pinned.
+Resolving them found what ranges alone hid: the serving environment took **transformers 5.x** (vLLM 0.11.0 sets
+no upper bound) and the OCR and quantize environments took the newest torch, built for a CUDA newer than the
+pod's. Now `transformers>=4.57,<4.58` in train and serve, `torch>=2.8,<2.9` in every environment, `pillow<12`
+and `PyMuPDF<1.25` everywhere (one renderer and one resizer for the OCR environment's training pages and for
+serving), and the serve lock is resolved inside the train lock so serving runs exactly what calibration saw.
+`flash-attn<3`. The OCR role installs `libgl1`/`libglib2.0-0` (OpenCV). The release bundle's `lockfile_hash` is
+the train lock's. `tests/test_dependency_locks.py` fails on a stale lock or drift between environments.
+
 **Base model revision** pinned to `0c351dd01ed87e9c1b53cbc748cba10e6187ff3b` (Hub commit of 2025-10-15, four
 safetensors shards, 17.5 GB); the bootstrap downloads exactly that into `local_dir`.
 
