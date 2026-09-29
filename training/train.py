@@ -477,7 +477,7 @@ def assert_on_pod() -> None:
     if os.environ.get(OFF_POD_ENV) == "1":
         return
     # The mount the staging paths resolve under, however it is configured.
-    mount = os.environ.get("RUNPOD_VOLUME_MOUNT", "/runpod-volume")
+    mount = os.environ.get("RUNPOD_VOLUME_MOUNT") or "/runpod-volume"
 
     from common.gpu import GPUError, require_cuda
 

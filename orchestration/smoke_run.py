@@ -35,7 +35,7 @@ from pathlib import Path
 STEPS = ("select", "import", "ocr", "check", "preflight", "finetune")
 DEFAULT_TENANT = "smoke"
 DEFAULT_VERSION = "v0"
-WORKSPACE = Path(os.environ.get("FIDEON_WORKSPACE", "/workspace"))
+WORKSPACE = Path(os.environ.get("FIDEON_WORKSPACE") or "/workspace")  # an empty .env value means unset
 OCR_PYTHON = WORKSPACE / "venv-ocr" / "bin" / "python"
 
 

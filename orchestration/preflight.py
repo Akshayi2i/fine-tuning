@@ -36,7 +36,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
-WORKSPACE = Path(os.environ.get("FIDEON_WORKSPACE", "/workspace"))
+WORKSPACE = Path(os.environ.get("FIDEON_WORKSPACE") or "/workspace")  # an empty .env value means unset
 #: Free GPU memory below this share of the card means something else holds it.
 MIN_FREE_GPU_SHARE = 0.9
 MIN_FREE_DISK_GB = 100

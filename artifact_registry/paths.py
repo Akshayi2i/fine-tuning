@@ -83,7 +83,7 @@ class PathError(ValueError):
 # --------------------------------------------------------------------------
 
 def default_tenant() -> str:
-    return os.environ.get("DEFAULT_TENANT_ID", "default")
+    return os.environ.get("DEFAULT_TENANT_ID") or "default"
 
 
 def _tenant(tenant_id: str | None) -> str:
@@ -590,7 +590,7 @@ def staging_root() -> str:
     none, but this is a real mount point. A relative path here would write to
     whatever the working directory happens to be and silently miss the volume.
     """
-    mount = os.environ.get("RUNPOD_VOLUME_MOUNT", "/runpod-volume")
+    mount = os.environ.get("RUNPOD_VOLUME_MOUNT") or "/runpod-volume"
     return "/" + _join(mount, "staging") if mount.startswith("/") else _join(mount, "staging")
 
 

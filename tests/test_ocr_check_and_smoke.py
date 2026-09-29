@@ -155,3 +155,21 @@ def test_each_smoke_step_runs_in_its_own_environment_under_the_smoke_tenant(tmp_
     assert all(c[c.index("--tenant") + 1] == "smoke" for c in cmds.values())
     assert "--out-version" in cmds["finetune"] and "v0" in cmds["finetune"]
     assert "freeze-eval-set" not in " ".join(sum(cmds.values(), []))
+
+
+def test_an_empty_workspace_setting_means_the_default(monkeypatch):
+    """.env carries `FIDEON_WORKSPACE=` (empty): the OCR interpreter must still be
+    /workspace/venv-ocr/bin/python, not a path relative to wherever the run started."""
+    import importlib
+
+    import orchestration.preflight as preflight
+    import orchestration.smoke_run as smoke
+
+    monkeypatch.setenv("FIDEON_WORKSPACE", "")
+    try:
+        assert str(importlib.reload(smoke).OCR_PYTHON).replace("\\", "/") == "/workspace/venv-ocr/bin/python"
+        assert str(importlib.reload(preflight).WORKSPACE).replace("\\", "/") == "/workspace"
+    finally:
+        monkeypatch.delenv("FIDEON_WORKSPACE")
+        importlib.reload(smoke)
+        importlib.reload(preflight)
