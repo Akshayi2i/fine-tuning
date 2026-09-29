@@ -275,6 +275,29 @@ and re-synced after an audit is never stale on the pod. The upload itself runs o
 the laptop, which has to stay on for it; azcopy is parallel and resumable, and
 everything after it runs on the pod.
 
+## On the pod, before training: the post-OCR check and a smoke run
+
+The scans have no text layer, so labelled values are checked against the page only once MinerU has run:
+
+```bash
+python -m data_pipeline.ocr_check --doc-type policy          # report in /workspace/ocr_check, exit 1 on FAIL
+```
+
+It compares every value with its page's OCR text (the audit's matching), and reports the fields the fill-in
+added (`fideon:filled`) apart from the generator's own, real apart from synthetic, per line, with the worst
+documents. It fails when added fields are found on their page more than 5 points less often than original ones
+(`--max-gap`): then the fill-in put values on synthetic pages that are not there, and training waits.
+
+Before the real run, a smoke run proves the whole path on a few documents, under its own tenant and version:
+
+```bash
+python -m orchestration.smoke_run          # select -> import -> OCR -> check -> finetune, tenant "smoke", v0
+```
+
+It takes 4 train, 1 val and 1 test source document with all their twins (split intact, lines spread), never
+freezes or packages, and leaves the real data untouched. Read the corpus build's rejected-row count and the
+post-OCR report before the full `finetune`.
+
 ## Scopes
 
 A training run covers a **scope** (`configs/scopes.yaml`): `unified` (every type), `policy`, `lossrun`, and

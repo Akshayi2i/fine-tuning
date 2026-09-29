@@ -2938,6 +2938,14 @@ pending it needs no MinerU.
 **RunPod backend**: `RunPodBackend` (launching pods through the API) is still unimplemented;
 `LocalBackend` runs the DAG in-process on whatever machine starts it — on the pod, inside tmux.
 
+**Post-OCR check and smoke run (2026-09-29).** `data_pipeline/ocr_check.py` checks every labelled value against
+its page's OCR text in `processed/` (the audit's matching), reporting `fideon:filled` fields apart from the
+generator's own, real apart from synthetic and per line; it exits non-zero when added fields are found on their
+page more than `--max-gap` (default 0.05) less often than original ones. `orchestration/smoke_run.py` runs a few
+whole source families (4 train, 1 val, 1 test by default) through import, OCR (in `/workspace/venv-ocr`), the
+post-OCR check and `finetune`, under tenant `smoke` and version `v0`, never freezing or packaging (the frozen set
+is not tenant-scoped). Both detach into tmux on the pod.
+
 ---
 
 # SPEC_14_tests_and_ci
