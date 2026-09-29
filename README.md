@@ -233,8 +233,8 @@ everything after it runs on the pod.
 
 A training run covers a **scope** (`configs/scopes.yaml`): `unified` (every type), `policy`, `lossrun`, and
 `personal_lines` — policies of homeowners, personal auto, dwelling fire, ocean marine, classic auto,
-motorcycle, recreational vehicle, personal umbrella and flood. A line-scoped release answers only for its
-lines; a policy request must carry its `lob` to reach it.
+motorcycle, recreational vehicle and personal umbrella (not flood). A line-scoped release answers only for
+its lines; a policy request must carry its `lob` to reach it.
 
 ```bash
 python -m orchestration.run finetune --scope personal_lines --corpus-version v1 --out-version v1

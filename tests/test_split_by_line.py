@@ -21,7 +21,7 @@ from data_pipeline.dataset_builder.split_groups import (
 
 #: A personal-lines-shaped corpus: 1920 documents, one family each, uneven lines.
 PERSONAL_LINES = {
-    "homeowners": 620, "personal_auto": 480, "dwelling_fire": 300, "flood": 200,
+    "homeowners": 620, "personal_auto": 480, "dwelling_fire": 300, "ocean_marine": 200,
     "recreational_vehicle": 140, "personal_umbrella": 90, "motorcycle": 60,
     "classic_auto": 27, "personal_watercraft": 3,
 }

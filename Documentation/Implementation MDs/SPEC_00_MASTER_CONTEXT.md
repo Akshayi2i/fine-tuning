@@ -554,8 +554,8 @@ What the build does now that the sections above did not describe. Each module sp
   split new documents into train/val only.
 - **Scopes by line of business**: `personal_lines` (`configs/scopes.yaml`) is a policy-only scope limited to
   homeowners, personal auto, dwelling fire, ocean marine, classic auto, motorcycle, recreational vehicle,
-  personal umbrella and flood. Its corpus view, validation, golden eval and serving keep to those lines; a
-  policy of another line, or with no `lob`, is refused by its release.
+  personal umbrella — **not flood**. Its corpus view, validation, golden eval and serving keep to those lines;
+  a policy of another line (flood included), or with no `lob`, is refused by its release.
 - **Serving goes through the release the plan chooses** — its adapter and its calibrators. One promoted
   release: the engine serves its merged model. Several: the engine loads the base with LoRA enabled and
   each release is its own LoRA, applied per request. An operator pin (rollback) outranks line routing.

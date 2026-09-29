@@ -34,7 +34,7 @@ def client() -> BlobClient:
 @pytest.mark.parametrize("lob,covered", [
     ("homeowners", True),
     (["homeowners", "personal_auto"], True),     # a personal package
-    ("flood", True),
+    ("flood", False),                             # flood is not in this adapter
     (["homeowners", "gl"], False),                # personal + commercial is not personal
     ("workers_comp", False),
     ("wc", False),
@@ -88,9 +88,10 @@ def test_the_corpus_view_keeps_only_personal_lines(client):
         {"source_id": "g1", "doc_type": "policy", "lob": "gl"},
         {"source_id": "m1", "doc_type": "policy", "lob": ["homeowners", "gl"]},
         {"source_id": "n1", "doc_type": "policy"},
+        {"source_id": "f1", "doc_type": "policy", "lob": "flood"},
         {"source_id": "l1", "doc_type": "lossrun"},
     ]
-    _seed(client, rows, [{"source_id": "v1", "doc_type": "policy", "lob": "flood"},
+    _seed(client, rows, [{"source_id": "v1", "doc_type": "policy", "lob": "ocean_marine"},
                          {"source_id": "v2", "doc_type": "policy", "lob": "wc"}])
     view = materialize(PERSONAL, "v1", client)
     kept = {json.loads(line)["source_id"]

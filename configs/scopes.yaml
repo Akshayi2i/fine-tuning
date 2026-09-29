@@ -80,7 +80,8 @@ scopes:
     long_doc_types: []
     not_applicable_metrics: [page_selection_recall]
 
-  # Personal lines (the LOB enum's personal lines, plus flood): a policy-only
+  # Personal lines (the LOB enum's personal lines; flood is NOT in this
+  # adapter - a flood policy is outside the scope and refused): a policy-only
   # scope narrowed by line of business. Its corpus view, validation, golden eval
   # and serving all keep to these lines; a policy of any other line - or with no
   # recorded line - is refused by its release rather than extracted by a model
@@ -90,7 +91,7 @@ scopes:
     lineage: personal_lines
     doc_types: [policy]
     lines: [homeowners, personal_auto, dwelling_fire, ocean_marine, classic_auto,
-            motorcycle, recreational_vehicle, personal_umbrella, flood]
+            motorcycle, recreational_vehicle, personal_umbrella]
     # classify stays, as in every scope: a personal-lines release must still
     # recognise a non-policy document and refuse it.
     tasks: [classify, extract, policy_declarations, policy_schedule, policy_endorsements]
