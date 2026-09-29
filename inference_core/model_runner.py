@@ -22,6 +22,7 @@ import logging
 from abc import ABC, abstractmethod
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 from artifact_registry.blob_client import BlobClient
@@ -175,6 +176,44 @@ class EchoBackend(ModelBackend):
             token_logprobs=[-0.01 * (i % 5) for i in range(len(tokens))],
             generation_fingerprint=config.fingerprint(),
         )
+
+
+def to_vllm_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Chat messages with ms-swift image parts rewritten for ``LLM.chat``.
+
+    Corpus rows and serving requests carry ``{"type": "image", "image": x}`` -
+    ms-swift's shape, which training reads. vLLM's chat parser knows no ``image``
+    part and refused every row ("Unknown part type: image"), so checkpoint
+    selection scored nothing. A path or bytes becomes an opened ``image_pil``
+    (no local-media allow-list needed); a URL becomes ``image_url``.
+    """
+    import io
+
+    def part(block: Any) -> Any:
+        if not (isinstance(block, dict) and block.get("type") == "image"):
+            return block
+        image = block.get("image")
+        if isinstance(image, str) and image.startswith(("http://", "https://", "data:")):
+            return {"type": "image_url", "image_url": {"url": image}}
+        from PIL import Image
+
+        if isinstance(image, (str, Path)):
+            with Image.open(image) as opened:
+                opened.load()
+                return {"type": "image_pil", "image_pil": opened.copy()}
+        if isinstance(image, bytes):
+            with Image.open(io.BytesIO(image)) as opened:
+                opened.load()
+                return {"type": "image_pil", "image_pil": opened.copy()}
+        if isinstance(image, Image.Image):
+            return {"type": "image_pil", "image_pil": image}
+        raise ModelRunnerError(f"image part holds {type(image).__name__}, not a path, bytes or image")
+
+    return [
+        {**message, "content": [part(b) for b in message["content"]]}
+        if isinstance(message.get("content"), list) else message
+        for message in messages
+    ]
 
 
 class VLLMBackend(ModelBackend):
@@ -367,7 +406,8 @@ class VLLMBackend(ModelBackend):
         engine = self._load(config)
         params = self._sampling_params(config)
         started = time.perf_counter()
-        outputs = engine.chat(messages, params, lora_request=self._lora(adapter))
+        outputs = engine.chat(to_vllm_messages(messages), params,
+                              lora_request=self._lora(adapter))
         latency_ms = (time.perf_counter() - started) * 1000
         return self._to_generation(outputs[0] if outputs else None, config, latency_ms)
 
@@ -388,7 +428,8 @@ class VLLMBackend(ModelBackend):
         params = [self._sampling_params(config) for config in configs]
         started = time.perf_counter()
         try:
-            outputs = engine.chat(list(messages_list), params, lora_request=self._lora(adapter))
+            outputs = engine.chat([to_vllm_messages(m) for m in messages_list], params,
+                                  lora_request=self._lora(adapter))
         except Exception as exc:  # noqa: BLE001 - the whole batch failed; say so per slot
             return [exc for _ in messages_list]
         latency_ms = (time.perf_counter() - started) * 1000

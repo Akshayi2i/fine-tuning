@@ -133,3 +133,34 @@ def test_calibrate_collects_its_own_samples_per_format(client):
 
     assert loaded == ["bf16"]
     assert samples["bf16"]["calibration"] and samples["bf16"]["threshold"]
+
+
+def test_rows_go_to_the_backend_in_batches_not_one_by_one(client):
+    """One row at a time left vLLM idle between answers: hours per checkpoint."""
+    backend = EchoBackend(json.dumps(GOLDEN, separators=(",", ":")))
+    calls = []
+    real = backend.generate_batch
+    backend.generate_batch = lambda msgs, configs, adapter=None: (calls.append(len(msgs)),
+                                                                   real(msgs, configs, adapter))[1]
+    model = load_model("base", client, backend_impl=backend)
+    generations = generate_validation(_val_rows(5), model, batch_rows=2)
+    assert calls == [2, 2, 1]
+    assert all(g.error is None and g.extraction for g in generations)
+
+
+def test_a_batch_that_fails_together_is_retried_row_by_row(client):
+    """One unreadable page refuses the whole vLLM call; only its row may be lost."""
+    backend = EchoBackend(json.dumps(GOLDEN, separators=(",", ":")))
+    backend.generate_batch = lambda msgs, configs, adapter=None: [RuntimeError("bad page")] * len(msgs)
+    real_generate = backend.generate
+    rows = _val_rows(3)
+
+    def generate(messages, config, adapter=None):
+        if messages == split_prompt(rows[1])[0]:
+            raise RuntimeError("bad page")
+        return real_generate(messages, config, adapter)
+
+    backend.generate = generate
+    generations = generate_validation(rows, load_model("base", client, backend_impl=backend))
+    assert [g.error is None for g in generations] == [True, False, True]
+    assert "bad page" in generations[1].error and generations[1].extraction == {}

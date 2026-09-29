@@ -102,12 +102,20 @@ def split_prompt(row: dict[str, Any]) -> tuple[list[dict[str, Any]], dict[str, A
     return messages[:-1], json.loads(content)
 
 
+#: Rows per ``generate_batch`` call. vLLM schedules a call's requests together
+#: (continuous batching); one row at a time left the GPU waiting on each answer,
+#: ~50 s a row - hours per checkpoint on the smoke set, days on the full corpus.
+#: Bounded so a call's opened page images stay a modest amount of memory.
+BATCH_ROWS = 32
+
+
 def generate_validation(
     rows: Iterable[dict[str, Any]],
     model: Any,
     *,
     adapter: str | None = None,
     constrain: bool | None = None,
+    batch_rows: int = BATCH_ROWS,
 ) -> list[ValidationGeneration]:
     """Generate every row once. A row that fails is recorded, never dropped.
 
@@ -115,17 +123,17 @@ def generate_validation(
     distribution serving will produce; a calibrator fitted on unconstrained
     generations describes a model nobody serves.
     """
-    from common.canonical import collapse_spans, with_output_dates
     from common.schemas import resolved_schema
-    from inference_core.model_runner import generate
-    from inference_core.span_map import map_field_spans
+    from inference_core.model_runner import generate, generate_batch
 
     if constrain is None:
         constrain = bool(getattr(model.config, "structured_outputs", False))
 
     out: list[ValidationGeneration] = []
+    pending: list[tuple[ValidationGeneration, list[dict[str, Any]], dict[str, Any] | None]] = []
     for row in rows:
         entry = ValidationGeneration(row=row, golden={})
+        out.append(entry)
         try:
             # Inside the per-row guard: a row with no assistant turn, or an ACORD
             # row with no form (no schema to select), used to raise out of the
@@ -137,31 +145,62 @@ def generate_validation(
                 )
                 if constrain else None
             )
-            result = generate(model, messages, adapter=adapter, json_schema=schema)
-            extraction = json.loads(result.text)
-            if not isinstance(extraction, dict):
-                raise TypeError(f"expected a JSON object, got {type(extraction).__name__}")
-            # Keyed and formatted exactly as serving does it (serving.pipeline),
-            # or the calibrators are fitted on paths and values serving never
-            # looks up.
-            spans = collapse_spans(
-                map_field_spans(result.text, result.tokens, result.token_logprobs)
-            )
-            extraction = with_output_dates(extraction)
         except Exception as exc:  # noqa: BLE001 - one bad row must not lose the rest
-            # Scored as an empty extraction, not skipped: a model that cannot
-            # produce JSON for a document has got every field on it wrong, and
-            # leaving it out would score the model on the documents it managed.
-            entry.error = f"{type(exc).__name__}: {exc}"
-            entry.extraction = {}
-            log.warning("validation generation failed for %s: %s", row.get("source_id"), exc)
-        else:
-            entry.extraction = extraction
-            entry.logprobs_by_path = {
-                path: span.token_logprobs for path, span in spans.items() if span.mapped
-            }
-        out.append(entry)
+            _record_failure(entry, exc)
+            continue
+        pending.append((entry, messages, schema))
+
+    size = max(1, batch_rows)
+    for first in range(0, len(pending), size):
+        chunk = pending[first:first + size]
+        results = generate_batch(model, [(m, s) for _e, m, s in chunk], adapter=adapter)
+        if len(chunk) > 1 and all(isinstance(r, Exception) for r in results):
+            # A whole call fails together (one unreadable page image refuses the
+            # batch): retry its rows alone, so the bad one is the only loss.
+            results = []
+            for _entry, messages, schema in chunk:
+                try:
+                    results.append(generate(model, messages, adapter=adapter, json_schema=schema))
+                except Exception as exc:  # noqa: BLE001
+                    results.append(exc)
+        for (entry, _messages, _schema), result in zip(chunk, results, strict=True):
+            _finish(entry, result)
+        log.info("validation generation: %d/%d row(s)%s", min(first + size, len(pending)),
+                 len(pending), f" ({adapter})" if adapter else "")
     return out
+
+
+def _record_failure(entry: ValidationGeneration, exc: BaseException) -> None:
+    # Scored as an empty extraction, not skipped: a model that cannot produce
+    # JSON for a document has got every field on it wrong, and leaving it out
+    # would score the model on the documents it managed.
+    entry.error = f"{type(exc).__name__}: {exc}"
+    entry.extraction = {}
+    log.warning("validation generation failed for %s: %s", entry.row.get("source_id"), exc)
+
+
+def _finish(entry: ValidationGeneration, result: Any) -> None:
+    """Parse one generation into ``entry``, or record why it failed."""
+    from common.canonical import collapse_spans, with_output_dates
+    from inference_core.span_map import map_field_spans
+
+    try:
+        if isinstance(result, BaseException):
+            raise result
+        extraction = json.loads(result.text)
+        if not isinstance(extraction, dict):
+            raise TypeError(f"expected a JSON object, got {type(extraction).__name__}")
+        # Keyed and formatted exactly as serving does it (serving.pipeline), or
+        # the calibrators are fitted on paths and values serving never looks up.
+        spans = collapse_spans(map_field_spans(result.text, result.tokens, result.token_logprobs))
+        extraction = with_output_dates(extraction)
+    except Exception as exc:  # noqa: BLE001 - one bad row must not lose the rest
+        _record_failure(entry, exc)
+        return
+    entry.extraction = extraction
+    entry.logprobs_by_path = {
+        path: span.token_logprobs for path, span in spans.items() if span.mapped
+    }
 
 
 def score_generations(

@@ -91,3 +91,75 @@ def test_the_pinned_vllm_is_the_one_the_fix_targets():
     pinned = [line.split("==")[1].strip() for line in lock.read_text().splitlines()
               if line.startswith("vllm==")]
     assert pinned and pinned[0] in vllm_patches._QWEN3_VL_BROKEN
+
+
+# --------------------------------------------------------------------------
+# Image parts, in the shape vLLM's chat parser accepts
+# --------------------------------------------------------------------------
+
+
+def _page(tmp_path):
+    from PIL import Image
+
+    path = tmp_path / "page_1.png"
+    Image.new("RGB", (8, 8), "white").save(path)
+    return path
+
+
+def test_ms_swift_image_parts_become_images_vllm_can_read(tmp_path):
+    """vLLM refused `{"type": "image"}` ("Unknown part type: image") on every row,
+    so checkpoint selection scored nothing."""
+    from PIL import Image
+
+    from inference_core.model_runner import to_vllm_messages
+
+    path = _page(tmp_path)
+    messages = [
+        {"role": "system", "content": "extract"},
+        {"role": "user", "content": [{"type": "image", "image": str(path)},
+                                     {"type": "image", "image": path.read_bytes()},
+                                     {"type": "text", "text": "OCR text"}]},
+    ]
+    out = to_vllm_messages(messages)
+    parts = out[1]["content"]
+    assert [p["type"] for p in parts] == ["image_pil", "image_pil", "text"]
+    assert all(isinstance(p["image_pil"], Image.Image) for p in parts[:2])
+    assert out[0] == messages[0] and messages[1]["content"][0]["type"] == "image"   # input untouched
+
+
+def test_an_image_url_stays_a_url():
+    from inference_core.model_runner import to_vllm_messages
+
+    out = to_vllm_messages([{"role": "user", "content": [
+        {"type": "image", "image": "https://example.com/p.png"}]}])
+    assert out[0]["content"][0] == {"type": "image_url", "image_url": {"url": "https://example.com/p.png"}}
+
+
+def test_a_missing_page_is_an_error_not_a_silent_skip(tmp_path):
+    from inference_core.model_runner import to_vllm_messages
+
+    with pytest.raises(FileNotFoundError):
+        to_vllm_messages([{"role": "user", "content": [
+            {"type": "image", "image": str(tmp_path / "gone.png")}]}])
+
+
+def test_the_vllm_backend_sends_converted_messages(tmp_path):
+    from inference_core import model_runner as M
+
+    seen = []
+
+    class Engine:
+        def chat(self, messages, params, lora_request=None):
+            seen.append(messages)
+            return []
+
+    backend = M.VLLMBackend.__new__(M.VLLMBackend)
+    backend._load = lambda config: Engine()
+    backend._sampling_params = lambda config: None
+    backend._lora = lambda adapter: None
+    backend._to_generation = lambda output, config, latency: output
+    msgs = [{"role": "user", "content": [{"type": "image", "image": str(_page(tmp_path))}]}]
+    backend.generate(msgs, config=None)
+    backend.generate_batch([msgs], [None])
+    assert seen[0][0]["content"][0]["type"] == "image_pil"
+    assert seen[1][0][0]["content"][0]["type"] == "image_pil"
