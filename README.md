@@ -310,6 +310,9 @@ process, which is why CI covers this much without a pod.
   vLLM multi-LoRA, MinerU on GPU and its determinism. `scripts/pod_bootstrap.sh`
   runs it; the base model is pinned to `0c351dd01ed87e9c1b53cbc748cba10e6187ff3b`
   (the Hub commit of 2025-10-15).
+- **Where serving-time OCR runs is open.** The endpoint does no OCR: requests carry page texts,
+  which must come from MinerU at the corpus pin, on a GPU. MinerU cannot share an environment with
+  vLLM 0.11, so it cannot simply be added to the serving worker; training is unaffected.
 - **The pilot protocol is unrun.** `python -m pilot.pilot_report` reports
   `INCOMPLETE` until Experiments A, B and C have each written a report, and a
   missing experiment blocks rather than passing.

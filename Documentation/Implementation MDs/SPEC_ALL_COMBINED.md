@@ -2122,7 +2122,7 @@ v1's own module docstring had the right of it: *"GGUF is the portable/edge path 
 | Format | Tool | Hardware | Role |
 |---|---|---|---|
 | **bf16 merged** | PEFT merge | Any | Reference, and cycle 1's serving format |
-| **FP8 (W8A8)** | llm-compressor | Native FP8 on Ada/Hopper (L4, L40S, H100); weight-only on A100 | Default serving format from cycle 2 |
+| **FP8 (W8A8)** | llm-compressor | Native FP8 on Ada/Hopper (L4, L40S, H100, H200); weight-only on A100 | Default serving format from cycle 2 |
 | **AWQ INT4 (W4A16)** | llm-compressor | Modern NVIDIA | VRAM-constrained serving only, if it meets threshold |
 
 ```bash
