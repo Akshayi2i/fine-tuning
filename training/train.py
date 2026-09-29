@@ -676,8 +676,10 @@ def _token_counter():
 def _masking_encoder(swift: SwiftConfig):  # pragma: no cover - needs ms-swift and the tokenizer
     """ms-swift's template encode for this model, with the budget env applied.
 
-    Returns ``(encode, assistant_header_ids, end_token_id)``. A seam, so tests
-    need neither ms-swift nor a model.
+    Returns ``(encode, assistant_header_ids, end_token_id, end_suffix_ids)``: the
+    suffix is what ms-swift's template writes after the end token and supervises
+    (the ChatML ``<|im_end|>\n`` newline). A seam, so tests need neither
+    ms-swift nor a model.
     """
     import os
 
@@ -692,7 +694,8 @@ def _masking_encoder(swift: SwiftConfig):  # pragma: no cover - needs ms-swift a
     tokenizer = processor.tokenizer if hasattr(processor, "tokenizer") else processor
     header = tokenizer.encode("<|im_start|>assistant\n", add_special_tokens=False)
     end = tokenizer.convert_tokens_to_ids("<|im_end|>")
-    return template.encode, header, end
+    suffix = tokenizer.encode("<|im_end|>\n", add_special_tokens=False)[1:]
+    return template.encode, header, end, suffix
 
 
 def _assert_masking(files: list[str], swift: SwiftConfig) -> None:
@@ -704,10 +707,10 @@ def _assert_masking(files: list[str], swift: SwiftConfig) -> None:
     """
     from training.data_collator import MaskingError, verify_staged_rows
 
-    encode, header, end = _masking_encoder(swift)
+    encode, header, end, suffix = _masking_encoder(swift)
     try:
         report = verify_staged_rows(files, encode=encode, assistant_header_ids=header,
-                                    end_token_id=end)
+                                    end_token_id=end, end_suffix_ids=suffix)
     except MaskingError as exc:
         raise TrainingError(f"label masking check failed before launch: {exc}") from exc
     log.info("masking check: %s", report.summary())

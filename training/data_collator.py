@@ -100,7 +100,7 @@ def assert_masking_correct(
     if trailing:
         report.problems.append(
             f"{len(trailing)} token(s) after the assistant turn are supervised "
-            f"(indices {trailing[:8]})."
+            f"(indices {trailing[:8]}, token ids {[labels[i] for i in trailing[:8]]})."
         )
 
     unsupervised = [i for i in range(assistant_start, assistant_end) if labels[i] == IGNORE_INDEX]
@@ -189,12 +189,18 @@ def find_assistant_span(
     input_ids: Sequence[int],
     assistant_header_ids: Sequence[int],
     end_token_id: int | None = None,
+    end_suffix_ids: Sequence[int] = (),
 ) -> tuple[int, int]:
     """Locate the assistant turn in a tokenised sequence.
 
     Chat templates vary between model families, so the header token ids are
     passed in rather than hardcoded — a wrong guess here would mask the wrong
     span, which is the failure this module exists to prevent.
+
+    ``end_suffix_ids`` are what the template writes right after the end token as
+    part of the answer: ms-swift's ChatML suffix is ``<|im_end|>\n``, and it
+    supervises that newline. The span takes them in only when exactly they
+    follow the end token, so anything else supervised after it is still caught.
     """
     header = list(assistant_header_ids)
     if not header:
@@ -214,7 +220,11 @@ def find_assistant_span(
                         # `Generation.truncated()` reports as dropped rows. It
                         # also made verify_batch reject a correct ms-swift batch,
                         # which does supervise it.
-                        return content_start, end + 1
+                        stop = end + 1
+                        suffix = list(end_suffix_ids)
+                        if suffix and ids[stop:stop + len(suffix)] == suffix:
+                            stop += len(suffix)
+                        return content_start, stop
             return content_start, len(ids)
 
     raise MaskingError(
@@ -229,6 +239,7 @@ def verify_staged_rows(
     encode: Any,
     assistant_header_ids: Sequence[int],
     end_token_id: int | None,
+    end_suffix_ids: Sequence[int] = (),
     sample: int = 4,
 ) -> MaskingReport:
     """Verify masking on real staged rows, encoded the way the trainer encodes them.
@@ -256,7 +267,8 @@ def verify_staged_rows(
     combined = MaskingReport()
     for index, row in enumerate(rows):
         encoded = encode(row)
-        span = find_assistant_span(encoded["input_ids"], assistant_header_ids, end_token_id)
+        span = find_assistant_span(encoded["input_ids"], assistant_header_ids, end_token_id,
+                                   end_suffix_ids)
         report = verify_batch({"labels": [list(encoded["labels"])]}, [span],
                               context=f"staged row {index}")
         combined.total_tokens += report.total_tokens

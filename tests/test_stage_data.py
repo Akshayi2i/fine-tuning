@@ -50,17 +50,18 @@ def _as_if_on_the_pod(monkeypatch):
 
 
 def _stub_masking_encoder():
-    """Encodes a row as [prompt..., HEADER, answer..., END] with the answer supervised."""
-    header, end = [900, 901], 999
+    """Encodes a row as [prompt..., HEADER, answer..., END, NEWLINE] with the
+    answer supervised through the newline, as ms-swift's ChatML suffix does."""
+    header, end, newline = [900, 901], 999, 198
 
     def encode(row):
         prompt = [1] * 5
         answer = [7] * 3
-        ids = prompt + header + answer + [end]
-        labels = [-100] * (len(prompt) + len(header)) + answer + [end]
+        ids = prompt + header + answer + [end, newline]
+        labels = [-100] * (len(prompt) + len(header)) + answer + [end, newline]
         return {"input_ids": ids, "labels": labels}
 
-    return encode, header, end
+    return encode, header, end, [newline]
 
 
 def _stub_tokens(texts):
@@ -596,7 +597,7 @@ def test_a_run_whose_masking_supervises_the_prompt_is_refused(client, tmp_path, 
         ids = [1] * 5 + header + [7, 7, 7, end]
         return {"input_ids": ids, "labels": list(ids)}   # the prompt is supervised too
 
-    monkeypatch.setattr(T, "_masking_encoder", lambda swift: (leaky, header, end))
+    monkeypatch.setattr(T, "_masking_encoder", lambda swift: (leaky, header, end, []))
     launched = []
     monkeypatch.setattr(T, "launch", lambda config: launched.append(config))
     with pytest.raises(T.TrainingError, match="masking"):

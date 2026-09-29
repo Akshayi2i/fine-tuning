@@ -122,6 +122,29 @@ def test_the_span_includes_the_end_of_turn_token():
     assert labels[-1] == 99, "the end-of-turn token is masked out of the loss"
 
 
+def test_the_span_takes_in_the_templates_suffix_after_the_end_token():
+    """ms-swift's ChatML suffix is `<|im_end|>\\n` and it supervises the newline.
+    Ending the span at `<|im_end|>` refused a correct ms-swift row before launch."""
+    ids = [1, 2, 77, 78, 40, 99, 198]
+    labels = [IGNORE_INDEX] * 4 + [40, 99, 198]
+    start, end = find_assistant_span(ids, assistant_header_ids=[77, 78], end_token_id=99,
+                                     end_suffix_ids=[198])
+    assert (start, end) == (4, 7)
+    verify_batch({"labels": [labels]}, [(start, end)])
+    with pytest.raises(MaskingError, match=r"after the assistant turn.*token ids \[198\]"):
+        verify_batch({"labels": [labels]}, [find_assistant_span(ids, [77, 78], 99)])
+
+
+def test_only_the_exact_suffix_is_taken_in():
+    """Anything else supervised after the end token is still a masking error."""
+    ids = [1, 2, 77, 78, 40, 99, 55, 56]
+    labels = [IGNORE_INDEX] * 4 + [40, 99, 55, 56]
+    span = find_assistant_span(ids, [77, 78], 99, end_suffix_ids=[198])
+    assert span == (4, 6)
+    with pytest.raises(MaskingError, match="2 token"):
+        verify_batch({"labels": [labels]}, [span])
+
+
 def test_a_span_past_a_truncated_row_is_a_masking_error():
     """Spans computed before truncation do not survive it. A bare IndexError
     gives none of the diagnosis this module exists to provide."""
