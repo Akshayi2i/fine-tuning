@@ -57,6 +57,7 @@ class GoldenDocument:
     acord_form: str | None = None
     lob: str | list[str] | None = None
     is_scanned: bool = False
+    synthetic: bool = False
 
 
 def load_golden_set(
@@ -109,6 +110,7 @@ def load_golden_set(
             acord_form=metadata.get("acord_form"),
             lob=metadata.get("lob"),
             is_scanned=bool(metadata.get("is_scanned", False)),
+            synthetic=bool(metadata.get("synthetic", False)),
         ))
     return documents
 
@@ -167,6 +169,7 @@ def evaluate(
                 "lob": doc.lob,
                 "modality_mode": mode,
                 "is_scanned": doc.is_scanned,
+                "synthetic": doc.synthetic,
                 "page_count": len(doc.image_keys),
             }
             try:
@@ -222,9 +225,42 @@ def evaluate_version(
     report = build_report(version, triples, corpus_version=corpus_version, scope=scope)
     body = report.as_dict()
     body["documents_failed"] = failed
+    body.update(real_only_section(version, triples, corpus_version=corpus_version, scope=scope))
     client.write_json(paths.eval_report(version, scope=scope.name), body)
     log.info("golden eval of %s: %d document-mode run(s), %d failed", version, len(triples), failed)
     return body
+
+
+def real_only_section(
+    version: str, triples: list[tuple[dict[str, Any], dict[str, Any], dict[str, Any]]], **report_kwargs: Any
+) -> dict[str, Any]:
+    """The same report over the real documents alone, when the set mixes in synthetic ones.
+
+    A delivered split can put synthetic twins of held-out sources into the eval
+    set. Their layouts are unseen, which makes them a fair test, but their labels
+    came from a generator — so the real documents are always scored apart, and
+    the gap between the two is how much the generator flatters the model. Reported
+    beside the gate, never instead of it.
+    """
+    from evaluation.run_eval import build_report
+
+    real = [t for t in triples if not t[2].get("synthetic")]
+    synthetic = len(triples) - len(real)
+    if not synthetic:
+        return {}
+    section: dict[str, Any] = {
+        "composition": {
+            "real_documents": len({t[2]["source_id"] for t in real}),
+            "synthetic_documents": len({t[2]["source_id"] for t in triples if t[2].get("synthetic")}),
+        },
+    }
+    if real:
+        real_report = build_report(version, real, **report_kwargs).as_dict()
+        section["real_only"] = {"gate_metrics": real_report.get("gate_metrics")}
+    else:
+        section["real_only"] = None
+        log.warning("the eval set holds no real documents: every score is on generated labels")
+    return section
 
 
 def dumps(body: dict[str, Any]) -> str:  # pragma: no cover - CLI helper

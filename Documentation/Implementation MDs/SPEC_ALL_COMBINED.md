@@ -1129,6 +1129,17 @@ are downloaded. **Mixed documents**: any page without a text layer sends the who
 (text mode left scanned endorsement pages of a typed policy unread and unflagged); `scanned` is recorded per
 page and `is_scanned` is true when any page is a scan.
 
+### Synthetic deliveries (2026-09-29)
+
+`python -m data_pipeline.ingestion.prepare_bundles --input "<delivery>" --out data/bundles` converts a fideon_synth
+delivery (`Train|Val|Test/pdfs`, `Train|Val|Test/gold json`, `manifest.csv`) into import bundles, hard-linking
+the files (copying across drives; `--mode copy|move`). Rows outside the scope's lines, rows with `ok` false and
+rows whose files are missing are skipped and counted; a document named twice is refused. The audit
+(`data_pipeline/audit.py`, default input `data/bundles`) blocks a source document found in two splits and a
+delivery where only some documents carry a split, and reports the delivered Train/Val/Test counts (real and
+synthetic) with the test count checked against the freeze minimum. Every document of the first delivery is a
+scan without a text layer, so the value-against-page check runs after OCR.
+
 ---
 
 # SPEC_04_labeling_golden_json
@@ -1514,6 +1525,22 @@ every mode by design.
 
 Only **policies** contribute to `policy_line_counts`; ACORD and Loss Run documents stay in the enum coverage
 even when the importer copied their label's `line_of_business` into metadata.
+
+### Delivered split (2026-09-29)
+
+A delivery split upstream is used as given. `data_pipeline/ingestion/prepare_bundles.py` turns fideon_synth's
+`Train|Val|Test` + `manifest.csv` into one folder per document with `metadata.json` (`lob`, `synthetic`,
+`template_id` = the source document, `split`); the importer carries `split` into the label metadata and refuses
+any value other than train/val/test. When **every** document carries a split (all or none, else the build
+stops), `pipeline_dag.use_delivered_families` makes each document's family its source document
+(`delivered:<template_id>`), `delivered_split_of` refuses a source in two splits, and
+`split_groups.assign_delivered_splits` takes the assignment as given (validation still halved by group; a
+split with no val, or no test before the eval set is frozen, is refused; after freezing, no document may be
+delivered as test). Families this pipeline detects by text similarity that cross the delivered split — several
+source documents of one carrier share a printed form — are reported with a count of val/test documents on a
+form seen in training, not merged. `assert_synthetic_is_train_only` applies to drawn splits only; under a
+delivered split the synthetic twins of held-out sources are evaluated, and the gate reports real documents
+apart (SPEC_08). The corpus manifest's split record carries `delivered: true`.
 
 ---
 
@@ -1964,6 +1991,16 @@ leakage for every frozen document. The family split keeps a frozen document's re
 **Frozen = the manifest exists.** An interrupted freeze (documents copied, no manifest) is not frozen: it can be
 resumed from the same corpus, a partial set from another corpus is refused with instructions, and the golden
 eval refuses to gate on a partial set.
+
+### Real documents scored apart (2026-09-29)
+
+The frozen set records each document's `synthetic` flag (`freeze_eval_set`), the golden eval carries it into
+every scored document's metadata, and when the set mixes real and synthetic documents the eval report adds
+`composition` (real and synthetic document counts) and `real_only.gate_metrics` — the same report over the real
+documents alone (`golden_eval.real_only_section`). Reported beside the gate, never instead of it: the synthetic
+twins of held-out sources are unseen layouts and a fair test, but their labels came from a generator, and the
+gap between the two scores is how much it flatters the model. A set with no synthetic documents reports nothing
+extra.
 
 ---
 

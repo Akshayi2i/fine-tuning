@@ -110,6 +110,12 @@ class GroupSplitAssignment:
     ratios_by_doc_type: dict[str, dict[str, float]] = field(default_factory=dict)
     counts_by_doc_type: dict[str, dict[str, int]] = field(default_factory=dict)
 
+    #: The split came with the data (``assign_delivered_splits``) rather than
+    #: being drawn here. Synthetic documents may then sit in val and test: the
+    #: delivery split by source document, so a test document's layout is one the
+    #: model never trained on, and the gate reports real documents separately.
+    delivered: bool = False
+
     def split_of(self, group_id: str) -> Split:
         try:
             return self.assignment[group_id]
@@ -135,6 +141,7 @@ class GroupSplitAssignment:
             "counts_by_doc_type": self.counts_by_doc_type,
             "counts_by_line": self.counts_by_line,
             "train_only_lines": {k: sorted(v) for k, v in sorted(self.train_only_lines.items())},
+            "delivered": self.delivered,
         }
 
 
@@ -329,6 +336,63 @@ def assign_group_splits(
                 doc_type, document_count, len(unique), result.counts_by_doc_type[doc_type],
             )
 
+    return result
+
+
+#: The split names a delivery may carry, in a document's metadata ``split``.
+DELIVERED_SPLITS = ("train", "val", "test")
+
+
+def assign_delivered_splits(
+    groups_by_doc_type: dict[str, list[GroupRecord]],
+    split_of_group: dict[str, str],
+    *,
+    seed: int = 42,
+    with_test: bool = True,
+) -> GroupSplitAssignment:
+    """Use the split the data arrived with, instead of drawing one.
+
+    For a delivery that was split upstream — a synthetic set whose generator put
+    each source document and all its twins in one split. The families here are
+    the delivery's own (one per source document), so the split is taken as
+    given; what this still enforces is that it is usable: no family in two
+    splits, a non-empty val, and a non-empty test unless the eval set is frozen.
+    Validation is halved by group exactly as for a drawn split.
+    """
+    result = GroupSplitAssignment(seed=seed, delivered=True)
+    for doc_type, records in sorted(groups_by_doc_type.items()):
+        unique = sorted({r.group_id: r for r in records}.values(), key=lambda r: r.group_id)
+        if not unique:
+            continue
+        buckets: dict[str, list[str]] = {name: [] for name in DELIVERED_SPLITS}
+        documents = dict.fromkeys(DELIVERED_SPLITS, 0)
+        by_line: dict[str, dict[str, int]] = defaultdict(lambda: dict.fromkeys(DELIVERED_SPLITS, 0))
+        for record in unique:
+            split = split_of_group.get(record.group_id)
+            if split not in DELIVERED_SPLITS:
+                raise SplitError(f"group {record.group_id} has no delivered split (got {split!r})")
+            if split == "test" and not with_test:
+                raise SplitError(
+                    f"group {record.group_id} is delivered as test, but the eval set is frozen: "
+                    "a frozen yardstick takes no new documents. Deliver new documents as train or val."
+                )
+            buckets[split].append(record.group_id)
+            documents[split] += record.size
+            if record.line is not None:
+                by_line[record.line][split] += 1
+        if not buckets["val"]:
+            raise SplitError(f"{doc_type}: the delivered split has no val documents")
+        if with_test and not buckets["test"]:
+            raise SplitError(f"{doc_type}: the delivered split has no test documents")
+        for split, members in buckets.items():
+            for group_id in members:
+                result.assignment[group_id] = split  # type: ignore[assignment]
+        _assign_validation_halves(result, buckets["val"], seed)
+        total = sum(documents.values())
+        result.ratios_by_doc_type[doc_type] = {s: round(n / total, 4) for s, n in documents.items()}
+        result.counts_by_doc_type[doc_type] = {s: len(m) for s, m in buckets.items()}
+        if by_line:
+            result.counts_by_line[doc_type] = {line: dict(c) for line, c in sorted(by_line.items())}
     return result
 
 

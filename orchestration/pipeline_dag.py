@@ -509,9 +509,65 @@ def load_labeled_documents(ctx: StageContext) -> list[Any]:
                 is_scanned=is_scanned(ocr_meta),
                 carrier=_declared_carrier(label),
                 synthetic=bool(metadata.get("synthetic", False)),
+                delivered_split=metadata.get("split"),
+                template_id=metadata.get("template_id"),
             ))
     ctx.grouping = assign_document_groups(ctx, documents)
     return documents
+
+
+def use_delivered_families(documents: list[Any]) -> bool:
+    """Switch to the delivery's own split when the documents carry one.
+
+    All or none: a corpus half split upstream and half drawn here has no single
+    rule that keeps a family out of two splits. When they do, each document's
+    family becomes its source document (``template_id``) — the unit the delivery
+    was split by — and families this pipeline detects by text similarity that
+    now cross the split are reported rather than merged: several source
+    documents of one carrier share a printed form, and a test document on a form
+    the model trained on is worth knowing about, not a reason to refuse the
+    delivery's split.
+    """
+    carrying = [d for d in documents if d.delivered_split]
+    if not carrying:
+        return False
+    if len(carrying) != len(documents):
+        raise PipelineError(
+            f"{len(carrying)} document(s) carry a delivered split and {len(documents) - len(carrying)} "
+            "do not. Deliver every document with metadata `split` (train/val/test), or none."
+        )
+    splits_of: dict[str, set[str]] = {}
+    for document in documents:
+        splits_of.setdefault(document.family, set()).add(str(document.delivered_split).lower())
+    # val/test documents whose text-similar family also has training documents
+    on_trained_form = sum(
+        1 for d in documents
+        if str(d.delivered_split).lower() != "train" and "train" in splits_of[d.family]
+    )
+    crossing = sum(1 for splits in splits_of.values() if len(splits) > 1)
+    for document in documents:
+        document.group_id = f"delivered:{document.template_id or document.source_id}"
+    if crossing:
+        log.warning(
+            "delivered split: %d text-similar famil(ies) span splits; %d val/test document(s) share "
+            "a printed form with training documents. The split is kept as delivered.",
+            crossing, on_trained_form,
+        )
+    return True
+
+
+def delivered_split_of(documents: list[Any]) -> dict[str, str]:
+    """``family -> split`` for a delivered split, refusing a family in two splits."""
+    split_of: dict[str, str] = {}
+    for document in documents:
+        split = str(document.delivered_split).lower()
+        previous = split_of.setdefault(document.family, split)
+        if previous != split:
+            raise PipelineError(
+                f"source {document.template_id or document.source_id} is delivered in both "
+                f"{previous} and {split}: one source document and its twins must share a split"
+            )
+    return split_of
 
 
 def _declared_carrier(label: dict[str, Any]) -> str | None:
@@ -706,6 +762,9 @@ def stage_dataset_build(ctx: StageContext) -> StageResult:
     # eval document would otherwise train the model on that document's answers —
     # and the rest split into train and val only.
     frozen = is_frozen(ctx.client)
+    # Before the exclusion below: with a delivered split, "the family of an eval
+    # document" is its source document's twins, not every document on its form.
+    delivered = use_delivered_families(documents)
     if frozen:
         documents, excluded = exclude_eval_families(ctx.client, documents)
         if excluded:
@@ -717,7 +776,18 @@ def stage_dataset_build(ctx: StageContext) -> StageResult:
             raise PipelineError("every labeled document is in the frozen eval set or its families")
 
     by_type = group_records(documents)
-    assignment = assign_group_splits(by_type, seed=ctx.seed, with_test=not frozen)
+    if delivered:
+        from data_pipeline.dataset_builder.split_groups import SplitError, assign_delivered_splits
+
+        try:
+            assignment = assign_delivered_splits(
+                by_type, delivered_split_of(documents), seed=ctx.seed, with_test=not frozen
+            )
+        except SplitError as exc:
+            raise PipelineError(str(exc)) from exc
+        log.info("using the delivered split: %s", assignment.counts_by_doc_type)
+    else:
+        assignment = assign_group_splits(by_type, seed=ctx.seed, with_test=not frozen)
     # One modality draw per train document per epoch (arch v2.1 §6.1). This is
     # the only sampling step: v1's down-sampler discarded rows to fix a 33/33/33
     # expansion, and running it over epoch rows would drop documents from epochs.

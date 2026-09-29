@@ -154,3 +154,14 @@ is `cpu` — a GPU being present does not make MinerU use it. The engine refuses
 are downloaded. **Mixed documents**: any page without a text layer sends the whole document through OCR mode
 (text mode left scanned endorsement pages of a typed policy unread and unflagged); `scanned` is recorded per
 page and `is_scanned` is true when any page is a scan.
+
+### Synthetic deliveries (2026-09-29)
+
+`python -m data_pipeline.ingestion.prepare_bundles --input "<delivery>" --out data/bundles` converts a fideon_synth
+delivery (`Train|Val|Test/pdfs`, `Train|Val|Test/gold json`, `manifest.csv`) into import bundles, hard-linking
+the files (copying across drives; `--mode copy|move`). Rows outside the scope's lines, rows with `ok` false and
+rows whose files are missing are skipped and counted; a document named twice is refused. The audit
+(`data_pipeline/audit.py`, default input `data/bundles`) blocks a source document found in two splits and a
+delivery where only some documents carry a split, and reports the delivered Train/Val/Test counts (real and
+synthetic) with the test count checked against the freeze minimum. Every document of the first delivery is a
+scan without a text layer, so the value-against-page check runs after OCR.

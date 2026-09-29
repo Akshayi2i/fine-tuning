@@ -176,6 +176,9 @@ def check_bundle(bundle: LabeledPdf, doc_type: str) -> DocumentCheck:
     # nobody is providing. It is recorded on the label metadata for grouping.
     if not bundle.lob:
         check.warnings.append("no line of business: the per-LOB schema cannot be selected")
+    split = bundle.metadata.get("split")
+    if split is not None and str(split).lower() not in ("train", "val", "test"):
+        check.errors.append(f"metadata split {split!r} is not train, val or test")
     return check
 
 
@@ -220,6 +223,9 @@ def import_bundle(
         ),
         "template_id": bundle.metadata.get("template_id"),
         "synthetic": bool(bundle.metadata.get("synthetic", False)),
+        # The delivery's own split (train/val/test), when it was split upstream:
+        # the corpus build then uses it as given (split_groups.assign_delivered_splits).
+        "split": str(bundle.metadata["split"]).lower() if bundle.metadata.get("split") else None,
         "labeled_at": datetime.now(UTC).isoformat(),
         "imported_from": bundle.directory.name,
         # OCR has NOT run: MinerU runs on the GPU pod as stage 2. Recorded so a

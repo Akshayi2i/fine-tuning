@@ -53,7 +53,7 @@ from data_pipeline.ocr.run_mineru import TEXT_LAYER_MIN_CHARS as MIN_TEXT_CHARS
 log = logging.getLogger(__name__)
 
 REPO = Path(__file__).resolve().parent.parent
-DEFAULT_INPUT = REPO / "data" / "training data"
+DEFAULT_INPUT = REPO / "data" / "bundles"   # prepare_bundles output
 DEFAULT_OUT = REPO / "data" / "audit_report"
 
 #: Values this short ("Y", "1") match almost any page; they are not checked.
@@ -89,6 +89,10 @@ class DocumentAudit:
     text_pages: int = 0
     importable: bool = False
     values: list[ValueCheck] = field(default_factory=list)
+    #: From metadata.json, when the delivery was split upstream (prepare_bundles).
+    split: str | None = None
+    synthetic: bool = False
+    template_id: str | None = None
 
     @property
     def digital(self) -> bool:
@@ -258,6 +262,9 @@ def audit_document(folder: Path, report: AuditReport, checksums: dict[str, str])
     audit.text_pages = sum(has_text)
 
     # ---- 2. label shape
+    audit.split = str(metadata["split"]).lower() if metadata.get("split") else None
+    audit.synthetic = bool(metadata.get("synthetic", False))
+    audit.template_id = metadata.get("template_id")
     lob = metadata.get("lob")
     lines = lob_lines(lob)
     audit.line = "+".join(sorted(lines)) if lines else ""
@@ -336,6 +343,10 @@ def _refs(envelope: dict) -> list:
     return refs if isinstance(refs, list) else [refs]
 
 
+#: A month and year with no day: 05-17, 5/2017.
+_MONTH_YEAR = re.compile(r"^\s*(0?[1-9]|1[0-2])\s*[/-]\s*(\d{2}|\d{4})\s*$")
+
+
 def _check_formats(name: str, envelopes: list[tuple[str, dict]], report: AuditReport) -> None:
     from common.normalize import infer_field_kind, normalize_currency, normalize_date
 
@@ -355,18 +366,26 @@ def _check_formats(name: str, envelopes: list[tuple[str, dict]], report: AuditRe
             # every date to MM/DD/YYYY itself (common.canonical.with_output_dates).
             # A date it cannot read is the problem — it would train as written.
             text = str(parsed)
-            if normalize_date(text) is None:
+            # A month and year (a form's edition date, "05-17") has no day to
+            # write MM/DD/YYYY with; the output formatter keeps it as written, in
+            # the target and in serving alike, so it is consistent, not an error.
+            if normalize_date(text) is None and not _MONTH_YEAR.match(text):
                 flag("date_format", f"{path}: parsed {text!r} is not a readable date")
             elif leaf in ("effective_date", "expiration_date"):
                 dates[path[: len(path) - len(leaf)]][leaf] = text
         if kind == "currency" and parsed not in (None, "") and raw not in (None, ""):
+            # A field named like an amount that holds a word on both sides is an
+            # indicator ("Additional" / "Return" premium), not a misread figure.
+            if not any(ch.isdigit() for ch in f"{raw}{parsed}"):
+                continue
             try:
                 number = float(str(parsed).replace(",", ""))
             except ValueError:
                 flag("amount", f"{path}: parsed {parsed!r} is not a number")
                 continue
             printed = normalize_currency(raw)
-            if printed is not None and abs(float(printed) - number) > 0.005:
+            # Magnitudes: a return or credit is printed "$109.00" and recorded -109.0.
+            if printed is not None and abs(abs(float(printed)) - abs(number)) > 0.005:
                 flag("amount", f"{path}: raw {raw!r} and parsed {parsed!r} disagree")
     for parent, pair in dates.items():
         start, end = (normalize_date(pair.get("effective_date")),
@@ -390,6 +409,7 @@ def audit_folder(root: Path, *, scope: str | None = "personal_lines", seed: int 
         report.documents.append(audit_document(folder, report, checksums))
         if index % 100 == 0:
             log.info("audited %d of %d folders", index, len(folders))
+    report.findings.extend(delivered_split_findings(report.documents))
 
     by_line: dict[str, list[str]] = defaultdict(list)
     for doc in report.documents:
@@ -399,6 +419,29 @@ def audit_folder(root: Path, *, scope: str | None = "personal_lines", seed: int 
         count = max(1, round(len(names) * SPOT_CHECK_SHARE))
         report.spot_check += sorted(rng.sample(sorted(names), min(count, len(names))))
     return report
+
+
+def delivered_split_findings(documents: list[DocumentAudit]) -> list[Finding]:
+    """Blockers for a delivered split the corpus build would refuse.
+
+    All or none of the documents carry one, and a source document with its twins
+    sits in one split — otherwise a test document's layout was trained on.
+    """
+    carrying = [d for d in documents if d.split]
+    if not carrying:
+        return []
+    found = [Finding(d.folder, "blocker", "split", "no split in metadata.json, but other documents have one")
+             for d in documents if not d.split]
+    splits_of: dict[str, set[str]] = defaultdict(set)
+    for d in carrying:
+        splits_of[d.template_id or d.folder].add(d.split)
+    for d in carrying:
+        splits = splits_of[d.template_id or d.folder]
+        if len(splits) > 1:
+            found.append(Finding(d.folder, "blocker", "split",
+                                 f"source {d.template_id} is in {sorted(splits)}: a source and its twins "
+                                 "must share one split"))
+    return found
 
 
 def summary(report: AuditReport) -> dict[str, Any]:
@@ -412,6 +455,11 @@ def summary(report: AuditReport) -> dict[str, Any]:
     lines = Counter(d.line or "(no line)" for d in importable)
     ratio = split_ratio_for(len(importable))
     expected_test = round(len(importable) * ratio.test)
+    delivered = Counter((d.split, "synthetic" if d.synthetic else "real") for d in importable if d.split)
+    if delivered:
+        # The delivery's own split is what the corpus build will use, so report it
+        # rather than what a drawn split would have produced.
+        expected_test = sum(n for (split, _), n in delivered.items() if split == "test")
     buckets = Counter(
         "1-5" if d.pages <= 5 else "6-20" if d.pages <= 20 else "21-50" if d.pages <= 50
         else "51-100" if d.pages <= 100 else ">100"
@@ -433,6 +481,7 @@ def summary(report: AuditReport) -> dict[str, Any]:
             line for line, n in lines.items() if n < MIN_DOCS_TO_MEASURE_LINE),
         "page_count_spread": {k: buckets[k] for k in ("1-5", "6-20", "21-50", "51-100", ">100")},
         "split_ratio": {"train": ratio.train, "val": ratio.val, "test": ratio.test},
+        "delivered_split": {f"{s}/{k}": n for (s, k), n in sorted(delivered.items())} or None,
         "expected_test_documents": expected_test,
         "test_meets_freeze_minimum": expected_test >= MIN_FROZEN_DOCS_PER_TYPE,
         "spot_check_documents": len(report.spot_check),
@@ -497,7 +546,9 @@ def render(report: AuditReport, facts: dict[str, Any]) -> str:
     lines += [f"| {k} | {v} |" for k, v in facts["documents_per_line"].items()]
     lines += [
         "",
-        f"- split at this volume: {facts['split_ratio']}; expected test documents: "
+        (f"- delivered split (used as given): {facts['delivered_split']}" if facts["delivered_split"]
+         else f"- split at this volume: {facts['split_ratio']}"),
+        "- expected test documents: "
         f"{facts['expected_test_documents']} "
         f"({'enough' if facts['test_meets_freeze_minimum'] else 'BELOW'} the 150 needed to freeze)",
         f"- lines too small to measure (<5): {facts['lines_too_small_to_measure'] or 'none'}",

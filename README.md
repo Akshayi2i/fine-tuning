@@ -207,11 +207,28 @@ followed by a new freeze, after which older scores are not comparable.
 
 ## Check the data before training
 
-Before uploading a training folder, audit it on the laptop (read-only):
+The synthetic delivery (`data/training data`: `Train|Val|Test/pdfs`, `Train|Val|Test/gold json`,
+`manifest.csv`, from fideon_synth's `build_dataset.py`) is first turned into one folder per document, then
+audited on the laptop (read-only):
 
 ```bash
-python -m data_pipeline.audit                      # default: data/training data, scope personal_lines
+python -m data_pipeline.ingestion.prepare_bundles --input "data/training data" --out data/bundles
+python -m data_pipeline.audit                      # default: data/bundles, scope personal_lines
 ```
+
+`prepare_bundles` writes `data/bundles/<document>/{document.pdf, golden.json, metadata.json}` (hard links:
+seconds, no second copy), with `metadata.json` taken from the manifest row: `lob`, `synthetic`, `template_id`
+(the source document) and the delivery's `split`. It skips lines outside the scope (flood), rows the generator
+flagged and rows whose files are missing. `data/bundles/` is git-ignored. Documents the audit rejects are
+listed in `data/bundle_exclusions.csv` (`document,reason`, git-ignored); a re-run keeps them out and removes
+any folder an earlier run made. The audit accepts month/year dates (edition dates, kept as written) and
+word-valued indicator fields, and compares amounts by magnitude (a return is printed positive, recorded negative).
+
+**The delivered split is used as given.** The generator put each source document and its ten synthetic twins
+in one of Train/Val/Test, so a test layout is one the model never trained on. The corpus build takes that
+split when every document carries one (`split_groups.assign_delivered_splits`): one family per source, a source
+in two splits refused, synthetic twins allowed in val and test only then. The gate report adds a
+**`real_only`** section, the same metrics over the real documents alone, and the composition of the set.
 
 It reports blockers (one PDF + `golden.json` + `metadata.json` per folder, PDF readable, `lob` valid and in
 scope, `page_ref` inside the PDF), checks each labelled value against the text on its page, checks formats and

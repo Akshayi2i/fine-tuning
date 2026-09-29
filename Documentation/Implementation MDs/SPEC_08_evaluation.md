@@ -149,3 +149,13 @@ leakage for every frozen document. The family split keeps a frozen document's re
 **Frozen = the manifest exists.** An interrupted freeze (documents copied, no manifest) is not frozen: it can be
 resumed from the same corpus, a partial set from another corpus is refused with instructions, and the golden
 eval refuses to gate on a partial set.
+
+### Real documents scored apart (2026-09-29)
+
+The frozen set records each document's `synthetic` flag (`freeze_eval_set`), the golden eval carries it into
+every scored document's metadata, and when the set mixes real and synthetic documents the eval report adds
+`composition` (real and synthetic document counts) and `real_only.gate_metrics` — the same report over the real
+documents alone (`golden_eval.real_only_section`). Reported beside the gate, never instead of it: the synthetic
+twins of held-out sources are unseen layouts and a fair test, but their labels came from a generator, and the
+gap between the two scores is how much it flatters the model. A set with no synthetic documents reports nothing
+extra.

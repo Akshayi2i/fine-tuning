@@ -84,6 +84,12 @@ class SourceDocument:
     #: measures the generator.
     synthetic: bool = False
 
+    #: The split the document arrived with (metadata ``split``), when the
+    #: delivery was split upstream; and the source document it was made from
+    #: (metadata ``template_id``), the family that split was drawn by.
+    delivered_split: str | None = None
+    template_id: str | None = None
+
     @property
     def family(self) -> str:
         return self.group_id or self.source_id
@@ -372,7 +378,10 @@ def build_corpus(
 
     # The checks that make the ordering rule real rather than documented.
     assert_no_leakage(assignment, result.all_rows)
-    assert_synthetic_is_train_only(result.all_rows)
+    if not assignment.delivered:
+        # A delivered split placed synthetic twins of held-out sources in val and
+        # test on purpose (assign_delivered_splits); the gate reports real ones apart.
+        assert_synthetic_is_train_only(result.all_rows)
     assert_single_tenant(result.all_rows)
 
     log.info("corpus built: %s", result.summary())

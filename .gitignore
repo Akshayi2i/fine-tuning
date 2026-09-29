@@ -36,3 +36,5 @@ data/audit_report/
 # they travel through Azure Blob (intake/), never through git.
 data/source data/
 data/training data/
+data/bundles/
+data/bundle_exclusions.csv

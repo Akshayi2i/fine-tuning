@@ -184,6 +184,9 @@ def freeze_eval_set(
             "acord_form": metadata.get("acord_form"),
             "lob": metadata.get("lob"),
             "is_scanned": is_scanned(ocr_meta),
+            # A delivered split can place synthetic twins in test; the gate then
+            # reports the real documents' scores apart (golden_eval "real_only").
+            "synthetic": bool(metadata.get("synthetic", False)),
             "frozen_from_corpus": corpus_version,
         })
         # Written last: a document counts as part of the set once golden.json
