@@ -30,6 +30,15 @@ curl -fsSL "https://raw.githubusercontent.com/opendatalab/MinerU/$tag/scripts/do
 sed -i "s#MinerU/raw/master/magic-pdf.template.json#MinerU/raw/$tag/magic-pdf.template.json#" "$tmp/download_models_hf.py"
 grep -q "raw/$tag/magic-pdf.template.json" "$tmp/download_models_hf.py" \
   || { echo "download_mineru_models: the template URL in MinerU's script changed; update this script" >&2; exit 1; }
+# The model repository at the revision current when magic-pdf 1.3.12 was
+# released (2025-05-24). Its main branch moved on for MinerU 2 - on 2025-10-24
+# it deleted the PP-OCRv3 files 1.3.12 loads (ch_PP-OCRv3_det_infer.pth) - so
+# the latest revision downloads fine and fails at the first OCR'd page.
+MODELS_REVISION="${MINERU_MODELS_REVISION:-14efd64068741c8e1d79d635dd236a80a9db66ba}"
+sed -i "s#snapshot_download('opendatalab/PDF-Extract-Kit-1.0',#snapshot_download('opendatalab/PDF-Extract-Kit-1.0', revision='$MODELS_REVISION',#" "$tmp/download_models_hf.py"
+grep -q "revision='$MODELS_REVISION'" "$tmp/download_models_hf.py" \
+  || { echo "download_mineru_models: could not pin the model revision in MinerU's script; update this script" >&2; exit 1; }
+echo "PDF-Extract-Kit-1.0 at revision $MODELS_REVISION"
 (cd "$tmp" && "$VENV_OCR/bin/python" download_models_hf.py)
 
 # The script writes ~/magic-pdf.json (the container disk): keep it on the volume.
