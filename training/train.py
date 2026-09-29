@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -269,6 +270,7 @@ def build_training_config(
         "per_device_train_batch_size": batch["per_device_train_batch_size"],
         "gradient_accumulation_steps": batch["gradient_accumulation_steps"],
         "gradient_checkpointing": batch["gradient_checkpointing"],
+        "dataset_num_proc": max(1, min(int(batch.get("dataset_num_proc", 1)), os.cpu_count() or 1)),
         "bf16": batch["bf16"],
         "torch_dtype": "bfloat16" if batch["bf16"] else "float32",
         "max_length": max_length,

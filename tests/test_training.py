@@ -785,3 +785,16 @@ def test_max_length_covers_the_per_doc_type_overrides():
 
     assert T.corpus_max_length() >= seq_cap_for_task("extract", "policy")
     assert T.corpus_max_length() == 32768
+
+
+def test_the_length_pass_runs_on_several_processes_capped_at_the_cpu_count(monkeypatch):
+    """group_by_length makes ms-swift encode every row before step 1; on one
+    process that is ~5 hours for the full corpus."""
+    import os
+
+    monkeypatch.setattr(os, "cpu_count", lambda: 64)
+    swift, _ = T.build_training_config(corpus_paths=EPOCH_PATHS, output_dir="/tmp/out")
+    assert swift.args["dataset_num_proc"] == 8
+    monkeypatch.setattr(os, "cpu_count", lambda: 4)
+    swift, _ = T.build_training_config(corpus_paths=EPOCH_PATHS, output_dir="/tmp/out")
+    assert swift.args["dataset_num_proc"] == 4

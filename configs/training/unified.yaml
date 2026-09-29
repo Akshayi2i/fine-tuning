@@ -90,6 +90,13 @@ batch:
   gradient_checkpointing: true
   bf16: true
 
+  # Processes for ms-swift's length pass before step 1. group_by_length makes it
+  # encode every row once up front (images included) to learn its length, and
+  # on one process that runs at ~2 rows/s: ~10 min for the smoke set, ~5 h for
+  # the full corpus. It keeps only the length, so more processes cost CPU, not
+  # memory. Capped at the pod's CPU count at launch.
+  dataset_num_proc: 8
+
 memory:
   # Logits for the assistant positions only, instead of a 151k-vocabulary
   # distribution over every position in a 32k sequence. At the largest task cap
