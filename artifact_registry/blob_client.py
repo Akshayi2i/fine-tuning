@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import io
 import json
+import logging as _logging
 import os
 import time
 from abc import ABC, abstractmethod
@@ -32,6 +33,11 @@ from pathlib import Path
 from typing import Any
 
 from artifact_registry.paths import requires_raw_container
+
+# The Azure SDK logs every HTTP request and response (headers, request ids) at
+# INFO. With the pipeline's INFO logging that buried a run's own progress under
+# thousands of lines per upload; its warnings and errors still come through.
+_logging.getLogger("azure").setLevel(_logging.WARNING)
 
 #: Contexts permitted to touch ``raw-documents/``. Anything else is refused.
 RAW_ALLOWED_CONTEXTS = frozenset({"ingestion", "ocr"})
