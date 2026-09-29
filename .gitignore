@@ -32,3 +32,7 @@ pilot/reports/
 
 # Data audit output quotes label values (personal data). Never commit it.
 data/audit_report/
+# Delivered documents, their labels and redaction records hold client data:
+# they travel through Azure Blob (intake/), never through git.
+data/source data/
+data/training data/
