@@ -47,6 +47,9 @@ from pathlib import Path, PurePosixPath
 
 DEFAULT_OUT = Path("data") / "bundles"
 DEFAULT_EXCLUSIONS = Path("data") / "bundle_exclusions.csv"
+#: ``source_prefix,lob,reason``: a line the generator's folder got wrong, e.g. a
+#: carrier's classic-car policies filed under personal_auto.
+DEFAULT_LOB_OVERRIDES = Path("data") / "bundle_lob_overrides.csv"
 REQUIRED_COLUMNS = ("split", "lob", "source", "kind", "pdf", "gold", "ok")
 
 
@@ -60,6 +63,7 @@ class PrepareReport:
     written: Counter = field(default_factory=Counter)          # (split, kind) -> documents
     skipped: Counter = field(default_factory=Counter)          # reason -> rows
     skipped_lines: Counter = field(default_factory=Counter)    # lob -> rows outside the scope
+    relined: Counter = field(default_factory=Counter)          # "old -> new" -> rows given another line
     linked: int = 0
     copied: int = 0
 
@@ -77,6 +81,8 @@ class PrepareReport:
             lines.append(f"  skipped {n}: {reason}")
         if self.skipped_lines:
             lines.append("  outside the scope: " + ", ".join(f"{k} {v}" for k, v in sorted(self.skipped_lines.items())))
+        if self.relined:
+            lines.append("  line overridden: " + ", ".join(f"{k} ({v})" for k, v in sorted(self.relined.items())))
         lines.append(f"  files linked {self.linked}, copied {self.copied}")
         return "\n".join(lines)
 
@@ -109,6 +115,7 @@ def prepare_bundles(
     lines: frozenset[str] | None = None,
     mode: str = "link",
     exclusions: dict[str, str] | None = None,
+    lob_overrides: list[tuple[str, str]] | None = None,
 ) -> PrepareReport:
     """Write ``out/<name>/{document.pdf, golden.json, metadata.json}`` for each usable row."""
     manifest = delivery / "manifest.csv"
@@ -126,6 +133,11 @@ def prepare_bundles(
     seen: dict[str, str] = {}
     for row in rows:
         lob = row["lob"].strip()
+        for prefix, new_lob in lob_overrides or ():
+            if row["source"].strip().startswith(prefix):
+                report.relined[f"{lob} -> {new_lob}"] += 1
+                lob = new_lob
+                break
         if lines is not None and lob not in lines:
             report.skipped_lines[lob] += 1
             continue
@@ -179,6 +191,25 @@ def read_exclusions(path: Path) -> dict[str, str]:
     return {r["document"].strip(): (r["reason"] or "").strip() for r in rows if r["document"].strip()}
 
 
+def read_lob_overrides(path: Path) -> list[tuple[str, str]]:
+    """``[(source_prefix, lob)]`` from a ``source_prefix,lob,reason`` CSV; empty when there is none."""
+    from common.scopes import known_lines
+
+    if not path.is_file():
+        return []
+    with path.open(encoding="utf-8", newline="") as fh:
+        rows = list(csv.DictReader(fh))
+    if rows and not {"source_prefix", "lob"} <= set(rows[0]):
+        raise BundleError(f"{path} needs the columns source_prefix,lob,reason")
+    out = []
+    for r in rows:
+        lob = r["lob"].strip()
+        if lob not in known_lines():
+            raise BundleError(f"{path}: {lob!r} is not a line with a canonical schema")
+        out.append((r["source_prefix"].strip(), lob))
+    return out
+
+
 def main(argv: list[str] | None = None) -> int:
     from common.scopes import get_scope
 
@@ -191,6 +222,8 @@ def main(argv: list[str] | None = None) -> int:
                         help="link (default: instant, no second copy on the same drive), copy, or move")
     parser.add_argument("--exclude", type=Path, default=DEFAULT_EXCLUSIONS,
                         help="document,reason CSV of documents to leave out")
+    parser.add_argument("--lob-overrides", type=Path, default=DEFAULT_LOB_OVERRIDES,
+                        help="source_prefix,lob,reason CSV of lines to correct")
     args = parser.parse_args(argv)
     # On the pod, run detached in tmux: a closed laptop must not stop this job.
     from orchestration.detach import detach_module_if_needed
@@ -201,7 +234,8 @@ def main(argv: list[str] | None = None) -> int:
     lines = None if args.scope == "none" else get_scope(args.scope).lines or None
     try:
         report = prepare_bundles(args.input, args.out, lines=lines, mode=args.mode,
-                                 exclusions=read_exclusions(args.exclude))
+                                 exclusions=read_exclusions(args.exclude),
+                                 lob_overrides=read_lob_overrides(args.lob_overrides))
     except BundleError as exc:
         print(exc, file=sys.stderr)
         return 1

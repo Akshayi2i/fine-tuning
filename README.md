@@ -221,7 +221,9 @@ seconds, no second copy), with `metadata.json` taken from the manifest row: `lob
 (the source document) and the delivery's `split`. It skips lines outside the scope (flood), rows the generator
 flagged and rows whose files are missing. `data/bundles/` is git-ignored. Documents the audit rejects are
 listed in `data/bundle_exclusions.csv` (`document,reason`, git-ignored); a re-run keeps them out and removes
-any folder an earlier run made. The audit accepts month/year dates (edition dates, kept as written) and
+any folder an earlier run made. A line the generator's folder got wrong is corrected in `data/bundle_lob_overrides.csv`
+(`source_prefix,lob,reason`, git-ignored): Hagerty's classic-car policies, filed under `personal_auto`, train as
+`classic_auto`. The audit accepts month/year dates (edition dates, kept as written) and
 word-valued indicator fields, and compares amounts by magnitude (a return is printed positive, recorded negative).
 
 **Labels come from the reviewed gold.** The generator's own labels cover ~29% of what a source's reviewed gold

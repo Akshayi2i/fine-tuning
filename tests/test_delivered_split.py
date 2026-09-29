@@ -290,3 +290,19 @@ def test_an_indicator_and_a_signed_return_are_not_amount_errors():
     assert report.formats == []
     _check_formats("doc", [("premium.total_policy_premium", {"raw": "$47,250.00", "parsed": 4725.0})], report)
     assert [f.check for f in report.formats] == ["amount"]
+
+
+def test_a_line_override_relabels_a_carriers_documents(tmp_path):
+    from data_pipeline.ingestion.prepare_bundles import BundleError, prepare_bundles, read_lob_overrides
+
+    overrides = tmp_path / "overrides.csv"
+    overrides.write_text("source_prefix,lob,reason\nAcme/homeowners/ho_1,dwelling_fire,misfiled\n", encoding="utf-8")
+    out = tmp_path / "bundles"
+    report = prepare_bundles(_delivery(tmp_path), out, lines=frozenset({"homeowners", "dwelling_fire"}),
+                             mode="copy", lob_overrides=read_lob_overrides(overrides))
+    assert report.relined == {"homeowners -> dwelling_fire": 2}
+    assert json.loads((out / "homeowners__ho_1__original/metadata.json").read_text("utf-8"))["lob"] == "dwelling_fire"
+    assert json.loads((out / "homeowners__ho_2__synth_001/metadata.json").read_text("utf-8"))["lob"] == "homeowners"
+    overrides.write_text("source_prefix,lob,reason\nAcme/,pet_insurance,x\n", encoding="utf-8")
+    with pytest.raises(BundleError, match="canonical schema"):
+        read_lob_overrides(overrides)
