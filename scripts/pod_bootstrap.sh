@@ -130,6 +130,7 @@ ensure_env() {
 ensure_env RUNPOD_VOLUME_MOUNT "$WORKSPACE" /runpod-volume
 ensure_env HF_HOME "$WORKSPACE/.cache/huggingface"
 ensure_env MINERU_TOOLS_CONFIG_JSON "$MINERU_CONFIG"
+ensure_env HF_HUB_ENABLE_HF_TRANSFER 0 1
 # .env is sourced by bash (here and by pod_run.sh): an unquoted connection string
 # is cut at its first ';' and every Blob call would fail with a confusing error.
 azure_line="$(grep -E '^AZURE_STORAGE_CONNECTION_STRING=' .env | tail -n1 || true)"
@@ -141,6 +142,9 @@ value in double quotes: bash would otherwise cut it at the first ';'." ;;
 esac
 set -a; . ./.env; set +a
 export HF_HOME MINERU_TOOLS_CONFIG_JSON RUNPOD_VOLUME_MOUNT
+# RunPod images turn on the hf_transfer downloader for every process; it is not
+# installed in our environments, and Hugging Face then refuses to download.
+export HF_HUB_ENABLE_HF_TRANSFER=0
 case "${AZURE_STORAGE_CONNECTION_STRING:-}" in
   ""|*AccountName=...*)
     PENDING+=("set AZURE_STORAGE_CONNECTION_STRING in $REPO/.env (every stage reads and writes Blob)") ;;

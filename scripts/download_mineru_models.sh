@@ -16,6 +16,9 @@ VENV_OCR="$WORKSPACE/venv-ocr"
 [ -x "$VENV_OCR/bin/python" ] || { echo "download_mineru_models: no OCR environment at $VENV_OCR" >&2; exit 1; }
 if [ -f .env ]; then set -a; . ./.env; set +a; fi
 export HF_HOME="${HF_HOME:-$WORKSPACE/.cache/huggingface}"
+# RunPod images turn on the hf_transfer downloader for every process; it is not
+# installed in these environments, and Hugging Face then refuses to download.
+export HF_HUB_ENABLE_HF_TRANSFER=0
 export MINERU_TOOLS_CONFIG_JSON="${MINERU_TOOLS_CONFIG_JSON:-$WORKSPACE/magic-pdf.json}"
 
 version="$("$VENV_OCR/bin/python" -c 'import importlib.metadata as m; print(m.version("magic-pdf"))')"

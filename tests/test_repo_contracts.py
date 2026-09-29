@@ -83,6 +83,8 @@ LIBRARY_OWNED_VARS = frozenset({
     "MINERU_TOOLS_CONFIG_JSON",
     # Hugging Face's cache location, kept on the volume on the pod.
     "HF_HOME",
+    # Hugging Face: RunPod images enable hf_transfer, which our environments lack.
+    "HF_HUB_ENABLE_HF_TRANSFER",
 })
 
 
