@@ -163,3 +163,47 @@ def test_the_vllm_backend_sends_converted_messages(tmp_path):
     backend.generate_batch([msgs], [None])
     assert seen[0][0]["content"][0]["type"] == "image_pil"
     assert seen[1][0][0]["content"][0]["type"] == "image_pil"
+
+
+# --------------------------------------------------------------------------
+# Structured decoding without free whitespace, on xgrammar
+# --------------------------------------------------------------------------
+
+
+def _xgrammar_unsupported(obj) -> bool:
+    """vLLM 0.11.0's has_xgrammar_unsupported_json_features, restated. Under
+    backend "auto" such a schema falls back to another backend; with xgrammar
+    named, it is refused instead."""
+    if not isinstance(obj, dict):
+        return False
+    kind = obj.get("type")
+    if kind in ("integer", "number") and "multipleOf" in obj:
+        return True
+    if kind == "array" and any(k in obj for k in ("uniqueItems", "contains", "minContains",
+                                                  "maxContains")):
+        return True
+    if kind == "string" and "format" in obj:
+        return True
+    if kind == "object" and any(k in obj for k in ("minProperties", "maxProperties",
+                                                   "propertyNames", "patternProperties")):
+        return True
+    for value in obj.values():
+        items = value if isinstance(value, list) else [value]
+        if any(_xgrammar_unsupported(item) for item in items):
+            return True
+    return False
+
+
+def test_every_schema_we_constrain_to_is_one_xgrammar_supports():
+    from common import schemas
+
+    keys = list(schemas._sources())
+    assert "policy" in keys and len(keys) > 5
+    unsupported = [k for k in keys if _xgrammar_unsupported(schemas._schema_for_key(k))]
+    assert not unsupported, f"xgrammar cannot compile {unsupported}"
+
+
+def test_the_engine_forbids_free_whitespace_on_a_backend_that_honours_it():
+    from inference_core.model_runner import STRUCTURED_OUTPUTS_ENGINE
+
+    assert STRUCTURED_OUTPUTS_ENGINE == {"backend": "xgrammar", "disable_any_whitespace": True}

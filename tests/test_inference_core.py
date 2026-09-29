@@ -480,3 +480,40 @@ def test_a_version_with_no_servable_weights_is_refused():
     backend = VLLMBackend(ResolvedModel(tag="v2"), load_runner_config("vllm"))
     with pytest.raises((ModelRunnerError, ImportError)):
         backend.generate([], load_runner_config("vllm"))
+
+
+def _vllm_output(text, pieces, token_ids=None):
+    from types import SimpleNamespace as NS
+
+    token_ids = token_ids or list(range(len(pieces)))
+    steps = [{tid: NS(decoded_token=piece, logprob=-0.1 * i, rank=1)}
+             for i, (tid, piece) in enumerate(zip(token_ids, pieces))]
+    completion = NS(text=text, token_ids=token_ids, logprobs=steps, finish_reason="stop")
+    return NS(outputs=[completion])
+
+
+def test_the_end_of_turn_token_vllm_returns_outside_the_text_is_dropped():
+    """vLLM lists <|im_end|> among the tokens but not in the text; every
+    completed validation answer failed reconstruction and scored as empty."""
+    from inference_core.model_runner import VLLMBackend
+
+    gen = VLLMBackend._to_generation(
+        _vllm_output('{"a":1}', ['{"a', '":1', "}", "<|im_end|>"]), _runner_config(), 1.0)
+    assert gen.tokens == ['{"a', '":1', "}"] and len(gen.token_logprobs) == 3
+
+
+def test_anything_else_that_breaks_reconstruction_is_still_refused():
+    from inference_core.model_runner import ModelRunnerError, VLLMBackend
+
+    with pytest.raises(ModelRunnerError, match="do not reconstruct"):
+        VLLMBackend._to_generation(
+            _vllm_output('{"a":1}', ['{"a', '":2', "}", "<|im_end|>"]), _runner_config(), 1.0)
+    with pytest.raises(ModelRunnerError, match="do not reconstruct"):
+        VLLMBackend._to_generation(
+            _vllm_output('{"a":1}', ['{"a', "}", "<|im_end|>"]), _runner_config(), 1.0)
+
+
+def _runner_config():
+    from inference_core.runner_config import RunnerConfig
+
+    return RunnerConfig()

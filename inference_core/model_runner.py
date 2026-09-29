@@ -178,6 +178,16 @@ class EchoBackend(ModelBackend):
         )
 
 
+#: Structured decoding without free whitespace. With it allowed, the grammar
+#: accepts any run of spaces and newlines between tokens, and a model that
+#: drifts there writes newlines until max_new_tokens - one validation answer
+#: ran 30,000 lines. xgrammar without it writes json.dumps' own separators
+#: (", " and ": "), which is how the training answers are written. Only the
+#: xgrammar and guidance backends take the setting, so xgrammar is named; every
+#: scope's schema is inside what it supports (tests/test_vllm_patches.py).
+STRUCTURED_OUTPUTS_ENGINE = {"backend": "xgrammar", "disable_any_whitespace": True}
+
+
 def to_vllm_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Chat messages with ms-swift image parts rewritten for ``LLM.chat``.
 
@@ -306,6 +316,7 @@ class VLLMBackend(ModelBackend):
             # Engine-level, not per request: without it the confidence features
             # read the post-mask distribution under structured decoding (§5.1).
             logprobs_mode=config.logprobs_mode,
+            structured_outputs_config=STRUCTURED_OUTPUTS_ENGINE,
         )
         log.info("vLLM engine up on %s (lora=%s)", model_path, config.enable_lora)
         return self._engine
@@ -388,6 +399,13 @@ class VLLMBackend(ModelBackend):
             logprobs.append(float(chosen.logprob))
 
         text = completion.text
+        if tokens and "".join(tokens) != text and "".join(tokens[:-1]) == text:
+            # The end-of-turn token (<|im_end|>) that stopped generation: vLLM
+            # returns it among the tokens and logprobs but not in the text. It
+            # carries no field, so it is dropped - only it, and only when the rest
+            # reconstructs the text exactly. Left in, every completed answer
+            # failed the check below and was scored as empty.
+            tokens, logprobs = tokens[:-1], logprobs[:-1]
         if tokens:
             assert_tokens_reconstruct(text, tokens, "vLLM")
 
