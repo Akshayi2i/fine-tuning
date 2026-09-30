@@ -175,8 +175,25 @@ def test_one_document_is_compared_field_by_field_across_its_windows(tmp_path):
     assert tuned_summary["table_rows"]["forms_and_endorsements"] == "1 of 1 found, 1 written"
     assert result["summary"]["base"]["accuracy"] == 0.0
 
-    rc = script.main(["--document", "p1", "--report", str(path), "--out", str(tmp_path / "c.csv")])
-    assert rc == 0 and "policy.premium" in (tmp_path / "c.csv").read_text(encoding="utf-8-sig")
+    out = tmp_path / "compare"
+    rc = script.main(["--document", "p1", "--report", str(path), "--out", str(out)])
+    assert rc == 0
+    assert "policy.premium" in (out / "fields.csv").read_text(encoding="utf-8-sig")
+    assert json.loads((out / "gold.json").read_text(encoding="utf-8"))["policy"]["premium"]["raw"] == "1200"
+    tuned_json = json.loads((out / "fine_tuned_output.json").read_text(encoding="utf-8"))
+    assert tuned_json["forms_and_endorsements"][0]["form_number"]["raw"] == "HO-0003"   # windows merged
+    assert "policy" in json.loads((out / "base_output.json").read_text(encoding="utf-8"))
+    assert "accuracy (single fields)" in (out / "summary.txt").read_text(encoding="utf-8")
+
+
+def test_the_pdf_is_found_from_the_bundle_the_document_was_imported_from(tmp_path):
+    script = _script()
+    bundle = tmp_path / "smoke-personal-v1" / "rv__allstate__original"
+    bundle.mkdir(parents=True)
+    (bundle / "document.pdf").write_bytes(b"%PDF")
+    found = script._find_pdf({"imported_from": "rv__allstate__original"}, roots=(str(tmp_path),))
+    assert found == bundle / "document.pdf"
+    assert script._find_pdf({}, roots=(str(tmp_path),)) is None
 
 
 def test_the_test_split_gets_its_own_report():

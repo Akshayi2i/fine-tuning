@@ -330,7 +330,8 @@ def document_comparison(report_path: str, source_id: str, mode: str = "ocr_plus_
                      **{f"{label}": flats[label].get(path) for label in flats},
                      **{f"{label} outcome": _outcome(path, gold_flat, flats[label]) or ""
                         for label in flats}})
-    return {"source_id": source_id, "mode": mode, "summary": summary, "fields": rows}
+    return {"source_id": source_id, "mode": mode, "summary": summary, "fields": rows,
+            "gold": gold, "answers": answers}
 
 
 #: Error types, in the order they are reported.
@@ -414,8 +415,14 @@ def _report_path(split: str) -> str:
 
 
 def _print_document(args) -> int:
-    """--document: list the documents, or compare one and write its field table as CSV."""
+    """--document: list the documents, or compare one and save everything about it.
+
+    The comparison goes to one folder: the PDF (when the pod still holds it), the
+    gold JSON, each model's full JSON answer, the field-by-field CSV and the
+    printed summary.
+    """
     import csv
+    import shutil
 
     if args.document == "list":
         report = json.loads(Path(args.report).read_text(encoding="utf-8"))
@@ -423,48 +430,81 @@ def _print_document(args) -> int:
         for saved in next(iter(report.values()))["generations"]:
             seen.setdefault(saved["row"]["source_id"], str(saved["row"].get("lob")))
         for source_id, lob in sorted(seen.items()):
-            print(f"{source_id}  lob={lob}{_provenance(source_id, args.tenant)}")
+            print(f"{source_id}  lob={lob}{_describe_source(_provenance(source_id, args.tenant))}")
         return 0
 
     result = document_comparison(args.report, args.document, args.mode)
-    print(f"document {args.document}{_provenance(args.document, args.tenant)}  (reading: {args.mode})")
+    meta = _provenance(args.document, args.tenant)
     labels = list(result["summary"])
-    print(f"{'':<34}" + "".join(f"{'fine-tuned' if x == 'checkpoint' else x:>14}" for x in labels))
+    name = {"base": "base", "checkpoint": "fine-tuned"}
+    lines = [f"document {args.document}{_describe_source(meta)}  (reading: {args.mode})",
+             f"{'':<34}" + "".join(f"{name.get(x, x):>14}" for x in labels)]
     acc = [result["summary"][x]["accuracy"] for x in labels]
-    print(f"{'accuracy (single fields)':<34}" + "".join(
+    lines.append(f"{'accuracy (single fields)':<34}" + "".join(
         f"{a:>14.1%}" if a is not None else f"{'-':>14}" for a in acc))
-    print(f"{'fields correct / scored':<34}" + "".join(
+    lines.append(f"{'fields correct / scored':<34}" + "".join(
         f"{str(result['summary'][x]['fields_correct']) + ' / ' + str(result['summary'][x]['fields_scored']):>14}"
         for x in labels))
     for outcome in OUTCOMES:
-        print(f"{outcome:<34}" + "".join(f"{result['summary'][x]['outcomes'][outcome]:>14}" for x in labels))
-    print(f"{'unusable windows':<34}" + "".join(f"{result['summary'][x]['unusable_windows']:>14}" for x in labels))
+        lines.append(f"{outcome:<34}" + "".join(
+            f"{result['summary'][x]['outcomes'][outcome]:>14}" for x in labels))
+    lines.append(f"{'unusable windows':<34}" + "".join(
+        f"{result['summary'][x]['unusable_windows']:>14}" for x in labels))
     for x in labels:
         for table, text in result["summary"][x]["table_rows"].items():
-            print(f"  table {table} ({'fine-tuned' if x == 'checkpoint' else x}): {text}")
-    out = Path(args.out or f"/workspace/logs/compare_{args.document}_{args.mode}.csv")
-    out.parent.mkdir(parents=True, exist_ok=True)
+            lines.append(f"  table {table} ({name.get(x, x)}): {text}")
+
+    folder = Path(args.out or f"/workspace/logs/compare_{args.document}_{args.mode}")
+    folder.mkdir(parents=True, exist_ok=True)
     columns = ["field", "gold"] + [c for x in labels for c in (x, f"{x} outcome")]
-    with out.open("w", newline="", encoding="utf-8-sig") as handle:
+    with (folder / "fields.csv").open("w", newline="", encoding="utf-8-sig") as handle:
         writer = csv.DictWriter(handle, fieldnames=columns)
         writer.writeheader()
         for row in result["fields"]:
             writer.writerow({c: "" if row.get(c) is None else row.get(c) for c in columns})
-    print(f"field-by-field table ({len(result['fields'])} fields): {out}")
+    (folder / "gold.json").write_text(
+        json.dumps(result["gold"], indent=2, ensure_ascii=False), encoding="utf-8")
+    for x in labels:
+        (folder / f"{name.get(x, x).replace('-', '_')}_output.json").write_text(
+            json.dumps(result["answers"][x], indent=2, ensure_ascii=False), encoding="utf-8")
+    pdf = _find_pdf(meta)
+    if pdf:
+        shutil.copyfile(pdf, folder / "document.pdf")
+    (folder / "summary.txt").write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    for line in lines:
+        print(line)
+    print(f"saved in {folder}: " + ", ".join(sorted(f.name for f in folder.iterdir())))
     return 0
 
 
-def _provenance(source_id: str, tenant: str) -> str:
-    """The delivered bundle a document was imported from, and whether it is synthetic."""
+def _provenance(source_id: str, tenant: str) -> dict:
+    """The label metadata the import wrote: the delivered bundle and whether it is synthetic."""
     try:
         from artifact_registry import paths
         from artifact_registry.blob_client import BlobClient
 
-        meta = BlobClient().read_json(paths.label_metadata("policy", source_id, tenant))
-        kind = "synthetic" if meta.get("synthetic") else "real"
-        return f"  [{kind}, from {meta.get('imported_from')}]"
+        return BlobClient().read_json(paths.label_metadata("policy", source_id, tenant)) or {}
     except Exception:  # noqa: BLE001 - provenance is a courtesy; the comparison stands without it
+        return {}
+
+
+def _describe_source(meta: dict) -> str:
+    if not meta:
         return ""
+    kind = "synthetic" if meta.get("synthetic") else "real"
+    return f"  [{kind}, from {meta.get('imported_from')}]"
+
+
+def _find_pdf(meta: dict, roots: tuple[str, ...] = ("/workspace/intake",)) -> Path | None:
+    """The PDF the document was imported from, if the pod still holds its bundle."""
+    folder = meta.get("imported_from") if meta else None
+    if not folder:
+        return None
+    for root in roots:
+        for candidate in sorted(Path(root).glob(f"*/{folder}/*.pdf")):
+            return candidate
+    return None
 
 
 #: What the comparison prints, in order: (metric, plain name). The rest is in the report.
