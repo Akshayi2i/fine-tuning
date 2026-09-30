@@ -31,7 +31,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
-from common.canonical import is_field_value, to_model_target
+from common.canonical import in_schema_order, is_field_value, to_model_target
 from common.constants import DEFAULT_LONG_DOC_PAGE_THRESHOLD
 
 
@@ -126,7 +126,7 @@ def window_target(
 ) -> dict[str, Any]:
     """The model-form target for one window: its sections, on its pages."""
     from common.schema_sections import sections_for
-    from common.schemas import required_fields
+    from common.schemas import required_fields, resolved_schema
 
     pages = set(plan.pages)
     sliced = {
@@ -135,7 +135,10 @@ def window_target(
         if name in label
     }
     sliced = {k: v for k, v in sliced.items() if v not in (None, {}, [])}
-    return to_model_target(sliced, required=required_fields("policy", None, lob, plan.group))
+    target = to_model_target(sliced, required=required_fields("policy", None, lob, plan.group))
+    # In the order the decoding grammar writes keys (in_schema_order): the
+    # window's own schema slice, the one it is constrained to.
+    return in_schema_order(target, resolved_schema("policy", None, lob, plan.group))
 
 
 def _within(

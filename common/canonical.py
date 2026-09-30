@@ -134,6 +134,44 @@ def _slim(node: Any, path: str) -> Any:
     )
 
 
+def in_schema_order(node: Any, schema: dict[str, Any]) -> Any:
+    """``node`` with every object's keys in the order its schema declares them.
+
+    Structured decoding (xgrammar) builds each object's grammar from its
+    properties IN ORDER: a key may be skipped, never written after one declared
+    later. Labels keep whatever order they were written in - some template
+    families put ``form_title`` before ``form_number`` - and the targets kept it,
+    so the model learned to open a form with its title, after which the grammar
+    no longer allowed the number. On the smoke run every form came back without
+    one. Training on schema order makes what the model learned writable.
+
+    Keys the schema does not declare keep their place after the declared ones.
+    Values are untouched; only key order changes.
+    """
+    defs = schema.get("$defs") or {}
+
+    def resolve(sub: Any) -> dict[str, Any]:
+        while isinstance(sub, dict) and "$ref" in sub:
+            ref = sub["$ref"]
+            sub = defs.get(ref.rsplit("/", 1)[-1]) if ref.startswith("#/$defs/") else None
+        return sub if isinstance(sub, dict) else {}
+
+    def walk(value: Any, sub: Any) -> Any:
+        sub = resolve(sub)
+        if isinstance(value, dict):
+            props = sub.get("properties") or {}
+            ordered = {key: walk(value[key], props[key]) for key in props if key in value}
+            for key, item in value.items():
+                if key not in ordered:
+                    ordered[key] = walk(item, None)
+            return ordered
+        if isinstance(value, list):
+            return [walk(item, sub.get("items")) for item in value]
+        return value
+
+    return walk(node, schema)
+
+
 def training_target(
     label: dict[str, Any],
     doc_type: str,
@@ -148,11 +186,14 @@ def training_target(
     Golden labels keep whatever date format they were written in; only the target
     is converted.
     """
-    from common.schemas import is_canonical, required_fields
+    from common.schemas import is_canonical, required_fields, resolved_schema
 
+    # In the order the decoding grammar writes keys (in_schema_order).
+    schema = resolved_schema(doc_type, acord_form, lob)
     if is_canonical(doc_type, acord_form, lob):
-        return to_model_target(label, required=required_fields(doc_type, acord_form, lob))
-    return with_output_dates(label)
+        target = to_model_target(label, required=required_fields(doc_type, acord_form, lob))
+        return in_schema_order(target, schema)
+    return in_schema_order(with_output_dates(label), schema)
 
 
 # --------------------------------------------------------------------------
