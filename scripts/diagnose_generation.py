@@ -58,6 +58,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--out", default="/workspace/logs/diagnose_generation.json")
     args = parser.parse_args(argv)
 
+    # On the pod, run detached in tmux: loading vLLM takes minutes.
+    from orchestration.detach import detach_script_if_needed
+
+    if detach_script_if_needed(__file__, argv, "diagnose"):
+        return 0
+
     client = BlobClient()
     rows = read_rows(client.read_text(
         paths.corpus_scope_eval_split(args.corpus, "val", args.scope, args.tenant)))
