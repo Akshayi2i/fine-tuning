@@ -346,7 +346,8 @@ def test_a_flat_document_type_also_returns_mm_dd_yyyy(client):
 def test_a_known_lob_selects_its_canonical_schema(client):
     """The line is the caller's to give. It selects the schema the model is
     shown, constrained to and validated against."""
-    from common.schemas import resolved_schema
+    from common.schemas import resolved_schema, with_page_bounds
+    from inference_core.input_builder import page_total
 
     backend = EchoBackend(RESPONSE)
     extract(
@@ -359,7 +360,9 @@ def test_a_known_lob_selects_its_canonical_schema(client):
     # schema — so the homeowners block reaches the model through `lineblk`.
     schemas = [call["json_schema"] for call in backend.calls]
     assert schemas == [
-        resolved_schema("policy", None, "homeowners", group) for group in groups_for("homeowners")
+        with_page_bounds(resolved_schema("policy", None, "homeowners", group),
+                         page_total(call["messages"]))
+        for group, call in zip(groups_for("homeowners"), backend.calls, strict=True)
     ]
     assert any("homeowners" in schema["properties"] for schema in schemas)
 
@@ -817,7 +820,8 @@ def test_serving_generation_is_constrained_to_the_routed_schema(client):
     """structured_outputs and logprobs_mode sat in vllm_serving.yaml and reached
     nothing: generation ran unconstrained, so the §13b 100% schema-validity floor
     measured a model with no guarantee behind it."""
-    from common.schemas import resolved_schema
+    from common.schemas import resolved_schema, with_page_bounds
+    from inference_core.input_builder import page_total
     from inference_core.runner_config import load_runner_config
 
     config = load_runner_config()
@@ -833,7 +837,8 @@ def test_serving_generation_is_constrained_to_the_routed_schema(client):
 
     # Every window is constrained — each to its own slice of the routed schema.
     assert [c["json_schema"] for c in backend.calls] == [
-        resolved_schema("policy", None, None, group) for group in groups_for(None)
+        with_page_bounds(resolved_schema("policy", None, None, group), page_total(c["messages"]))
+        for group, c in zip(groups_for(None), backend.calls, strict=True)
     ]
 
 

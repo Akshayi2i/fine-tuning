@@ -260,10 +260,14 @@ def test_serving_asks_the_windows_training_built(client):
     served_schemas = [call["json_schema"] for call in backend.calls]
 
     assert len(backend.calls) == len(trained)
-    from common.schemas import resolved_schema
+    from common.schemas import resolved_schema, with_page_bounds
+    from inference_core.input_builder import page_total
 
+    # Each constrained to its slice, with page_ref bounded to the document's pages.
     assert served_schemas == [
-        resolved_schema("policy", None, "homeowners", group) for group, _pages in trained
+        with_page_bounds(resolved_schema("policy", None, "homeowners", group),
+                         page_total(call["messages"]))
+        for (group, _pages), call in zip(trained, backend.calls, strict=True)
     ]
     served_prompts = [call["messages"][0]["content"] for call in backend.calls]
     trained_prompts = [r["messages"][0]["content"] for r in rows]
