@@ -323,3 +323,17 @@ def test_each_failure_is_classified_where_it_happens():
     refused = ValidationGeneration(row={}, golden={})
     _finish(refused, RuntimeError("engine died"))
     assert refused.failure_kind == "setup" and refused.extraction == {}
+
+
+def test_the_warning_carries_the_whole_failure_record(caplog):
+    """The log showed only the parse error, so an answer cut at the token limit
+    read as one that stopped normally."""
+    from types import SimpleNamespace as NS
+
+    from evaluation.validation_generation import _finish
+
+    entry = ValidationGeneration(row={"source_id": "p1"}, golden={})
+    with caplog.at_level("WARNING"):
+        _finish(entry, NS(text='{"a": "xxxx', finish_reason="length", truncated=lambda: True,
+                          tokens=["x"] * 5, token_logprobs=[]))
+    assert "token limit" in caplog.text and "finish=length" in caplog.text

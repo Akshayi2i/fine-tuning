@@ -182,7 +182,7 @@ def _record_failure(entry: ValidationGeneration, exc: BaseException, kind: str,
     entry.error = f"{note}{type(exc).__name__}: {exc}{evidence}"
     entry.failure_kind = kind
     entry.extraction = {}
-    log.warning("validation generation failed for %s: %s", entry.row.get("source_id"), exc)
+    log.warning("validation generation failed for %s: %s", entry.row.get("source_id"), entry.error)
 
 
 def _finish(entry: ValidationGeneration, result: Any) -> None:
