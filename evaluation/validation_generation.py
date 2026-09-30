@@ -70,6 +70,9 @@ class ValidationGeneration:
             # affects which eval subset a document is also counted in.
             "is_scanned": bool(self.row.get("is_scanned", False)),
             "page_count": images or 1,
+            # The text the prompt carried (None for image-only), so the report
+            # can tell an invented value from a misread one (hallucination_rate).
+            "ocr_text": self.page_text,
         }
 
     @property

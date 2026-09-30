@@ -296,6 +296,7 @@ def score_subset(
         score_schema_validity,
     )
     from evaluation.metrics.extraction_faults import (
+        _is_empty,
         score_false_nulls,
         score_hallucinations,
         score_page_selection,
@@ -307,7 +308,15 @@ def score_subset(
     if not scored:
         return report
 
-    accuracies, exacts, recalls, f1s = [], [], [], []
+    accuracies, exacts, recalls, f1s, list_precisions = [], [], [], [], []
+    # Single-value fields as a retrieval task, counted over every field of the
+    # subset: precision = of the values the model wrote, the share that were
+    # right; recall = of the values the label holds, the share found. Accuracy
+    # alone cannot tell a model that writes little but well from one that
+    # writes everything and half of it wrong.
+    written = expected_filled = right_and_written = 0
+    by_lob: dict[str, list[int]] = {}
+    by_field: dict[str, list[int]] = {}
     # Both of these are GATING_METRICS with require_all_measured=True, and
     # neither was ever computed here — so the gate blocked every candidate that
     # ever reached it, permanently, with no override. `score_misattribution` had
@@ -332,6 +341,19 @@ def score_subset(
         tally[0] += sum(r.correct for r in accuracy.results)
         tally[1] += sum(r.exact for r in accuracy.results)
         tally[2] += accuracy.total
+        line = metadata.get("lob")
+        line = ", ".join(line) if isinstance(line, list) else (line or "unknown")
+        lob_tally = by_lob.setdefault(str(line), [0, 0])
+        lob_tally[0] += sum(r.correct for r in accuracy.results)
+        lob_tally[1] += accuracy.total
+        for result in accuracy.results:
+            has_value, wrote = not _is_empty(result.expected), not _is_empty(result.got)
+            written += wrote
+            expected_filled += has_value
+            right_and_written += bool(result.correct and has_value and wrote)
+            field_tally = by_field.setdefault(result.field_path, [0, 0])
+            field_tally[0] += bool(result.correct)
+            field_tally[1] += 1
 
         misattributions.append(
             score_misattribution(
@@ -363,6 +385,8 @@ def score_subset(
         for list_report in score_all_list_fields(expected, got).values():
             recalls.append(list_report.recall)
             f1s.append(list_report.f1)
+            if list_report.got_rows:
+                list_precisions.append(list_report.precision)
 
     for correct, exact, total in pooled.values():
         if total:
@@ -407,6 +431,29 @@ def score_subset(
         # not block, and once any promoted manifest carried the real name every
         # later candidate would be blocked forever as "not measured".
         "field_f1_list_fields": sum(f1s) / len(f1s) if f1s else None,
+        # Of the table rows the model wrote, the share that are real rows.
+        "list_field_precision": (
+            sum(list_precisions) / len(list_precisions) if list_precisions else None
+        ),
+        "field_precision": right_and_written / written if written else None,
+        "field_recall": right_and_written / expected_filled if expected_filled else None,
+        "field_f1": (
+            2 * right_and_written / (written + expected_filled)
+            if written + expected_filled else None
+        ),
+        # Reported, not gated: where accuracy is won and lost.
+        "field_accuracy_by_lob": {
+            line: round(correct / total, 4) for line, (correct, total) in sorted(by_lob.items())
+            if total
+        } or None,
+        # The fields with at least 3 scorings, lowest accuracy first.
+        "weakest_fields": [
+            {"field": path, "accuracy": round(correct / total, 4), "scored": total}
+            for path, (correct, total) in sorted(
+                by_field.items(), key=lambda item: (item[1][0] / item[1][1], -item[1][1])
+            )
+            if total >= 3
+        ][:15] or None,
         "schema_validity_rate": validity_rate,
         # Absent, not 0.0, when no document in the set carries a line to score.
         "lob_detection_accuracy": lob.overall if lob.scored else None,
@@ -433,9 +480,13 @@ def score_subset(
         # golden label: checking against the label alone would call every wrong
         # value a hallucination, including an honest misread of something
         # actually printed — and those have different remedies.
+        #
+        # Only rows that were SENT text: against an image-only row's empty text
+        # every value the model read off the image would count as invented.
         "hallucination_rate": score_hallucinations([
-            (expected, got, str(metadata.get("ocr_text") or ""))
+            (expected, got, str(metadata["ocr_text"]))
             for expected, got, metadata in scored
+            if metadata.get("ocr_text")
         ]).rate if any(m.get("ocr_text") for _, _, m in scored) else None,
         # Only meaningful where routing ran. A document that sent every page has
         # no selection to score, and counting it as perfect recall would dilute

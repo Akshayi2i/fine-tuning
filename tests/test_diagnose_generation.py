@@ -19,34 +19,52 @@ def _script():
     return module
 
 
+def _env(value, page=1):
+    return {"raw": str(value), "parsed": value, "page_ref": [page]}
+
+
+GOLDEN = {"policy": {"policy_number": _env("HO-1"), "effective_date": _env("01/01/2026")},
+          "named_insured": {"primary_name": _env("Jane Rivera")}}
+
+
+def _row(source_id, mode="ocr_plus_image"):
+    content = [{"type": "image", "image": "x"}]
+    if mode != "image_only":
+        content.append({"type": "text", "text": "<page 1 of 1>\nPolicy HO-1 Jane Rivera 01/01/2026"})
+    return {"source_id": source_id, "doc_type": "policy", "lob": "homeowners",
+            "modality_mode": mode, "messages": [{"role": "user", "content": content}]}
+
+
 def test_base_and_checkpoint_are_scored_on_the_same_rows(tmp_path, monkeypatch):
     """Whether fine-tuning beat the model it started from: the base runs with no
-    adapter, the checkpoint with its own, on identical rows."""
+    adapter, the checkpoint with its own, on identical rows, scored for real."""
     import evaluation.validation_generation as V
     import inference_core.model_runner as M
 
     adapters = []
+    base_answer = {"policy": {"policy_number": _env("HO-9"), "agent": _env("Invented Agency")}}
 
     def generate(rows, model, adapter=None):
         adapters.append(adapter)
-        return [ValidationGeneration(row=r, golden={"a": 1}, extraction={"a": 1 if adapter else 2},
-                                     error=None if adapter else "JSONDecodeError: x",
-                                     failure_kind=None if adapter else "output") for r in rows]
+        return [ValidationGeneration(row=r, golden=GOLDEN,
+                                     extraction=GOLDEN if adapter else base_answer) for r in rows]
 
     monkeypatch.setattr(V, "generate_validation", generate)
-    monkeypatch.setattr(V, "score_generations", lambda gens, model_version: {
-        "field_normalized_match": sum(g.extraction.get("a") == 1 for g in gens) / len(gens)})
     monkeypatch.setattr(M, "load_model", lambda tag, client: object())
     monkeypatch.setattr(M, "release_model", lambda model: None)
 
     out = tmp_path / "report.json"
-    rc = _script()._against_base([{"source_id": "p1"}, {"source_id": "p2"}], None,
-                                 SimpleNamespace(checkpoint="/ckpt", out=str(out)))
+    rows = [_row("p1"), _row("p2", "image_only")]
+    rc = _script()._against_base(rows, None, SimpleNamespace(checkpoint="/ckpt", out=str(out)))
     report = json.loads(out.read_text(encoding="utf-8"))
     assert rc == 0 and adapters == [None, "/ckpt"]
-    assert report["base"]["metrics"]["field_normalized_match"] == 0.0
-    assert report["checkpoint"]["metrics"]["field_normalized_match"] == 1.0
-    assert report["base"]["unusable_json"] == 2 and report["checkpoint"]["unusable_json"] == 0
+    tuned, base = report["checkpoint"]["metrics"], report["base"]["metrics"]
+    assert tuned["field_normalized_match"] == 1.0 and base["field_normalized_match"] == 0.0
+    assert tuned["field_precision"] == 1.0 and tuned["field_recall"] == 1.0
+    assert base["field_recall"] == 0.0
+    # The invented agent is not in the text sent; checked on the OCR row only.
+    assert base["hallucination_rate"] > 0 and tuned["hallucination_rate"] == 0.0
+    assert report["checkpoint"]["details"]["field_accuracy_by_lob"] == {"homeowners": 1.0}
 
 
 def test_a_saved_comparison_can_be_rescored_without_the_gpu(tmp_path, monkeypatch):
@@ -76,7 +94,7 @@ def test_a_saved_comparison_can_be_rescored_without_the_gpu(tmp_path, monkeypatc
     assert saved["row"]["messages"][0]["content"] == [{"type": "image"}]   # images as a count
 
     rescored = script.rescore(str(out))
-    assert rescored["checkpoint"]["list_field_recall"] == 1.0
+    assert rescored["checkpoint"]["metrics"]["list_field_recall"] == 1.0
 
 
 def test_table_rows_can_be_compared_from_a_saved_report(tmp_path):

@@ -94,11 +94,7 @@ def main(argv: list[str] | None = None) -> int:
             print(line)
         return 0
     if args.rescore:
-        rescored = rescore(args.rescore)
-        for name in COMPARED:
-            values = [rescored.get(label, {}).get(name) for label in ("base", "checkpoint")]
-            print(f"{name:<32}" + "".join(f"{v:>12.3f}" if v is not None else f"{'-':>12}"
-                                          for v in values))
+        print_comparison(rescore(args.rescore))
         return 0
     if not args.checkpoint:
         parser.error("--checkpoint is required unless --rescore is given")
@@ -167,23 +163,41 @@ def _saved(generation) -> dict:
                  for part in m["content"] if isinstance(part, dict) and part.get("type") == "image")
     slim = {k: row.get(k) for k in ("source_id", "doc_type", "acord_form", "lob", "sections",
                                     "modality_mode", "is_scanned")}
-    slim["messages"] = [{"role": "user", "content": [{"type": "image"}] * images}]
+    # Images as a count; the OCR text the prompt carried, kept, so a rescore can
+    # measure hallucination (a value against the text that was sent).
+    text = generation.page_text
+    slim["messages"] = [{"role": "user", "content": [{"type": "image"}] * images
+                         + ([{"type": "text", "text": text}] if text else [])}]
     return {"row": slim, "golden": generation.golden, "extraction": generation.extraction,
             "error": generation.error, "failure_kind": generation.failure_kind}
 
 
+def _scores(generations, label: str) -> dict:
+    """The gate's numbers for one model, plus the breakdowns the gate does not read
+    (accuracy per line of business, weakest fields)."""
+    from evaluation.run_eval import build_report
+
+    report = build_report(label, [(g.golden, g.extraction or {}, g.metadata) for g in generations])
+    numeric = {k: v for k, v in report.gate_metrics().items()
+               if isinstance(v, (int, float)) and not isinstance(v, bool)}
+    details: dict = {}
+    for subset in report.full_set():
+        for key in ("field_accuracy_by_lob", "weakest_fields"):
+            if subset.metrics.get(key):
+                details[key] = subset.metrics[key]
+    return {"metrics": numeric, "details": details,
+            "unusable_json": sum(g.failure_kind == "output" for g in generations),
+            "setup_failures": sum(bool(g.error) and g.failure_kind != "output" for g in generations),
+            "rows": len(generations)}
+
+
 def rescore(report_path: str) -> dict[str, dict]:
     """Score a saved comparison again with the current scorer. No GPU."""
-    from evaluation.validation_generation import ValidationGeneration, score_generations
+    from evaluation.validation_generation import ValidationGeneration
 
     report = json.loads(Path(report_path).read_text(encoding="utf-8"))
-    rescored = {}
-    for label, entry in report.items():
-        generations = [ValidationGeneration(**saved) for saved in entry.get("generations", [])]
-        if generations:
-            metrics = score_generations(generations, model_version=label)
-            rescored[label] = {k: v for k, v in metrics.items() if isinstance(v, (int, float))}
-    return rescored
+    return {label: _scores([ValidationGeneration(**saved) for saved in entry["generations"]], label)
+            for label, entry in report.items() if entry.get("generations")}
 
 
 def list_details(report_path: str, limit: int = 6) -> list[str]:
@@ -294,15 +308,62 @@ def error_breakdown(report_path: str, top: int = 3) -> dict[str, dict]:
     return out
 
 
-#: What the comparison prints, in order; the rest is in the report file.
-COMPARED = ("field_normalized_match", "schema_validity_rate", "false_null_rate",
-            "image_only_accuracy", "ocr_arbitration_accuracy", "list_field_recall",
-            "confusable_misattribution_rate")
+#: What the comparison prints, in order: (metric, plain name). The rest is in the report.
+COMPARED = (
+    ("field_normalized_match", "accuracy (correct fields, formatting ignored)"),
+    ("field_exact_match", "exact match (character for character)"),
+    ("field_precision", "precision (written values that are right)"),
+    ("field_recall", "recall (label values found)"),
+    ("field_f1", "F1 (precision and recall combined)"),
+    ("false_null_rate", "left empty though on the page *"),
+    ("hallucination_rate", "hallucination (value not in the text sent) *"),
+    ("confusable_misattribution_rate", "value put in a similar wrong field *"),
+    ("schema_validity_rate", "valid JSON for the schema"),
+    ("image_only_accuracy", "accuracy, image only (no OCR)"),
+    ("ocr_arbitration_accuracy", "accuracy, corrupted OCR"),
+    ("list_field_recall", "table rows found (recall)"),
+    ("list_field_precision", "table rows written that are real (precision)"),
+    ("field_f1_list_fields", "table rows F1"),
+)
+
+
+def print_comparison(results: dict[str, dict]) -> None:
+    """Base against checkpoint, every measure, then where each is won and lost."""
+    base, tuned = results.get("base", {}), results.get("checkpoint", {})
+    bm, tm = base.get("metrics", {}), tuned.get("metrics", {})
+    print()
+    print(f"{'measure':<48}{'base':>9}{'fine-tuned':>12}{'change':>10}")
+    for name, label in COMPARED:
+        b, t = bm.get(name), tm.get(name)
+        if b is None or t is None:
+            print(f"{label:<48}{'-':>9}{'-':>12}")
+            continue
+        print(f"{label:<48}{b:>9.1%}{t:>12.1%}{(t - b) * 100:>+8.1f}pt")
+    b, t = bm.get("false_null_rate"), tm.get("false_null_rate")
+    if b is not None and t is not None:
+        print(f"{'completeness (1 - left empty)':<48}{1 - b:>9.1%}{1 - t:>12.1%}"
+              f"{(b - t) * 100:>+8.1f}pt")
+    for key in ("unusable_json", "setup_failures", "rows"):
+        print(f"{key.replace('_', ' '):<48}{base.get(key, '-'):>9}{tuned.get(key, '-'):>12}")
+    print("* lower is better")
+    by_lob = [entry.get("details", {}).get("field_accuracy_by_lob", {}) for entry in (base, tuned)]
+    lobs = sorted(set(by_lob[0]) | set(by_lob[1]))
+    if lobs:
+        print("accuracy by line of business:")
+        for lob in lobs:
+            cells = "".join(f"{v:>{w}.1%}" if v is not None else f"{'-':>{w}}"
+                            for v, w in ((by_lob[0].get(lob), 9), (by_lob[1].get(lob), 12)))
+            print(f"  {lob:<46}{cells}")
+    for label, entry in (("base", base), ("fine-tuned", tuned)):
+        weakest = entry.get("details", {}).get("weakest_fields") or []
+        if weakest:
+            print(f"weakest fields ({label}): " + ", ".join(
+                f"{w['field']} {w['accuracy']:.0%} of {w['scored']}" for w in weakest[:6]))
 
 
 def _against_base(rows: list[dict], client, args) -> int:
     """Base model and checkpoint on the same rows, scored by the gate's own report."""
-    from evaluation.validation_generation import generate_validation, score_generations
+    from evaluation.validation_generation import generate_validation
     from inference_core.model_runner import load_model, release_model
 
     model = load_model("base", client)
@@ -310,14 +371,9 @@ def _against_base(rows: list[dict], client, args) -> int:
     try:
         for label, adapter in (("base", None), ("checkpoint", args.checkpoint)):
             generations = generate_validation(rows, model, adapter=adapter)
-            metrics = score_generations(generations, model_version=label)
             results[label] = {
                 "adapter": adapter,
-                "rows": len(generations),
-                "unusable_json": sum(g.failure_kind == "output" for g in generations),
-                "setup_failures": sum(bool(g.error) and g.failure_kind != "output"
-                                      for g in generations),
-                "metrics": {k: v for k, v in metrics.items() if isinstance(v, (int, float))},
+                **_scores(generations, label),
                 # Every answer with its label, so a scoring question can be
                 # answered again (--rescore) without the GPU.
                 "generations": [_saved(g) for g in generations],
@@ -329,18 +385,7 @@ def _against_base(rows: list[dict], client, args) -> int:
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(results, indent=2), encoding="utf-8")
 
-    base, tuned = results["base"], results["checkpoint"]
-    print()
-    print(f"{'metric':<32}{'base':>10}{'checkpoint':>12}{'change':>10}")
-    for name in COMPARED:
-        b, t = base["metrics"].get(name), tuned["metrics"].get(name)
-        if b is None or t is None:
-            print(f"{name:<32}{'-':>10}{'-':>12}")
-            continue
-        print(f"{name:<32}{b:>10.3f}{t:>12.3f}{t - b:>+10.3f}")
-    for key in ("unusable_json", "setup_failures"):
-        print(f"{key:<32}{base[key]:>10}{tuned[key]:>12}")
-    print(f"rows scored: {base['rows']}  (false_null_rate and confusable: lower is better)")
+    print_comparison(results)
     print(f"full report: {out}")
     return 0
 
