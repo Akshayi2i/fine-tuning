@@ -200,3 +200,17 @@ def test_the_test_split_gets_its_own_report():
     script = _script()
     assert script._report_path("val").endswith("base_vs_checkpoint.json")
     assert script._report_path("test").endswith("base_vs_checkpoint_test.json")
+
+
+def test_the_test_split_falls_back_to_the_corpus_wide_file_for_the_scope():
+    """Training writes a scope's own train and val files only; test is corpus-wide."""
+    from artifact_registry import paths
+    from artifact_registry.blob_client import BlobClient, InMemoryBackend
+
+    script = _script()
+    client = BlobClient(backend=InMemoryBackend(), container="main", raw_container="raw")
+    rows = [{"source_id": "p1", "doc_type": "policy"}, {"source_id": "l1", "doc_type": "lossrun"}]
+    client.write_text(paths.corpus_eval_split("v0", "test", "smoke"),
+                      "\n".join(json.dumps(r) for r in rows))
+    args = SimpleNamespace(corpus="v0", split="test", scope="personal_lines", tenant="smoke")
+    assert [r["source_id"] for r in script._eval_rows(client, args)] == ["p1"]

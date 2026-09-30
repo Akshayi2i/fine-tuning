@@ -49,7 +49,7 @@ def main(argv: list[str] | None = None) -> int:
     from artifact_registry import paths
     from artifact_registry.blob_client import BlobClient
     from common.schemas import resolved_schema, with_page_bounds
-    from evaluation.validation_generation import read_rows, split_prompt
+    from evaluation.validation_generation import split_prompt
     from inference_core.input_builder import page_total
     from inference_core.model_runner import generate_batch, load_model, release_model
     from training.stage_data import localize_rows
@@ -118,8 +118,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     client = BlobClient()
-    rows = read_rows(client.read_text(
-        paths.corpus_scope_eval_split(args.corpus, args.split, args.scope, args.tenant)))
+    rows = _eval_rows(client, args)
     if args.source:
         rows = [r for r in rows if r.get("source_id") == args.source]
     if not args.against_base:
@@ -406,6 +405,25 @@ def error_breakdown(report_path: str, top: int = 3) -> dict[str, dict]:
         out[label] = {"stats": dict(stats), "errors": {t: counts[t] for t in ERROR_TYPES},
                       "top_fields": {t: fields[t].most_common(top) for t in ERROR_TYPES}}
     return out
+
+
+def _eval_rows(client, args) -> list[dict]:
+    """The scope's rows of ``args.split``.
+
+    Training writes a scope's own copy of train and val only; test lives in the
+    corpus-wide file. Without a scoped copy, that file is read and narrowed to the
+    scope's document types.
+    """
+    from artifact_registry import paths
+    from common.scopes import get_scope
+    from evaluation.validation_generation import read_rows
+
+    scoped = paths.corpus_scope_eval_split(args.corpus, args.split, args.scope, args.tenant)
+    if client.exists(scoped):
+        return read_rows(client.read_text(scoped))
+    doc_types = set(get_scope(args.scope).doc_types)
+    rows = read_rows(client.read_text(paths.corpus_eval_split(args.corpus, args.split, args.tenant)))
+    return [r for r in rows if r.get("doc_type") in doc_types]
 
 
 def _report_path(split: str) -> str:
