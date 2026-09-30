@@ -77,3 +77,17 @@ def test_a_saved_comparison_can_be_rescored_without_the_gpu(tmp_path, monkeypatc
 
     rescored = script.rescore(str(out))
     assert rescored["checkpoint"]["list_field_recall"] == 1.0
+
+
+def test_table_rows_can_be_compared_from_a_saved_report(tmp_path):
+    script = _script()
+    env = lambda v: {"raw": v, "parsed": v, "page_ref": [1]}  # noqa: E731
+    report = {"checkpoint": {"generations": [{
+        "row": {"source_id": "p1", "lob": "homeowners", "messages": []},
+        "golden": {"forms_and_endorsements": [{"form_number": env("HO 00 03")}]},
+        "extraction": {"forms_and_endorsements": [{"form_number": env("CA 00 01")}]},
+    }]}}
+    path = tmp_path / "r.json"
+    path.write_text(json.dumps(report), encoding="utf-8")
+    [line] = script.list_details(str(path))
+    assert "key=['form_number']" in line and "HO 00 03" in line and "CA 00 01" in line

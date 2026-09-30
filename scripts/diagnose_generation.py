@@ -66,7 +66,13 @@ def main(argv: list[str] | None = None) -> int:
                         help="score base and checkpoint on every validation row")
     parser.add_argument("--rescore", default=None, metavar="REPORT",
                         help="score a saved --against-base report again, without the GPU")
+    parser.add_argument("--show-lists", dest="show_lists", default=None, metavar="REPORT",
+                        help="print expected vs written table rows from a saved report")
     args = parser.parse_args(argv)
+    if args.show_lists:
+        for line in list_details(args.show_lists):
+            print(line)
+        return 0
     if args.rescore:
         rescored = rescore(args.rescore)
         for name in COMPARED:
@@ -158,6 +164,40 @@ def rescore(report_path: str) -> dict[str, dict]:
             metrics = score_generations(generations, model_version=label)
             rescored[label] = {k: v for k, v in metrics.items() if isinstance(v, (int, float))}
     return rescored
+
+
+def list_details(report_path: str, limit: int = 6) -> list[str]:
+    """For each table in a saved report: what the label holds and what each model wrote.
+
+    One line per (model, row, table): the line of business, the identifier the
+    scorer matched on, and the first identifiers on each side. No GPU.
+    """
+    from common.canonical import values_view
+    from evaluation.metrics.field_accuracy import _at, _infer_key_fields, find_list_fields
+
+    report = json.loads(Path(report_path).read_text(encoding="utf-8"))
+    lines: list[str] = []
+    for label, entry in report.items():
+        shown = 0
+        for saved in entry.get("generations", []):
+            expected = values_view(saved.get("golden") or {})
+            got = values_view(saved.get("extraction") or {})
+            for path, rows in find_list_fields(expected).items():
+                keys = _infer_key_fields(rows)
+                got_rows = _at(got, path) or []
+                def ident(r, keys=keys):
+                    return tuple(r.get(k) for k in keys) if isinstance(r, dict) else r
+
+                lines.append(
+                    f"{label:<10} {saved['row'].get('source_id')} lob={saved['row'].get('lob')} "
+                    f"{path} key={keys}: expected {len(rows)} {[ident(r) for r in rows[:3]]} "
+                    f"| wrote {len(got_rows)} {[ident(r) for r in got_rows[:3]]}")
+                shown += 1
+                if shown >= limit:
+                    break
+            if shown >= limit:
+                break
+    return lines
 
 
 #: What the comparison prints, in order; the rest is in the report file.
