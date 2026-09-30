@@ -68,7 +68,27 @@ def main(argv: list[str] | None = None) -> int:
                         help="score a saved --against-base report again, without the GPU")
     parser.add_argument("--show-lists", dest="show_lists", default=None, metavar="REPORT",
                         help="print expected vs written table rows from a saved report")
+    parser.add_argument("--errors", default=None, metavar="REPORT",
+                        help="count every error type per model from a saved report")
     args = parser.parse_args(argv)
+    if args.errors:
+        breakdown = error_breakdown(args.errors)
+        labels = list(breakdown)
+        print(f"{'':<40}" + "".join(f"{label:>14}" for label in labels))
+        keys = sorted({k for b in breakdown.values() for k in b["stats"]},
+                      key=lambda k: ("table" in k, "unusable" in k or "lost" in k, k))
+        for key in keys:
+            print(f"{key:<40}" + "".join(f"{breakdown[x]['stats'].get(key, 0):>14}" for x in labels))
+        print("errors by type:")
+        for kind in ERROR_TYPES:
+            print(f"  {kind:<38}" + "".join(f"{breakdown[x]['errors'][kind]:>14}" for x in labels))
+        for label in labels:
+            print(f"most affected fields ({label}):")
+            for kind in ERROR_TYPES:
+                top_fields = ", ".join(f"{f} ({n})" for f, n in breakdown[label]["top_fields"][kind])
+                if top_fields:
+                    print(f"  {kind}: {top_fields}")
+        return 0
     if args.show_lists:
         for line in list_details(args.show_lists):
             print(line)
@@ -198,6 +218,80 @@ def list_details(report_path: str, limit: int = 6) -> list[str]:
             if shown >= limit:
                 break
     return lines
+
+
+#: Error types, in the order they are reported.
+ERROR_TYPES = ("left empty", "wrong value", "value from another field", "misread (near miss)",
+               "invented (not in the label)")
+
+
+def error_breakdown(report_path: str, top: int = 3) -> dict[str, dict]:
+    """Every wrong field in a saved report, by type, per model. No GPU.
+
+    Scored as checkpoint selection scores (``score_fields``), classified by the
+    gate's own ``classify_error``, with its catch-all split in two: a value that
+    belongs to another field of the same document, and a plain wrong value.
+    Answers that were not usable JSON are counted apart, since every field in
+    them is lost to the same cause.
+    """
+    from collections import Counter
+
+    from common.canonical import values_view
+    from evaluation.metrics.field_accuracy import (
+        _at,
+        _infer_key_fields,
+        _row_key,
+        find_list_fields,
+        flatten_scalars,
+        score_fields,
+    )
+    from training.vit_gate import classify_error
+
+    report = json.loads(Path(report_path).read_text(encoding="utf-8"))
+    out: dict[str, dict] = {}
+    for label, entry in report.items():
+        counts: Counter = Counter()
+        fields: dict[str, Counter] = {t: Counter() for t in ERROR_TYPES}
+        stats = Counter()
+        for saved in entry.get("generations", []):
+            stats["rows"] += 1
+            golden, got = saved.get("golden") or {}, saved.get("extraction") or {}
+            if saved.get("error"):
+                stats["unusable answers"] += 1
+                stats["fields lost in unusable answers"] += len(flatten_scalars(golden))
+                continue
+            accuracy = score_fields(golden, got)
+            stats["fields scored"] += accuracy.total
+            stats["fields correct"] += sum(r.correct for r in accuracy.results)
+            others = {str(v).strip() for v in flatten_scalars(golden).values() if v is not None}
+            for r in accuracy.failures():
+                kind = classify_error(r.expected, r.got, all_expected=golden)
+                if kind == "omission":
+                    name = "left empty"
+                elif kind == "unknown":
+                    name = "invented (not in the label)"
+                elif kind == "perception":
+                    name = "misread (near miss)"
+                elif str(r.got).strip() in others:
+                    name = "value from another field"
+                else:
+                    name = "wrong value"
+                counts[name] += 1
+                fields[name][r.field_path.split("[")[0]] += 1
+            expected_v, got_v = values_view(golden), values_view(got)
+            for path, rows in find_list_fields(expected_v).items():
+                keys = _infer_key_fields(rows)
+                got_rows = [r for r in (_at(got_v, path) or []) if isinstance(r, dict)]
+                expected_keys = Counter(_row_key(r, keys) for r in rows)
+                got_keys = Counter(_row_key(r, keys) for r in got_rows)
+                found = sum((expected_keys & got_keys).values())
+                stats["table rows expected"] += len(rows)
+                stats["table rows found"] += found
+                stats["table rows missed"] += len(rows) - found
+                stats["table rows written with no/unknown ID"] += len(got_rows) - found
+        out[label] = {"stats": dict(stats), "errors": {t: counts[t] for t in ERROR_TYPES},
+                      "top_fields": {t: fields[t].most_common(top) for t in ERROR_TYPES}}
+    return out
 
 
 #: What the comparison prints, in order; the rest is in the report file.

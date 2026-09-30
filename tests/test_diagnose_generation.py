@@ -91,3 +91,33 @@ def test_table_rows_can_be_compared_from_a_saved_report(tmp_path):
     path.write_text(json.dumps(report), encoding="utf-8")
     [line] = script.list_details(str(path))
     assert "key=['form_number']" in line and "HO 00 03" in line and "CA 00 01" in line
+
+
+def test_every_wrong_field_is_counted_by_type(tmp_path):
+    script = _script()
+    env = lambda v: {"raw": v, "parsed": v, "page_ref": [1]}  # noqa: E731
+    golden = {"policy": {"policy_number": env("HO-1"), "effective_date": env("01/01/2026"),
+                         "expiration_date": env("01/01/2027"), "insured": env("Jane Rivera"),
+                         "premium": env("1200")},
+              "forms_and_endorsements": [{"form_number": env("HO 00 03")},
+                                         {"form_number": env("HO 04 90")}]}
+    got = {"policy": {"policy_number": env("HO-1"),                 # correct
+                      "effective_date": env("01/01/2027"),          # value from another field
+                      "insured": env("Jane Riveia"),                # misread
+                      "premium": env("9999"),                       # wrong value
+                      "agent": env("Smith")},                       # invented
+           # expiration_date missing -> left empty
+           "forms_and_endorsements": [{"form_number": env("HO 00 03")}, {"form_title": env("x")}]}
+    report = {"checkpoint": {"generations": [
+        {"row": {"source_id": "p1"}, "golden": golden, "extraction": got, "error": None},
+        {"row": {"source_id": "p2"}, "golden": golden, "extraction": {}, "error": "JSONDecodeError: x"},
+    ]}}
+    path = tmp_path / "r.json"
+    path.write_text(json.dumps(report), encoding="utf-8")
+    result = script.error_breakdown(str(path))["checkpoint"]
+    assert result["errors"] == {"left empty": 1, "wrong value": 1, "value from another field": 1,
+                                "misread (near miss)": 1, "invented (not in the label)": 1}
+    stats = result["stats"]
+    assert stats["unusable answers"] == 1 and stats["fields correct"] == 1
+    assert stats["table rows expected"] == 2 and stats["table rows found"] == 1
+    assert stats["table rows written with no/unknown ID"] == 1
