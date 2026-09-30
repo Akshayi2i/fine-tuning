@@ -77,10 +77,17 @@ def main(argv: list[str] | None = None) -> int:
                         help="saved comparison (default: the one for --split)")
     parser.add_argument("--split", default="val", choices=["val", "test"],
                         help="validation rows (default) or the held-out test rows")
+    parser.add_argument("--build-document", dest="build_document", default=None,
+                        metavar="SOURCE_ID",
+                        help="with --against-base: build this one document's rows from Blob "
+                             "(label, OCR, page images) instead of reading a split - for a "
+                             "document in any split, training included")
     parser.add_argument("--mode", default="ocr_plus_image",
                         choices=["ocr_plus_image", "noisy_ocr_image", "image_only"])
     args = parser.parse_args(argv)
-    args.report = args.report or _report_path(args.split)
+    args.report = args.report or (
+        _document_report_path(args.build_document) if args.build_document
+        else _report_path(args.split))
     if args.document:
         return _print_document(args)
     if args.errors:
@@ -118,7 +125,8 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     client = BlobClient()
-    rows = _eval_rows(client, args)
+    rows = (_document_rows(client, args.build_document, args.tenant) if args.build_document
+            else _eval_rows(client, args))
     if args.source:
         rows = [r for r in rows if r.get("source_id") == args.source]
     if not args.against_base:
@@ -407,6 +415,45 @@ def error_breakdown(report_path: str, top: int = 3) -> dict[str, dict]:
     return out
 
 
+def _document_rows(client, source_id: str, tenant: str) -> list[dict]:
+    """One document's rows in all three reading modes, built as the dataset build
+    builds them: the stored label, the MinerU text of every page, the page images.
+
+    For a document outside the validation and test files - a training document
+    included. The fine-tuned model has then seen this document and its answer in
+    training, so its score measures recall of training data, not extraction of a
+    new document; the base model's does not change.
+    """
+    from artifact_registry import paths
+    from data_pipeline.dataset_builder.build_jsonl import SourceDocument, expand_document
+    from data_pipeline.labeling.export_golden_labels import load_golden_label
+
+    label, metadata = load_golden_label(source_id, "policy", client, tenant)
+    page_count = int(client.read_json(paths.ocr_meta("policy", source_id, tenant)).get("page_count") or 0)
+    if page_count < 1:
+        raise SystemExit(f"{source_id} has no OCR'd pages")
+    document = SourceDocument(
+        source_id=source_id, doc_type="policy", golden_label=label,
+        ocr_pages=[client.read_text(paths.processed_page("policy", source_id, page, "md", tenant))
+                   for page in range(1, page_count + 1)],
+        image_paths=[paths.processed_page("policy", source_id, page, "png", tenant)
+                     for page in range(1, page_count + 1)],
+        acord_form=metadata.get("acord_form"), lob=metadata.get("lob"), tenant_id=tenant,
+        field_provenance=metadata.get("field_provenance", {}),
+        synthetic=bool(metadata.get("synthetic", False)),
+        delivered_split=metadata.get("split"), template_id=metadata.get("template_id"),
+    )
+    # "val": every reading mode, as the validation rows are built.
+    rows, _details = expand_document(document, "val")
+    print(f"{source_id}: {page_count} pages, {len(rows)} rows "
+          f"(delivered split: {metadata.get('split')})")
+    return rows
+
+
+def _document_report_path(source_id: str) -> str:
+    return f"/workspace/logs/base_vs_checkpoint_{source_id}.json"
+
+
 def _eval_rows(client, args) -> list[dict]:
     """The scope's rows of ``args.split``.
 
@@ -598,7 +645,7 @@ def _against_base(rows: list[dict], client, args) -> int:
     finally:
         release_model(model)
 
-    out = Path(args.out or _report_path(args.split))
+    out = Path(args.out or args.report)
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(results, indent=2), encoding="utf-8")
 

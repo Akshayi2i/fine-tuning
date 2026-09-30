@@ -214,3 +214,25 @@ def test_the_test_split_falls_back_to_the_corpus_wide_file_for_the_scope():
                       "\n".join(json.dumps(r) for r in rows))
     args = SimpleNamespace(corpus="v0", split="test", scope="personal_lines", tenant="smoke")
     assert [r["source_id"] for r in script._eval_rows(client, args)] == ["p1"]
+
+
+def test_one_documents_rows_are_built_from_blob_in_every_reading_mode():
+    """For a document outside val and test (a training one included)."""
+    from artifact_registry import paths
+    from artifact_registry.blob_client import BlobClient, InMemoryBackend
+
+    script = _script()
+    client = BlobClient(backend=InMemoryBackend(), container="main", raw_container="main")
+    label = {"policy": {"policy_number": _env("HO-1")},
+             "named_insured": {"primary_name": _env("Jane Rivera")}}
+    client.write_json(paths.golden_label("policy", "policy_0001", "smoke"), label)
+    client.write_json(paths.label_metadata("policy", "policy_0001", "smoke"),
+                      {"lob": "homeowners", "split": "train", "synthetic": False})
+    client.write_json(paths.ocr_meta("policy", "policy_0001", "smoke"), {"page_count": 2})
+    for page in (1, 2):
+        client.write_text(paths.processed_page("policy", "policy_0001", page, "md", "smoke"),
+                          "DECLARATIONS Policy HO-1 Jane Rivera")
+    rows = script._document_rows(client, "policy_0001", "smoke")
+    assert rows and {r["source_id"] for r in rows} == {"policy_0001"}
+    assert {r["modality_mode"] for r in rows} == {"ocr_plus_image", "noisy_ocr_image", "image_only"}
+    assert script._document_report_path("policy_0001").endswith("base_vs_checkpoint_policy_0001.json")
