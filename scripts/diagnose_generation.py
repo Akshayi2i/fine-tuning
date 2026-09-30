@@ -55,7 +55,7 @@ def main(argv: list[str] | None = None) -> int:
     from training.stage_data import localize_rows
 
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--checkpoint", required=True, help="adapter directory to apply")
+    parser.add_argument("--checkpoint", default=None, help="adapter directory to apply")
     parser.add_argument("--corpus", default="v0")
     parser.add_argument("--tenant", default="smoke")
     parser.add_argument("--scope", default="personal_lines")
@@ -64,7 +64,18 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--out", default=None, help="report path (default under /workspace/logs)")
     parser.add_argument("--against-base", dest="against_base", action="store_true",
                         help="score base and checkpoint on every validation row")
+    parser.add_argument("--rescore", default=None, metavar="REPORT",
+                        help="score a saved --against-base report again, without the GPU")
     args = parser.parse_args(argv)
+    if args.rescore:
+        rescored = rescore(args.rescore)
+        for name in COMPARED:
+            values = [rescored.get(label, {}).get(name) for label in ("base", "checkpoint")]
+            print(f"{name:<32}" + "".join(f"{v:>12.3f}" if v is not None else f"{'-':>12}"
+                                          for v in values))
+        return 0
+    if not args.checkpoint:
+        parser.error("--checkpoint is required unless --rescore is given")
 
     # On the pod, run detached in tmux: loading vLLM takes minutes.
     from orchestration.detach import detach_script_if_needed
@@ -122,6 +133,33 @@ def main(argv: list[str] | None = None) -> int:
     return 0
 
 
+def _saved(generation) -> dict:
+    """One generation as the report keeps it: the row's scoring metadata, the
+    label, the answer. Page images are kept as a count, which is all scoring reads."""
+    row = generation.row
+    images = sum(1 for m in row.get("messages", []) if isinstance(m.get("content"), list)
+                 for part in m["content"] if isinstance(part, dict) and part.get("type") == "image")
+    slim = {k: row.get(k) for k in ("source_id", "doc_type", "acord_form", "lob", "sections",
+                                    "modality_mode", "is_scanned")}
+    slim["messages"] = [{"role": "user", "content": [{"type": "image"}] * images}]
+    return {"row": slim, "golden": generation.golden, "extraction": generation.extraction,
+            "error": generation.error, "failure_kind": generation.failure_kind}
+
+
+def rescore(report_path: str) -> dict[str, dict]:
+    """Score a saved comparison again with the current scorer. No GPU."""
+    from evaluation.validation_generation import ValidationGeneration, score_generations
+
+    report = json.loads(Path(report_path).read_text(encoding="utf-8"))
+    rescored = {}
+    for label, entry in report.items():
+        generations = [ValidationGeneration(**saved) for saved in entry.get("generations", [])]
+        if generations:
+            metrics = score_generations(generations, model_version=label)
+            rescored[label] = {k: v for k, v in metrics.items() if isinstance(v, (int, float))}
+    return rescored
+
+
 #: What the comparison prints, in order; the rest is in the report file.
 COMPARED = ("field_normalized_match", "schema_validity_rate", "false_null_rate",
             "image_only_accuracy", "ocr_arbitration_accuracy", "list_field_recall",
@@ -146,6 +184,9 @@ def _against_base(rows: list[dict], client, args) -> int:
                 "setup_failures": sum(bool(g.error) and g.failure_kind != "output"
                                       for g in generations),
                 "metrics": {k: v for k, v in metrics.items() if isinstance(v, (int, float))},
+                # Every answer with its label, so a scoring question can be
+                # answered again (--rescore) without the GPU.
+                "generations": [_saved(g) for g in generations],
             }
     finally:
         release_model(model)

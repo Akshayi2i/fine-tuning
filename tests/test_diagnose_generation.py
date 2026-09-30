@@ -47,3 +47,33 @@ def test_base_and_checkpoint_are_scored_on_the_same_rows(tmp_path, monkeypatch):
     assert report["base"]["metrics"]["field_normalized_match"] == 0.0
     assert report["checkpoint"]["metrics"]["field_normalized_match"] == 1.0
     assert report["base"]["unusable_json"] == 2 and report["checkpoint"]["unusable_json"] == 0
+
+
+def test_a_saved_comparison_can_be_rescored_without_the_gpu(tmp_path, monkeypatch):
+    """Scoring questions (list recall read 0.0 under the old row matcher) must
+    not cost another pass over the validation set on the pod."""
+    import evaluation.validation_generation as V
+    import inference_core.model_runner as M
+
+    golden = {"forms_and_endorsements": [
+        {"form_number": {"raw": "HO 00 03", "parsed": "HO 00 03", "page_ref": [1]},
+         "form_title": {"raw": "Homeowners 3", "parsed": "Homeowners 3", "page_ref": [1]}}]}
+    got = {"forms_and_endorsements": [
+        {"form_number": {"raw": "HO-0003", "parsed": "HO-0003", "page_ref": [2]},
+         "form_title": {"raw": "Homeowners", "parsed": "Homeowners", "page_ref": [2]}}]}
+    row = {"source_id": "p1", "doc_type": "policy", "lob": "homeowners", "sections": "arrays",
+           "messages": [{"role": "user", "content": [{"type": "image", "image": "x"}]}]}
+
+    monkeypatch.setattr(V, "generate_validation", lambda rows, model, adapter=None: [
+        ValidationGeneration(row=r, golden=golden, extraction=got) for r in rows])
+    monkeypatch.setattr(M, "load_model", lambda tag, client: object())
+    monkeypatch.setattr(M, "release_model", lambda model: None)
+
+    script = _script()
+    out = tmp_path / "report.json"
+    script._against_base([row], None, SimpleNamespace(checkpoint="/ckpt", out=str(out)))
+    saved = json.loads(out.read_text(encoding="utf-8"))["checkpoint"]["generations"][0]
+    assert saved["row"]["messages"][0]["content"] == [{"type": "image"}]   # images as a count
+
+    rescored = script.rescore(str(out))
+    assert rescored["checkpoint"]["list_field_recall"] == 1.0
