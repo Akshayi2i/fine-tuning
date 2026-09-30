@@ -175,11 +175,11 @@ def generate_validation(
 
 
 def _record_failure(entry: ValidationGeneration, exc: BaseException, kind: str,
-                    note: str = "") -> None:
+                    note: str = "", evidence: str = "") -> None:
     # Scored as an empty extraction, not skipped: a model that cannot produce
     # JSON for a document has got every field on it wrong, and leaving it out
     # would score the model on the documents it managed.
-    entry.error = f"{note}{type(exc).__name__}: {exc}"
+    entry.error = f"{note}{type(exc).__name__}: {exc}{evidence}"
     entry.failure_kind = kind
     entry.extraction = {}
     log.warning("validation generation failed for %s: %s", entry.row.get("source_id"), exc)
@@ -203,8 +203,15 @@ def _finish(entry: ValidationGeneration, result: Any) -> None:
         extraction = with_output_dates(extraction)
     except Exception as exc:  # noqa: BLE001 - one bad row must not lose the rest
         truncated = bool(getattr(result, "truncated", lambda: False)())
+        text = getattr(result, "text", "") or ""
+        # How generation ended and what it ended on: the parse error alone cannot
+        # tell a model looping to the limit from a decode that stopped mid-value.
+        evidence = (f" [finish={getattr(result, 'finish_reason', None)}, "
+                    f"{len(getattr(result, 'tokens', []) or [])} tokens, {len(text)} chars, "
+                    f"ends {text[-60:]!r}]")
         _record_failure(entry, exc, "output",
-                        "stopped at the token limit before the JSON closed - " if truncated else "")
+                        "stopped at the token limit before the JSON closed - " if truncated else "",
+                        evidence)
         return
     entry.extraction = extraction
     entry.logprobs_by_path = {
