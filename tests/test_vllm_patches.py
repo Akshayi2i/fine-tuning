@@ -207,3 +207,56 @@ def test_the_engine_forbids_free_whitespace_on_a_backend_that_honours_it():
     from inference_core.model_runner import STRUCTURED_OUTPUTS_ENGINE
 
     assert STRUCTURED_OUTPUTS_ENGINE == {"backend": "xgrammar", "disable_any_whitespace": True}
+
+
+# --------------------------------------------------------------------------
+# page_ref bounded to the document's pages
+# --------------------------------------------------------------------------
+
+
+def test_page_refs_are_held_to_the_documents_pages():
+    """A smoke-run answer counted page_ref on to 1528 and hit max_new_tokens."""
+    from common.schemas import resolved_schema, with_page_bounds
+
+    base = resolved_schema("policy", None, "homeowners", None)
+    bounded = with_page_bounds(base, 12)
+    ref = bounded["$defs"]["FieldValue"]["properties"]["page_ref"]
+    assert ref["maxItems"] == 12
+    assert ref["items"] == {"type": "integer", "minimum": 1, "maximum": 12}
+    assert "maxItems" not in base["$defs"]["FieldValue"]["properties"]["page_ref"]  # cache untouched
+    assert with_page_bounds(base, None) is base
+
+
+def test_the_bounded_schema_is_one_xgrammar_compiles():
+    from common.schemas import resolved_schema, with_page_bounds
+
+    assert not _xgrammar_unsupported(with_page_bounds(resolved_schema("policy", None, None, None), 7))
+
+
+def test_the_page_count_is_read_from_the_prompts_markers():
+    from inference_core.input_builder import page_total
+
+    messages = [{"role": "user", "content": [
+        {"type": "image", "image": "a"}, {"type": "text", "text": "<page 9 of 20>\nDECLARATIONS"},
+        {"type": "text", "text": "<page 10 of 20>\n..."}]}]
+    assert page_total(messages) == 20
+    assert page_total([{"role": "user", "content": "no markers"}]) is None
+
+
+def test_validation_generation_constrains_with_the_bound(monkeypatch):
+    from artifact_registry.blob_client import BlobClient, InMemoryBackend
+    from evaluation.validation_generation import generate_validation
+    from inference_core import model_runner as M
+
+    seen = []
+    backend = M.EchoBackend('{"a":1}')
+    real = backend.generate_batch
+    backend.generate_batch = lambda msgs, configs, adapter=None: (
+        seen.extend(c.json_schema for c in configs), real(msgs, configs, adapter))[1]
+    client = BlobClient(backend=InMemoryBackend(), container="main", raw_container="raw")
+    model = M.load_model("base", client, backend_impl=backend)
+    row = {"source_id": "p1", "doc_type": "policy", "lob": "homeowners", "messages": [
+        {"role": "user", "content": [{"type": "text", "text": "<page 1 of 3>\ntext"}]},
+        {"role": "assistant", "content": '{"a": 1}'}]}
+    generate_validation([row], model, constrain=True)
+    assert seen[0]["$defs"]["FieldValue"]["properties"]["page_ref"]["maxItems"] == 3

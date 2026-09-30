@@ -441,6 +441,42 @@ def schema_version(
     return str(node)
 
 
+def with_page_bounds(schema: dict[str, Any], page_count: int | None) -> dict[str, Any]:
+    """The decoding schema with every ``page_ref`` held to the document's pages.
+
+    ``page_ref`` is a list of integers with no bound, and a model that starts a
+    run of consecutive pages - labels carry lists like ``[.., 98, 99, 100]`` -
+    can count on past the last page: a smoke-run answer reached ``1528`` and hit
+    max_new_tokens, scored as a wrong answer after 8,192 tokens. Bounded to
+    ``1..page_count``, with at most ``page_count`` entries, it must close the list.
+
+    For the decoding constraint only. The schema rendered into the prompt stays
+    the one training showed. A copy; the cached schema is not touched. Unknown
+    or non-positive ``page_count`` returns ``schema`` unchanged.
+    """
+    import copy
+
+    if not page_count or page_count < 1:
+        return schema
+    bounded = copy.deepcopy(schema)
+
+    def walk(node: Any) -> None:
+        if isinstance(node, dict):
+            ref = (node.get("properties") or {}).get("page_ref")
+            if isinstance(ref, dict) and ref.get("type") == "array":
+                items = ref.get("items") if isinstance(ref.get("items"), dict) else {}
+                ref["items"] = {**items, "minimum": 1, "maximum": int(page_count)}
+                ref["maxItems"] = int(page_count)
+            for value in node.values():
+                walk(value)
+        elif isinstance(node, list):
+            for value in node:
+                walk(value)
+
+    walk(bounded)
+    return bounded
+
+
 def resolved_schema(
     doc_type: str,
     acord_form: str | None = None,

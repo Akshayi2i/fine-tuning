@@ -48,8 +48,9 @@ def _describe(result, schema_used: bool) -> dict:
 def main(argv: list[str] | None = None) -> int:
     from artifact_registry import paths
     from artifact_registry.blob_client import BlobClient
-    from common.schemas import resolved_schema
+    from common.schemas import resolved_schema, with_page_bounds
     from evaluation.validation_generation import read_rows, split_prompt
+    from inference_core.input_builder import page_total
     from inference_core.model_runner import generate_batch, load_model, release_model
     from training.stage_data import localize_rows
 
@@ -87,8 +88,10 @@ def main(argv: list[str] | None = None) -> int:
     args.out = args.out or "/workspace/logs/diagnose_generation.json"
 
     prompts = [split_prompt(row)[0] for row in rows]
-    schemas = [resolved_schema(r["doc_type"], r.get("acord_form"), r.get("lob"), r.get("sections"))
-               for r in rows]
+    schemas = [with_page_bounds(
+                   resolved_schema(r["doc_type"], r.get("acord_form"), r.get("lob"), r.get("sections")),
+                   page_total(prompt))
+               for r, prompt in zip(rows, prompts, strict=True)]
     model = load_model("base", client)
     report = []
     try:

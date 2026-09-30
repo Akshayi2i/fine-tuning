@@ -51,6 +51,25 @@ from common.schemas import schema_version
 PAGE_MARKER = "<page {page} of {total}>"
 
 
+def page_total(messages: list[dict[str, Any]]) -> int | None:
+    """The document's page count, read back from a prompt's page markers.
+
+    Every page a prompt carries is marked ``<page i of N>``; ``N`` is the whole
+    document, not the window. None when no marker is present.
+    """
+    import re
+
+    totals = [
+        int(match)
+        for message in messages
+        if isinstance(message.get("content"), list)
+        for part in message["content"]
+        if isinstance(part, dict) and part.get("type") == "text"
+        for match in re.findall(r"<page \d+ of (\d+)>", part.get("text") or "")
+    ]
+    return max(totals) if totals else None
+
+
 class InputBuilderError(RuntimeError):
     """Raised on an unusable modality mode, page list, or image path."""
 

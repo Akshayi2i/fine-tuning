@@ -40,7 +40,13 @@ from calibration.list_completeness import (
 from calibration.logprob_confidence import field_confidences
 from common.canonical import collapse_spans, envelope, values_view, with_output_dates
 from common.constants import DEFAULT_LONG_DOC_PAGE_THRESHOLD, DEFAULT_REVIEW_CONFIDENCE_THRESHOLD
-from common.schemas import is_canonical, is_valid, iter_validation_errors, resolved_schema
+from common.schemas import (
+    is_canonical,
+    is_valid,
+    iter_validation_errors,
+    resolved_schema,
+    with_page_bounds,
+)
 from inference_core.input_builder import EMPTY_PAGE_TEXT, build_messages
 from inference_core.model_runner import Generation, LoadedModel, generate, generate_batch
 from inference_core.span_map import SpanMapError, map_field_spans
@@ -213,8 +219,13 @@ def _build_request(
     # (arch v2.1 §13). Without this the schema-validity floor in §13b measured an
     # unconstrained model, so one malformed bf16 output made every quantized
     # format unvalidatable.
+    # Page references bounded to the document's pages (with_page_bounds): an
+    # unbounded list let a model count past the last page to max_new_tokens.
     schema = (
-        resolved_schema(route_.schema_doc_type, route_.schema_acord_form, lob, sections)
+        with_page_bounds(
+            resolved_schema(route_.schema_doc_type, route_.schema_acord_form, lob, sections),
+            total_pages or len(image_paths),
+        )
         if getattr(model.config, "structured_outputs", False) else None
     )
     return built.messages, schema
