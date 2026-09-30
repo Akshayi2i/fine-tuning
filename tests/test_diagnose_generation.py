@@ -139,3 +139,41 @@ def test_every_wrong_field_is_counted_by_type(tmp_path):
     assert stats["unusable answers"] == 1 and stats["fields correct"] == 1
     assert stats["table rows expected"] == 2 and stats["table rows found"] == 1
     assert stats["table rows written with no/unknown ID"] == 1
+
+
+def test_one_document_is_compared_field_by_field_across_its_windows(tmp_path):
+    script = _script()
+    null = {"raw": None, "parsed": None, "page_ref": []}
+    gold_decl = {"policy": {"policy_number": _env("HO-1"), "effective_date": _env("01/01/2026"),
+                            "premium": _env("1200")}}
+    gold_arrays = {"forms_and_endorsements": [{"form_number": _env("HO 00 03")}]}
+    row = lambda sections: {"source_id": "p1", "lob": "homeowners", "sections": sections,  # noqa: E731
+                            "modality_mode": "ocr_plus_image", "messages": []}
+    base = [{"row": row("decl"), "golden": gold_decl, "error": None,
+             "extraction": {"policy": {"policy_number": _env("HO-9"),          # wrong value
+                                       "effective_date": null,                # written as null
+                                       "agent": _env("Invented")}}},          # invented
+            {"row": row("arrays"), "golden": gold_arrays, "error": None, "extraction": {}}]
+    tuned = [{"row": row("decl"), "golden": gold_decl, "error": None,
+              "extraction": {"policy": {"policy_number": _env("HO-1"),
+                                        "effective_date": _env("01/01/2026")}}},
+             {"row": row("arrays"), "golden": gold_arrays, "error": None,
+              "extraction": {"forms_and_endorsements": [{"form_number": _env("HO-0003")}]}}]
+    path = tmp_path / "r.json"
+    path.write_text(json.dumps({"base": {"generations": base}, "checkpoint": {"generations": tuned}}),
+                    encoding="utf-8")
+
+    result = script.document_comparison(str(path), "p1")
+    by_field = {r["field"]: r for r in result["fields"]}
+    assert by_field["policy.policy_number"]["base outcome"] == "wrong value"
+    assert by_field["policy.effective_date"]["base outcome"] == "written as null"
+    assert by_field["policy.premium"]["base outcome"] == "missing (not written)"
+    assert by_field["policy.agent"]["base outcome"] == "invented (not in gold)"
+    assert by_field["policy.policy_number"]["checkpoint outcome"] == "correct"
+    tuned_summary = result["summary"]["checkpoint"]
+    assert tuned_summary["outcomes"]["correct"] >= 2 and tuned_summary["outcomes"]["missing (not written)"] == 1
+    assert tuned_summary["table_rows"]["forms_and_endorsements"] == "1 of 1 found, 1 written"
+    assert result["summary"]["base"]["accuracy"] == 0.0
+
+    rc = script.main(["--document", "p1", "--report", str(path), "--out", str(tmp_path / "c.csv")])
+    assert rc == 0 and "policy.premium" in (tmp_path / "c.csv").read_text(encoding="utf-8-sig")

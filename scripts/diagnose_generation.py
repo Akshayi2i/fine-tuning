@@ -70,7 +70,15 @@ def main(argv: list[str] | None = None) -> int:
                         help="print expected vs written table rows from a saved report")
     parser.add_argument("--errors", default=None, metavar="REPORT",
                         help="count every error type per model from a saved report")
+    parser.add_argument("--document", default=None, metavar="SOURCE_ID",
+                        help="with --report: gold vs base vs fine-tuned for one document "
+                             "('list' shows the documents)")
+    parser.add_argument("--report", default="/workspace/logs/base_vs_checkpoint.json")
+    parser.add_argument("--mode", default="ocr_plus_image",
+                        choices=["ocr_plus_image", "noisy_ocr_image", "image_only"])
     args = parser.parse_args(argv)
+    if args.document:
+        return _print_document(args)
     if args.errors:
         breakdown = error_breakdown(args.errors)
         labels = list(breakdown)
@@ -234,6 +242,93 @@ def list_details(report_path: str, limit: int = 6) -> list[str]:
     return lines
 
 
+def _merge(into: dict, part: dict) -> dict:
+    """One document's answer from its windows: each window writes its own sections."""
+    for key, value in (part or {}).items():
+        if isinstance(value, dict) and isinstance(into.get(key), dict):
+            _merge(into[key], value)
+        elif key not in into:
+            into[key] = value
+    return into
+
+
+#: Field outcomes in a document comparison, worst first.
+OUTCOMES = ("missing (not written)", "written as null", "wrong value", "invented (not in gold)",
+            "correct")
+
+
+def _outcome(path: str, gold: dict, got: dict) -> str | None:
+    from common.normalize import values_match
+    from evaluation.metrics.extraction_faults import _is_empty
+
+    in_gold = path in gold and not _is_empty(gold[path])
+    if path not in got:
+        return "missing (not written)" if in_gold else None
+    if _is_empty(got[path]):
+        return "written as null" if in_gold else None
+    if not in_gold:
+        return "invented (not in gold)"
+    return "correct" if values_match(gold[path], got[path], field_path=path) else "wrong value"
+
+
+def document_comparison(report_path: str, source_id: str, mode: str = "ocr_plus_image") -> dict:
+    """Gold against each model's answer for ONE document, field by field. No GPU.
+
+    The document's windows are merged back into one answer per model. Each gold
+    field is marked correct, wrong value, missing (the model did not write the
+    field at all) or written as null (it wrote the field, empty); a field the
+    model wrote that gold does not have is marked invented. Table rows are
+    compared by position; the table totals use the scorer's own row matching.
+    """
+    from collections import Counter
+
+    from common.canonical import values_view
+    from evaluation.metrics.field_accuracy import flatten_scalars, score_all_list_fields, score_fields
+
+    report = json.loads(Path(report_path).read_text(encoding="utf-8"))
+    gold: dict = {}
+    answers: dict[str, dict] = {}
+    unusable: Counter = Counter()
+    for label, entry in report.items():
+        answer: dict = {}
+        for saved in entry.get("generations", []):
+            row = saved["row"]
+            if row.get("source_id") != source_id or row.get("modality_mode") != mode:
+                continue
+            if label == "base":
+                _merge(gold, saved.get("golden") or {})
+            if saved.get("error"):
+                unusable[label] += 1
+            _merge(answer, saved.get("extraction") or {})
+        answers[label] = answer
+    if not gold:
+        raise SystemExit(f"no {mode} rows for {source_id} in {report_path}")
+
+    gold_flat = flatten_scalars(gold)
+    flats = {label: flatten_scalars(answer) for label, answer in answers.items()}
+    paths = sorted(set(gold_flat).union(*flats.values()))
+    rows, summary = [], {}
+    for label, flat in flats.items():
+        outcomes = Counter(o for o in (_outcome(p, gold_flat, flat) for p in paths) if o)
+        accuracy = score_fields(gold, answers[label])
+        tables = score_all_list_fields(values_view(gold), values_view(answers[label]))
+        summary[label] = {
+            "accuracy": accuracy.normalized_match if accuracy.total else None,
+            "fields_correct": sum(r.correct for r in accuracy.results),
+            "fields_scored": accuracy.total,
+            "outcomes": {o: outcomes.get(o, 0) for o in OUTCOMES},
+            "table_rows": {name: f"{t.matched_rows} of {t.expected_rows} found, {t.got_rows} written"
+                           for name, t in tables.items()},
+            "unusable_windows": unusable.get(label, 0),
+        }
+    for path in paths:
+        rows.append({"field": path, "gold": gold_flat.get(path),
+                     **{f"{label}": flats[label].get(path) for label in flats},
+                     **{f"{label} outcome": _outcome(path, gold_flat, flats[label]) or ""
+                        for label in flats}})
+    return {"source_id": source_id, "mode": mode, "summary": summary, "fields": rows}
+
+
 #: Error types, in the order they are reported.
 ERROR_TYPES = ("left empty", "wrong value", "value from another field", "misread (near miss)",
                "invented (not in the label)")
@@ -306,6 +401,60 @@ def error_breakdown(report_path: str, top: int = 3) -> dict[str, dict]:
         out[label] = {"stats": dict(stats), "errors": {t: counts[t] for t in ERROR_TYPES},
                       "top_fields": {t: fields[t].most_common(top) for t in ERROR_TYPES}}
     return out
+
+
+def _print_document(args) -> int:
+    """--document: list the documents, or compare one and write its field table as CSV."""
+    import csv
+
+    if args.document == "list":
+        report = json.loads(Path(args.report).read_text(encoding="utf-8"))
+        seen: dict[str, str] = {}
+        for saved in next(iter(report.values()))["generations"]:
+            seen.setdefault(saved["row"]["source_id"], str(saved["row"].get("lob")))
+        for source_id, lob in sorted(seen.items()):
+            print(f"{source_id}  lob={lob}{_provenance(source_id, args.tenant)}")
+        return 0
+
+    result = document_comparison(args.report, args.document, args.mode)
+    print(f"document {args.document}{_provenance(args.document, args.tenant)}  (reading: {args.mode})")
+    labels = list(result["summary"])
+    print(f"{'':<34}" + "".join(f"{'fine-tuned' if x == 'checkpoint' else x:>14}" for x in labels))
+    acc = [result["summary"][x]["accuracy"] for x in labels]
+    print(f"{'accuracy (single fields)':<34}" + "".join(
+        f"{a:>14.1%}" if a is not None else f"{'-':>14}" for a in acc))
+    print(f"{'fields correct / scored':<34}" + "".join(
+        f"{str(result['summary'][x]['fields_correct']) + ' / ' + str(result['summary'][x]['fields_scored']):>14}"
+        for x in labels))
+    for outcome in OUTCOMES:
+        print(f"{outcome:<34}" + "".join(f"{result['summary'][x]['outcomes'][outcome]:>14}" for x in labels))
+    print(f"{'unusable windows':<34}" + "".join(f"{result['summary'][x]['unusable_windows']:>14}" for x in labels))
+    for x in labels:
+        for table, text in result["summary"][x]["table_rows"].items():
+            print(f"  table {table} ({'fine-tuned' if x == 'checkpoint' else x}): {text}")
+    out = Path(args.out or f"/workspace/logs/compare_{args.document}_{args.mode}.csv")
+    out.parent.mkdir(parents=True, exist_ok=True)
+    columns = ["field", "gold"] + [c for x in labels for c in (x, f"{x} outcome")]
+    with out.open("w", newline="", encoding="utf-8-sig") as handle:
+        writer = csv.DictWriter(handle, fieldnames=columns)
+        writer.writeheader()
+        for row in result["fields"]:
+            writer.writerow({c: "" if row.get(c) is None else row.get(c) for c in columns})
+    print(f"field-by-field table ({len(result['fields'])} fields): {out}")
+    return 0
+
+
+def _provenance(source_id: str, tenant: str) -> str:
+    """The delivered bundle a document was imported from, and whether it is synthetic."""
+    try:
+        from artifact_registry import paths
+        from artifact_registry.blob_client import BlobClient
+
+        meta = BlobClient().read_json(paths.label_metadata("policy", source_id, tenant))
+        kind = "synthetic" if meta.get("synthetic") else "real"
+        return f"  [{kind}, from {meta.get('imported_from')}]"
+    except Exception:  # noqa: BLE001 - provenance is a courtesy; the comparison stands without it
+        return ""
 
 
 #: What the comparison prints, in order: (metric, plain name). The rest is in the report.
