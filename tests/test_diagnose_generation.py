@@ -177,3 +177,9 @@ def test_one_document_is_compared_field_by_field_across_its_windows(tmp_path):
 
     rc = script.main(["--document", "p1", "--report", str(path), "--out", str(tmp_path / "c.csv")])
     assert rc == 0 and "policy.premium" in (tmp_path / "c.csv").read_text(encoding="utf-8-sig")
+
+
+def test_the_test_split_gets_its_own_report():
+    script = _script()
+    assert script._report_path("val").endswith("base_vs_checkpoint.json")
+    assert script._report_path("test").endswith("base_vs_checkpoint_test.json")

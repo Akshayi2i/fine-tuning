@@ -73,10 +73,14 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--document", default=None, metavar="SOURCE_ID",
                         help="with --report: gold vs base vs fine-tuned for one document "
                              "('list' shows the documents)")
-    parser.add_argument("--report", default="/workspace/logs/base_vs_checkpoint.json")
+    parser.add_argument("--report", default=None,
+                        help="saved comparison (default: the one for --split)")
+    parser.add_argument("--split", default="val", choices=["val", "test"],
+                        help="validation rows (default) or the held-out test rows")
     parser.add_argument("--mode", default="ocr_plus_image",
                         choices=["ocr_plus_image", "noisy_ocr_image", "image_only"])
     args = parser.parse_args(argv)
+    args.report = args.report or _report_path(args.split)
     if args.document:
         return _print_document(args)
     if args.errors:
@@ -115,7 +119,7 @@ def main(argv: list[str] | None = None) -> int:
 
     client = BlobClient()
     rows = read_rows(client.read_text(
-        paths.corpus_scope_eval_split(args.corpus, "val", args.scope, args.tenant)))
+        paths.corpus_scope_eval_split(args.corpus, args.split, args.scope, args.tenant)))
     if args.source:
         rows = [r for r in rows if r.get("source_id") == args.source]
     if not args.against_base:
@@ -403,6 +407,12 @@ def error_breakdown(report_path: str, top: int = 3) -> dict[str, dict]:
     return out
 
 
+def _report_path(split: str) -> str:
+    """Where a comparison over ``split`` is saved; the validation one keeps its old name."""
+    suffix = "" if split == "val" else f"_{split}"
+    return f"/workspace/logs/base_vs_checkpoint{suffix}.json"
+
+
 def _print_document(args) -> int:
     """--document: list the documents, or compare one and write its field table as CSV."""
     import csv
@@ -530,7 +540,7 @@ def _against_base(rows: list[dict], client, args) -> int:
     finally:
         release_model(model)
 
-    out = Path(args.out or "/workspace/logs/base_vs_checkpoint.json")
+    out = Path(args.out or _report_path(args.split))
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(results, indent=2), encoding="utf-8")
 
