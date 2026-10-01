@@ -293,7 +293,7 @@ def document_comparison(report_path: str, source_id: str, mode: str = "ocr_plus_
     """
     from collections import Counter
 
-    from common.canonical import values_view
+    from common.canonical import values_view, without_system_fields
     from evaluation.metrics.field_accuracy import flatten_scalars, score_all_list_fields, score_fields
 
     report = json.loads(Path(report_path).read_text(encoding="utf-8"))
@@ -314,6 +314,9 @@ def document_comparison(report_path: str, source_id: str, mode: str = "ocr_plus_
         answers[label] = answer
     if not gold:
         raise SystemExit(f"no {mode} rows for {source_id} in {report_path}")
+    # Scored as the evaluation scores: the system-supplied fields count nothing.
+    gold = without_system_fields(gold)
+    answers = {label: without_system_fields(answer) for label, answer in answers.items()}
 
     gold_flat = flatten_scalars(gold)
     flats = {label: flatten_scalars(answer) for label, answer in answers.items()}
@@ -357,7 +360,7 @@ def error_breakdown(report_path: str, top: int = 3) -> dict[str, dict]:
     """
     from collections import Counter
 
-    from common.canonical import values_view
+    from common.canonical import values_view, without_system_fields
     from evaluation.metrics.field_accuracy import (
         _at,
         _infer_key_fields,
@@ -376,7 +379,8 @@ def error_breakdown(report_path: str, top: int = 3) -> dict[str, dict]:
         stats = Counter()
         for saved in entry.get("generations", []):
             stats["rows"] += 1
-            golden, got = saved.get("golden") or {}, saved.get("extraction") or {}
+            golden = without_system_fields(saved.get("golden") or {})
+            got = without_system_fields(saved.get("extraction") or {})
             if saved.get("error"):
                 stats["unusable answers"] += 1
                 stats["fields lost in unusable answers"] += len(flatten_scalars(golden))

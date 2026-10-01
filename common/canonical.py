@@ -83,6 +83,57 @@ def _join(prefix: str, key: str) -> str:
 # --------------------------------------------------------------------------
 
 
+#: Fields the system knows from the file itself, never from reading a page: the
+#: PDF's file name and its page count. Every delivered label carries both, so the
+#: model was trained to write a file name no page shows - teaching it to emit
+#: values it cannot see - and scored as wrong on both in every document. They are
+#: kept out of training targets and out of scoring, and serving fills them in
+#: (with_system_fields).
+SYSTEM_SUPPLIED_FIELDS: tuple[tuple[str, str], ...] = (
+    ("document", "source_file_name"),
+    ("document", "page_count"),
+)
+
+
+def without_system_fields(document: Any) -> Any:
+    """``document`` without :data:`SYSTEM_SUPPLIED_FIELDS`; a copy where any is present."""
+    if not isinstance(document, dict):
+        return document
+    trimmed = document
+    for section, name in SYSTEM_SUPPLIED_FIELDS:
+        part = trimmed.get(section)
+        if isinstance(part, dict) and name in part:
+            if trimmed is document:
+                trimmed = dict(document)
+            trimmed[section] = {k: v for k, v in part.items() if k != name}
+    return trimmed
+
+
+def with_system_fields(
+    output: dict[str, Any], *, page_count: int | None, source_file_name: str | None = None,
+) -> dict[str, Any]:
+    """Fill :data:`SYSTEM_SUPPLIED_FIELDS` into a canonical (enveloped) output.
+
+    From the request, at full confidence with source ``deterministic`` - what the
+    schema's confidence source means for a value no model produced. A value the
+    request does not know is left out, as the schema allows.
+    """
+    known = {"source_file_name": source_file_name, "page_count": page_count}
+    filled = dict(output)
+    for section, name in SYSTEM_SUPPLIED_FIELDS:
+        value = known.get(name)
+        if value in (None, ""):
+            continue
+        part = dict(filled.get(section) or {})
+        part[name] = {
+            "raw": str(value), "parsed": value,
+            "confidence": {"score": 1.0, "source": "deterministic"},
+            "page_ref": [], "flagged": False,
+        }
+        filled[section] = part
+    return filled
+
+
 def to_model_target(label: dict[str, Any], *, required: Iterable[str] = ()) -> dict[str, Any]:
     """The training target for a canonical golden label.
 
@@ -100,7 +151,8 @@ def to_model_target(label: dict[str, Any], *, required: Iterable[str] = ()) -> d
     """
     if not isinstance(label, dict):
         raise CanonicalLabelError(f"a canonical label is a JSON object, not {type(label).__name__}")
-    target = _slim(label, "") or {}
+    # Never taught: the system supplies them (SYSTEM_SUPPLIED_FIELDS).
+    target = _slim(without_system_fields(label), "") or {}
     for key in required:
         target.setdefault(key, {})
     return target

@@ -38,7 +38,13 @@ from calibration.list_completeness import (
     merge_review_flags,
 )
 from calibration.logprob_confidence import field_confidences
-from common.canonical import collapse_spans, envelope, values_view, with_output_dates
+from common.canonical import (
+    collapse_spans,
+    envelope,
+    values_view,
+    with_output_dates,
+    with_system_fields,
+)
 from common.constants import DEFAULT_LONG_DOC_PAGE_THRESHOLD, DEFAULT_REVIEW_CONFIDENCE_THRESHOLD
 from common.schemas import (
     is_canonical,
@@ -79,6 +85,10 @@ class ExtractionRequest:
     #: extracted into the client's canonical fallback. Either way the output is
     #: canonical JSON.
     known_lob: str | list[str] | None = None
+    #: The uploaded file's name, when the caller knows it. Written into the
+    #: canonical output by the system, never asked of the model
+    #: (common.canonical.SYSTEM_SUPPLIED_FIELDS), as is the page count.
+    source_file_name: str | None = None
 
 
 @dataclass
@@ -746,7 +756,11 @@ def extract(
             )
             for path, f in calibrated.fields.items()
         }
-        output = envelope(extraction, scores)
+        output = with_system_fields(
+            envelope(extraction, scores),
+            page_count=len(request.image_paths) or len(request.page_texts) or None,
+            source_file_name=request.source_file_name,
+        )
     else:
         output = extraction
 

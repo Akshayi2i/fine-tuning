@@ -93,10 +93,13 @@ def score_against_ground_truth(
     The same metric code the promotion gate uses, so "correct" means the same
     thing here as it does there.
     """
+    from common.canonical import without_system_fields
     from evaluation.metrics.field_accuracy import score_all_list_fields, score_fields
 
-    accuracy = score_fields(golden, result.extraction)
-    list_reports = score_all_list_fields(golden, result.extraction)
+    # The system-supplied fields are filled by serving, not extracted: not scored.
+    golden, extraction = without_system_fields(golden), without_system_fields(result.extraction)
+    accuracy = score_fields(golden, extraction)
+    list_reports = score_all_list_fields(golden, extraction)
 
     return {
         "field_exact_match_rate": round(accuracy.exact_match, 4),

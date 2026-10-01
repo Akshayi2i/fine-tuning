@@ -547,8 +547,14 @@ def build_report(
         classifier_scored=classifier_scored,
     )
 
+    from common.canonical import without_system_fields
+
     buckets: dict[tuple[str, str], list[Any]] = {}
     for expected, got, metadata in documents:
+        # Not scored: the system supplies them, the model is never asked
+        # (common.canonical.SYSTEM_SUPPLIED_FIELDS). Stripped from both sides, so a
+        # gold label or frozen eval set that still carries them counts nothing.
+        expected, got = without_system_fields(expected), without_system_fields(got)
         doc_type = metadata.get("doc_type", "unknown")
         for subset in subset_of(metadata):
             buckets.setdefault((doc_type, subset), []).append((expected, got, metadata))
