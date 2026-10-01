@@ -136,7 +136,42 @@ def _eval_interval(
     return max(1, min(configured, steps // MIN_EVALUATIONS or 1))
 
 
-def _checkpoint_cadence(interval: int, evaluation: dict[str, Any]) -> dict[str, int]:
+def training_gpus(distributed: dict[str, Any]) -> int:
+    """GPUs to train on: ``distributed.gpus`` - "auto" (every visible GPU) or a number.
+
+    "auto" off a GPU machine is 1, so configuration built anywhere else matches
+    a one-GPU run.
+    """
+    configured = distributed.get("gpus", 1)
+    if str(configured).lower() != "auto":
+        return max(1, int(configured))
+    try:
+        import torch
+
+        return max(1, torch.cuda.device_count())
+    except Exception:  # noqa: BLE001 - no torch / no CUDA: one GPU's worth of config
+        return 1
+
+
+def _accumulation_steps(batch: dict[str, Any], gpus: int) -> int:
+    """Gradient accumulation that keeps the effective batch the configured size.
+
+    Refused when it cannot: an effective batch the GPUs do not divide would
+    silently train with a different one, and a different number of steps.
+    """
+    per_step = int(batch["per_device_train_batch_size"]) * gpus
+    effective = int(batch.get("effective_batch_size")
+                    or int(batch["per_device_train_batch_size"]) * int(batch["gradient_accumulation_steps"]))
+    if effective % per_step:
+        raise TrainingError(
+            f"an effective batch of {effective} rows cannot be split over {gpus} GPU(s) at "
+            f"{batch['per_device_train_batch_size']} row(s) each; set distributed.gpus or "
+            "batch.effective_batch_size so the one divides the other"
+        )
+    return max(1, effective // per_step)
+
+
+def _checkpoint_cadence(interval: int, evaluation: dict[str, Any], *, gpus: int = 1) -> dict[str, int]:
     """Save a resume point at least every ``checkpoint_every_steps``, evaluate on
     every n-th of them, and keep enough that the last evaluation checkpoints
     checkpoint selection compares are never rotated away.
@@ -144,7 +179,9 @@ def _checkpoint_cadence(interval: int, evaluation: dict[str, Any]) -> dict[str, 
     Without a separate cadence a checkpoint was saved only at an evaluation, and
     a crash cost everything since the last one - hours, once evaluations are few.
     """
-    every = max(1, int(evaluation.get("checkpoint_every_steps") or interval))
+    # checkpoint_every_steps is sized for one GPU (~1 h); n GPUs run n x as many
+    # steps in that hour.
+    every = max(1, int(evaluation.get("checkpoint_every_steps") or interval) * max(1, gpus))
     # The fewest saves per evaluation that keep them at least `every` apart, and
     # the save interval that divides the evaluation interval evenly: evaluations
     # stay where the cut put them, saves come a little MORE often than `every`.
@@ -287,12 +324,13 @@ def build_training_config(
         target_modules.append("merger")
 
     max_length = corpus_max_length(scope)
+    gpus = training_gpus(cfg.get("distributed", {}))
+    accumulation = _accumulation_steps(batch, gpus)
     interval = _eval_interval(
         train_rows,
         configured=int(evaluation["eval_steps"]),
         evaluations=int(evaluation.get("evaluations_per_run") or 0) or None,
-        effective_batch=int(batch["per_device_train_batch_size"])
-        * int(batch["gradient_accumulation_steps"]),
+        effective_batch=int(batch["per_device_train_batch_size"]) * accumulation * gpus,
     )
 
     # ms-swift 3 argument names, one version, throughout (pinned in pyproject).
@@ -349,7 +387,9 @@ def build_training_config(
         "weight_decay": opt["weight_decay"],
         "max_grad_norm": opt["max_grad_norm"],
         "per_device_train_batch_size": batch["per_device_train_batch_size"],
-        "gradient_accumulation_steps": batch["gradient_accumulation_steps"],
+        # Across every GPU, rows per optimizer step = per-device batch x this x
+        # GPUs = the configured effective batch (training_gpus, _accumulation_steps).
+        "gradient_accumulation_steps": accumulation,
         "gradient_checkpointing": batch["gradient_checkpointing"],
         "dataset_num_proc": max(1, min(int(batch.get("dataset_num_proc", 1)), os.cpu_count() or 1)),
         "bf16": batch["bf16"],
@@ -389,7 +429,7 @@ def build_training_config(
         # Sized to the run, not fixed at 50: at pilot volume a whole run is ~56
         # optimizer steps, so a fixed 50 gave one evaluation and one checkpoint,
         # and checkpoint selection had nothing to choose between.
-        **_checkpoint_cadence(interval, evaluation),
+        **_checkpoint_cadence(interval, evaluation, gpus=gpus),
         # Standard HF TrainingArguments. There is deliberately no early-stopping
         # patience flag: "early_stopping_patience" is not an argument ms-swift 3
         # accepts, and what ships is chosen by generated field F1 over every
@@ -442,7 +482,7 @@ def build_training_config(
         weight_decay=opt["weight_decay"],
         max_grad_norm=opt["max_grad_norm"],
         per_device_batch_size=batch["per_device_train_batch_size"],
-        gradient_accumulation_steps=batch["gradient_accumulation_steps"],
+        gradient_accumulation_steps=accumulation,
         effective_batch_size=batch["effective_batch_size"],
         gradient_checkpointing=batch["gradient_checkpointing"],
         mixed_precision="bf16" if batch["bf16"] else "fp32",
@@ -455,6 +495,13 @@ def build_training_config(
     )
     env = _pixel_budget(scope)
     recorded.pixel_budget = {key: int(value) for key, value in env.items()}
+    if gpus > 1:
+        # ms-swift starts one training process per GPU (torchrun) when this is set.
+        env["NPROC_PER_NODE"] = str(gpus)
+        # Every trainable parameter (the LoRA layers) takes part in every step, so
+        # DDP need not search the graph for unused ones - and with reentrant
+        # gradient checkpointing that search fails.
+        args["ddp_find_unused_parameters"] = False
     return SwiftConfig(args, env=env), recorded
 
 
@@ -784,7 +831,9 @@ def _masking_encoder(swift: SwiftConfig):  # pragma: no cover - needs ms-swift a
 
     from swift.llm import get_model_tokenizer, get_template
 
-    os.environ.update(swift.env)
+    # The pixel budget only: NPROC_PER_NODE is for the trainer's launcher, and
+    # left in this process it would reach every later stage run here.
+    os.environ.update({k: v for k, v in swift.env.items() if k != "NPROC_PER_NODE"})
     _model, processor = get_model_tokenizer(
         swift.args["model"], load_model=False, revision=swift.args.get("model_revision"),
     )

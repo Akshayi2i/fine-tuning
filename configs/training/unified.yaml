@@ -163,3 +163,9 @@ distributed:
   # state and is close to a no-op.
   deepspeed_config: null
   sequence_parallel_size: 1
+
+  # GPUs to train on, data-parallel: "auto" = every GPU the pod has, or a
+  # number. Each takes whole rows; gradient accumulation shrinks so the
+  # EFFECTIVE batch (batch.effective_batch_size) is unchanged - the same steps,
+  # learning-rate schedule and result as on one GPU, each step ~n x faster.
+  gpus: auto
