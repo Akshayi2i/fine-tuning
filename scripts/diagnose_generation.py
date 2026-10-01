@@ -70,6 +70,9 @@ def main(argv: list[str] | None = None) -> int:
                         help="print expected vs written table rows from a saved report")
     parser.add_argument("--errors", default=None, metavar="REPORT",
                         help="count every error type per model from a saved report")
+    parser.add_argument("--audit-labels", dest="audit_labels", default=None, metavar="REPORT",
+                        help="where gold and the fine-tuned model disagree, which one the page "
+                             "text supports; writes a CSV to check against the PDFs")
     parser.add_argument("--document", default=None, metavar="SOURCE_ID",
                         help="with --report: gold vs base vs fine-tuned for one document "
                              "('list' shows the documents)")
@@ -85,6 +88,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--mode", default="ocr_plus_image",
                         choices=["ocr_plus_image", "noisy_ocr_image", "image_only"])
     args = parser.parse_args(argv)
+    if args.audit_labels:
+        return _print_audit(args)
     args.report = args.report or (
         _document_report_path(args.build_document) if args.build_document
         else _report_path(args.split))
@@ -344,6 +349,80 @@ def document_comparison(report_path: str, source_id: str, mode: str = "ocr_plus_
             "gold": gold, "answers": answers}
 
 
+#: Label-audit findings, most actionable first.
+AUDIT_KINDS = (
+    "gold likely missing it (model's value is on the page)",
+    "gold value not in the page text (check the label)",
+    "model likely invented it (value not on the page)",
+)
+
+
+def _text_of(saved: dict) -> str:
+    return "\n".join(
+        part.get("text", "") for message in saved["row"].get("messages", [])
+        if isinstance(message.get("content"), list)
+        for part in message["content"] if isinstance(part, dict) and part.get("type") == "text")
+
+
+def _on_page(value, haystack: str) -> bool:
+    """Whether a printed value appears in the OCR text, spacing and case ignored."""
+    from common.normalize import normalize_text
+
+    needle = normalize_text(value)
+    return bool(needle) and needle in haystack
+
+
+def label_audit(report_path: str, label: str = "checkpoint", mode: str = "ocr_plus_image") -> list[dict]:
+    """Where the gold label and the model disagree, which side the page supports. No GPU.
+
+    Per document (its windows merged), from the clean-OCR rows:
+
+    - a value the model wrote that the gold does not have, printed in the OCR
+      text of the pages sent: the gold is probably missing it;
+    - the same, not in the text: the model probably invented it;
+    - a gold value not in the text of the pages sent: a label to check (or a
+      value OCR missed - the page image decides).
+
+    Values are compared as printed (``raw``), with spacing and case ignored.
+    Needs a report saved with the OCR text (every --against-base run since the
+    hallucination measure was added).
+    """
+    from common.canonical import printed_view, without_system_fields
+    from common.normalize import normalize_text
+    from evaluation.metrics.extraction_faults import _is_empty
+    from evaluation.metrics.field_accuracy import flatten_scalars
+
+    report = json.loads(Path(report_path).read_text(encoding="utf-8"))
+    by_doc: dict[str, dict] = {}
+    for saved in report.get(label, {}).get("generations", []):
+        row = saved["row"]
+        if row.get("modality_mode") != mode:
+            continue
+        doc = by_doc.setdefault(row["source_id"], {"gold": {}, "answer": {}, "text": []})
+        _merge(doc["gold"], saved.get("golden") or {})
+        _merge(doc["answer"], saved.get("extraction") or {})
+        doc["text"].append(_text_of(saved))
+
+    findings: list[dict] = []
+    for source_id, doc in sorted(by_doc.items()):
+        haystack = normalize_text("\n".join(doc["text"])) or ""
+        if not haystack:
+            continue
+        gold = flatten_scalars(printed_view(without_system_fields(doc["gold"])))
+        got = flatten_scalars(printed_view(without_system_fields(doc["answer"])))
+        for path in sorted(set(gold) | set(got)):
+            g, m = gold.get(path), got.get(path)
+            if _is_empty(g) and not _is_empty(m):
+                kind = AUDIT_KINDS[0] if _on_page(m, haystack) else AUDIT_KINDS[2]
+            elif not _is_empty(g) and not _on_page(g, haystack):
+                kind = AUDIT_KINDS[1]
+            else:
+                continue
+            findings.append({"source_id": source_id, "field": path, "finding": kind,
+                             "gold": "" if g is None else g, "model": "" if m is None else m})
+    return findings
+
+
 #: Error types, in the order they are reported.
 ERROR_TYPES = ("left empty", "wrong value", "value from another field", "misread (near miss)",
                "invented (not in the label)")
@@ -475,6 +554,36 @@ def _eval_rows(client, args) -> list[dict]:
     doc_types = set(get_scope(args.scope).doc_types)
     rows = read_rows(client.read_text(paths.corpus_eval_split(args.corpus, args.split, args.tenant)))
     return [r for r in rows if r.get("doc_type") in doc_types]
+
+
+def _print_audit(args) -> int:
+    import csv
+    from collections import Counter
+
+    findings = label_audit(args.audit_labels, mode=args.mode)
+    if not findings:
+        print("no findings - or the report carries no OCR text (rerun --against-base)")
+        return 0
+    per_doc: dict[str, Counter] = {}
+    for f in findings:
+        per_doc.setdefault(f["source_id"], Counter())[f["finding"]] += 1
+    short = ["gold missing", "gold not on page", "model invented"]
+    print(f"{'document':<14}" + "".join(f"{h:>18}" for h in short))
+    for source_id, counts in sorted(per_doc.items()):
+        print(f"{source_id:<14}" + "".join(f"{counts.get(k, 0):>18}" for k in AUDIT_KINDS))
+    totals = Counter(f["finding"] for f in findings)
+    print(f"{'total':<14}" + "".join(f"{totals.get(k, 0):>18}" for k in AUDIT_KINDS))
+    top = Counter(f["field"].split("[")[0] for f in findings if f["finding"] == AUDIT_KINDS[0])
+    if top:
+        print("fields the gold most often lacks: " + ", ".join(f"{k} ({n})" for k, n in top.most_common(8)))
+    out = Path(args.out or str(Path(args.audit_labels).with_name(
+        "label_audit_" + Path(args.audit_labels).stem + ".csv")))
+    with out.open("w", newline="", encoding="utf-8-sig") as handle:
+        writer = csv.DictWriter(handle, fieldnames=["source_id", "field", "finding", "gold", "model"])
+        writer.writeheader()
+        writer.writerows(findings)
+    print(f"every finding, to check against the PDFs: {out}")
+    return 0
 
 
 def _report_path(split: str) -> str:

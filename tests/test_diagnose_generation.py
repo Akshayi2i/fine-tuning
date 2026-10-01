@@ -236,3 +236,28 @@ def test_one_documents_rows_are_built_from_blob_in_every_reading_mode():
     assert rows and {r["source_id"] for r in rows} == {"policy_0001"}
     assert {r["modality_mode"] for r in rows} == {"ocr_plus_image", "noisy_ocr_image", "image_only"}
     assert script._document_report_path("policy_0001").endswith("base_vs_checkpoint_policy_0001.json")
+
+
+def test_the_label_audit_says_which_side_the_page_supports(tmp_path):
+    script = _script()
+    gold = {"policy": {"policy_number": _env("HO-1"), "premium": _env("9999")},
+            "homeowners": {"deductibles": {}}}
+    answer = {"policy": {"policy_number": _env("HO-1")},
+              "homeowners": {"deductibles": {"theft_deductible": _env("$500"),     # printed, gold lacks
+                                             "named_storm_deductible": _env("2%")}}}  # not printed
+    text = "<page 1 of 1>\nPolicy HO-1  Theft deductible $500  Total premium 1,200"
+    row = {"source_id": "p1", "lob": "homeowners", "modality_mode": "ocr_plus_image",
+           "messages": [{"role": "user", "content": [{"type": "image"}, {"type": "text", "text": text}]}]}
+    path = tmp_path / "r.json"
+    path.write_text(json.dumps({"checkpoint": {"generations": [
+        {"row": row, "golden": gold, "extraction": answer, "error": None}]}}), encoding="utf-8")
+
+    findings = {f["field"]: f["finding"] for f in script.label_audit(str(path))}
+    assert findings["homeowners.deductibles.theft_deductible"].startswith("gold likely missing")
+    assert findings["homeowners.deductibles.named_storm_deductible"].startswith("model likely invented")
+    assert findings["policy.premium"].startswith("gold value not in the page text")
+    assert "policy.policy_number" not in findings                       # agreed and printed
+
+    out = tmp_path / "audit.csv"
+    assert script.main(["--audit-labels", str(path), "--out", str(out)]) == 0
+    assert "theft_deductible" in out.read_text(encoding="utf-8-sig")
