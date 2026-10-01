@@ -583,7 +583,8 @@ def test_an_lob_selects_a_schema_only_when_one_is_registered():
     # enum value is translated rather than looked up directly. Without that a
     # Workers' Comp policy finds no `workers_comp.json` and silently falls back.
     assert schemas.schema_key("policy", None, "workers_comp") == "policy:wc"
-    assert schemas.schema_key("policy", None, "commercial_auto") == "policy:auto"
+    # Its file carries the line's own name, so it needs no translation.
+    assert schemas.schema_key("policy", None, "commercial_auto") == "policy:commercial_auto"
 
 
 def test_a_package_policy_uses_the_generic_schema_rather_than_one_of_its_lines():

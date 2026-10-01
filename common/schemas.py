@@ -59,7 +59,6 @@ _CANONICAL_NOT_REGISTERED = ("_common",)
 LOB_SCHEMA_ALIASES: dict[str, str] = {
     "workers_comp": "wc",
     "general_liability": "gl",
-    "commercial_auto": "auto",
 }
 
 #: Shared definition files, loaded into the registry so ``$ref`` can reach them.

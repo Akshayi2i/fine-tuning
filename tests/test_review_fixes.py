@@ -334,7 +334,7 @@ def test_policy_line_counts_hold_policies_only(client):
     stage_dataset_build(make_context(client, controller))
     manifest = client.read_json(paths.corpus_manifest("v1"))
     assert "general_liability" not in manifest["policy_line_counts"]
-    assert set(manifest["policy_line_counts"]) <= {"wc", "auto"}
+    assert set(manifest["policy_line_counts"]) <= {"wc", "commercial_auto"}
 
 
 # #5 — an interrupted freeze is resumable, not permanent
