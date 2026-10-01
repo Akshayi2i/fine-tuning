@@ -307,12 +307,26 @@ def assign_group_splits(
                     line_buckets, members, f"{doc_type}/{line or '-'}", seed,
                     starved=("test", "val") if with_test else ("val",),
                 )
-            else:
+            elif not line_buckets["test"]:
                 result.train_only_lines.setdefault(doc_type, []).append(line)
                 log.info(
                     "%s/%s has %d document(s), fewer than %d: all of it trains, and the line is "
                     "not measured until it has more", doc_type, line, line_documents,
                     MIN_DOCS_TO_MEASURE_LINE,
+                )
+            else:
+                # A held-out carrier's documents stay held out even in a small
+                # line: training on them would make the held-out slice a
+                # carrier the model has seen. So this line is NOT train-only,
+                # and recording it as one said the opposite of what happened.
+                log.warning(
+                    "%s/%s has %d document(s), fewer than %d, and %d group(s) belong to a "
+                    "held-out carrier: those are tested, not trained. %s",
+                    doc_type, line, line_documents, MIN_DOCS_TO_MEASURE_LINE,
+                    len(line_buckets["test"]),
+                    "The line has NO training documents - the model never sees it."
+                    if not line_buckets["train"] else
+                    f"{len(line_buckets['train'])} group(s) train.",
                 )
             if line is not None:
                 result.counts_by_line.setdefault(doc_type, {})[line] = {

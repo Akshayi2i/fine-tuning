@@ -475,7 +475,20 @@ def build_request(payload: dict[str, Any]) -> ExtractionRequest:
         known_doc_type=payload.get("doc_type"),
         known_acord_form=payload.get("acord_form"),
         known_lob=request_lob(payload),
+        # Serving fills document.source_file_name from this (the model is never
+        # asked for it); without it the served output never carried the field.
+        source_file_name=_file_name(payload),
     )
+
+
+def _file_name(payload: Mapping[str, Any]) -> str | None:
+    """The document's file name as the caller supplies it, or ``None``."""
+    name = payload.get("source_file_name", payload.get("file_name"))
+    if name is None:
+        return None
+    if not isinstance(name, str) or not name.strip():
+        raise ServingError(f"source_file_name must be a non-empty string, got {name!r}")
+    return name.strip()
 
 
 def request_lob(payload: Mapping[str, Any]) -> str | list[str] | None:
@@ -498,10 +511,17 @@ def request_lob(payload: Mapping[str, Any]) -> str | list[str] | None:
         isinstance(line, str) and line.strip() for line in lines
     ):
         raise ServingError(f"lob must be a line name or a non-empty list of them, got {lob!r}")
+    # Classic auto is read as personal auto (common.lob.MERGED_LINES) - here
+    # too, or a caller naming it is refused for a line that has no schema of
+    # its own.
+    from common.lob import merge_line
+
+    lines = merge_line([line.strip().lower() for line in lines])
+    lob = lines[0] if isinstance(lob, str) else lines
     if len(lines) == 1:
         from common.schemas import LOB_SCHEMA_ALIASES
 
-        line = lines[0].strip().lower()
+        line = lines[0]
         known = {q for doc_type, _, q in schema_selectors() if doc_type == "policy" and q}
         if LOB_SCHEMA_ALIASES.get(line, line) not in known:
             raise ServingError(

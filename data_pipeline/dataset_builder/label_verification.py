@@ -19,8 +19,8 @@ text, with the audit's matching (``data_pipeline.audit``):
 
 Values a person or the generator placed (not under ``fideon:filled``) are never
 touched: a value the OCR missed may still be on the image, and that is the
-model's to read. With no OCR text at all nothing can be verified and the label
-is returned as it is, with every added value counted as unverifiable.
+model's to read. With no OCR text at all - or none on a page the value cites -
+nothing can be verified: the value is kept and counted as unverifiable.
 """
 
 from __future__ import annotations
@@ -44,7 +44,8 @@ class VerificationReport:
     dropped: list[str] = field(default_factory=list)
     #: Too short for the audit's matching; kept.
     too_short: int = 0
-    #: The document has no OCR text, so nothing could be checked.
+    #: Could not be checked: the document, or a page the value cites, has no
+    #: OCR text. Kept.
     unverifiable: int = 0
 
 
@@ -89,6 +90,12 @@ def verified_label(
         if cited & set(found) or (not cited and found):
             # No page cited: placement is with_inferred_pages' decision.
             report.kept += 1
+            continue
+        if any(1 <= page <= len(pages) and not pages[page - 1].words for page in cited):
+            # A page it cites has no OCR text (a scan MinerU could not read):
+            # the value may well be printed there. Unverifiable, as the audit
+            # calls it ("needs OCR") - not "not found".
+            report.unverifiable += 1
             continue
         out = out if out is not None else copy.deepcopy(label)
         if len(found) == 1:

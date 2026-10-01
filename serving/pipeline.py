@@ -139,7 +139,7 @@ def _resolve_route(request: ExtractionRequest, classifier: Classifier, *,
         from serving.doc_type_classifier import StaticClassifier
 
         classifier = StaticClassifier(request.known_doc_type, request.known_acord_form)
-    classification = classifier.classify(request.image_paths, request.ocr_text)
+    classification = classifier.classify(*_classifier_input(request))
     try:
         return route(
             classification,
@@ -151,6 +151,25 @@ def _resolve_route(request: ExtractionRequest, classifier: Classifier, *,
         # Before generation, deliberately: a document nobody could route costs
         # nothing to refuse and a full extraction to answer wrongly.
         raise PipelineError(str(exc)) from exc
+
+
+def _classifier_input(request: ExtractionRequest) -> tuple[list[str], str | None]:
+    """The first pages' images and text, in page order, for the classifier.
+
+    A multi-page request carries its text per page (``page_texts``) and no
+    ``ocr_text``, so the classifier was handed no text at all and the images in
+    the order the caller listed them - ``page_10.png`` before ``page_2.png``.
+    It reads the first two pages: their images by page number, their text
+    joined. None under ``image_only``, where the prompt says no text exists.
+    """
+    if not request.page_texts:
+        return request.image_paths, request.ocr_text
+    pages = sorted(request.page_texts)[:2]
+    images = [_image_for(request, page) for page in pages]
+    if request.modality_mode == "image_only":
+        return images, None
+    text = "\n\n".join(t for page in pages if (t := request.page_texts.get(page)))
+    return images, text or request.ocr_text
 
 
 def _image_for(request: ExtractionRequest, page: int) -> str:

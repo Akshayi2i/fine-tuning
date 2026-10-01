@@ -7,6 +7,8 @@ def _rows(counts):
     return [{"source_id": f"{lob}-{i}", "lob": [lob]} for lob, n in counts.items() for i in range(n)]
 
 
+# Classic auto is personal auto (common.lob.MERGED_LINES): its 77 documents
+# count with personal auto's 143, as they train.
 DELIVERED = {"homeowners": 593, "recreational_vehicle": 208, "dwelling_fire": 176, "personal_auto": 143,
              "classic_auto": 77, "personal_umbrella": 55, "ocean_marine": 44, "motorcycle": 33}
 
@@ -14,7 +16,7 @@ DELIVERED = {"homeowners": 593, "recreational_vehicle": 208, "dwelling_fire": 17
 def test_small_lines_are_repeated_toward_the_floor_large_ones_not():
     repeats = line_repeats(_rows(DELIVERED), min_documents=100, max_repeat=3)
     assert repeats["homeowners"] == 1 and repeats["personal_auto"] == 1
-    assert repeats["classic_auto"] == 2 and repeats["personal_umbrella"] == 2
+    assert "classic_auto" not in repeats and repeats["personal_umbrella"] == 2
     assert repeats["ocean_marine"] == 3 and repeats["motorcycle"] == 3      # capped at 3
 
 

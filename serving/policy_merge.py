@@ -228,7 +228,11 @@ def _dedupe(rows: list[Any], path: str, section: str | None, report: MergedPolic
     # field they both state disagrees; otherwise they are different rows.
     inferred = () if key_fields else _identifiers(rows)
     out: list[Any] = []
-    index_of: dict[Any, int] = {}
+    # Every row an identity names, not only the first: two real rows can share
+    # an inferred identifier (two "Liability" coverages with different limits),
+    # and a later window's re-read of the SECOND must join it, not be appended
+    # again as a third.
+    positions: dict[Any, list[int]] = {}
     for row in rows:
         if key_fields:
             identity = _row_key(row, key_fields, path)
@@ -237,13 +241,15 @@ def _dedupe(rows: list[Any], path: str, section: str | None, report: MergedPolic
         else:
             # Nothing identifies these rows: only an identical row is the same row.
             identity = ("exact", repr(values_view(row)))
-        if identity is None or identity not in index_of:
-            if identity is not None:
-                index_of[identity] = len(out)
+        if identity is None:
             out.append(row)
             continue
-        position = index_of[identity]
-        if inferred and _disagree(out[position], row, path):
+        candidates = positions.setdefault(identity, [])
+        position = next(
+            (i for i in candidates if not (inferred and _disagree(out[i], row, path))), None
+        )
+        if position is None:
+            candidates.append(len(out))
             out.append(row)
             continue
         kept, other = out[position], row

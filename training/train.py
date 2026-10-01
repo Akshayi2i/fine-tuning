@@ -217,6 +217,64 @@ def mark_training_complete(output_dir: str | Path, run_id: str) -> None:
     }), encoding="utf-8")
 
 
+RUN_FINGERPRINT = "run_fingerprint.json"
+
+#: What a resumed run must share with the run that wrote the checkpoint. Not
+#: the per-device batch or the accumulation steps: those follow the GPU count,
+#: and resuming on a different pod is the point of resuming.
+_FINGERPRINT_SETTINGS = ("lora_rank", "lora_alpha", "learning_rate", "lr_scheduler", "epochs",
+                         "effective_batch_size", "target_modules")
+
+
+def run_fingerprint(corpus_version: str, corpus_manifest: Any, recorded: Any, scope: Any) -> dict:
+    """The corpus and the settings a run trains with - what a checkpoint is OF."""
+    import hashlib
+    import json
+
+    corpus = json.dumps(corpus_manifest, sort_keys=True, default=str)
+    return {
+        "corpus_version": corpus_version,
+        "corpus_manifest_sha256": hashlib.sha256(corpus.encode()).hexdigest(),
+        "scope": getattr(scope, "name", None),
+        **{name: getattr(recorded, name, None) for name in _FINGERPRINT_SETTINGS},
+    }
+
+
+def record_fingerprint(output_dir: str | Path, fingerprint: dict) -> None:
+    import json
+
+    Path(output_dir).mkdir(parents=True, exist_ok=True)
+    (Path(output_dir) / RUN_FINGERPRINT).write_text(
+        json.dumps(fingerprint, indent=2, default=str), encoding="utf-8")
+
+
+def assert_resumable(output_dir: str | Path, fingerprint: dict) -> None:
+    """Refuse to resume a checkpoint another corpus or configuration wrote.
+
+    Re-running a failed out-version after rebuilding the corpus would restore
+    the OLD run's weights, optimizer and step and train a few more steps on
+    data it never saw the start of, while the manifest recorded the new corpus.
+    A run started before fingerprints were written has none: it resumes, said.
+    """
+    import json
+
+    path = Path(output_dir) / RUN_FINGERPRINT
+    if not path.is_file():
+        log.warning("%s has no %s (a run started before it was recorded); resuming without "
+                    "checking that the corpus and settings are the same", output_dir, RUN_FINGERPRINT)
+        return
+    stored = json.loads(path.read_text(encoding="utf-8"))
+    current = json.loads(json.dumps(fingerprint, default=str))
+    changed = sorted(k for k in {*stored, *current} if stored.get(k) != current.get(k))
+    if changed:
+        raise TrainingError(
+            f"{output_dir} holds checkpoints of a different run: {changed} changed since they "
+            "were written. Resuming would continue the old weights and optimizer on a corpus "
+            "or configuration they were not trained with. Train under a new out-version, or "
+            "remove that directory to start this one again."
+        )
+
+
 def resume_point(output_dir: str | Path) -> Path | None:
     """The latest complete checkpoint of an unfinished run, or None.
 
@@ -794,8 +852,12 @@ def train(
         log.info("dry run — configuration recorded, nothing launched")
         return swift, manifest
 
+    fingerprint = run_fingerprint(corpus_version, corpus_manifest, recorded, scope)
     resumed = None if continue_from else resume_point(staging)
-    if resumed is not None:
+    if resumed is None:
+        record_fingerprint(staging, fingerprint)
+    else:
+        assert_resumable(staging, fingerprint)
         # The SAME run, carried on: ms-swift restores the weights, the optimizer,
         # the learning-rate schedule and the step, and skips the batches already
         # trained on, into the run directory it was writing. Not --continue-from,

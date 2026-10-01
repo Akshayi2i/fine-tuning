@@ -151,8 +151,11 @@ def lob_lines(lob: object) -> frozenset[str]:
     """A document's line(s) of business as canonical schema names.
 
     Accepts the enum spelling or the schema name (``workers_comp`` and ``wc`` are
-    one line), one line or a list of them.
+    one line), one line or a list of them. A merged line is read as the line it
+    is (``classic_auto`` is ``personal_auto``, common.lob.MERGED_LINES), so a
+    corpus row or a request written before the merge is still in scope.
     """
+    from common.lob import merge_line
     from common.schemas import LOB_SCHEMA_ALIASES
 
     if lob is None:
@@ -160,7 +163,7 @@ def lob_lines(lob: object) -> frozenset[str]:
     values = [lob] if isinstance(lob, str) else list(lob) if isinstance(lob, (list, tuple)) else []
     out = set()
     for value in values:
-        line = str(value).strip().lower()
+        line = str(merge_line(str(value).strip().lower()))
         if line:
             out.add(LOB_SCHEMA_ALIASES.get(line, line))
     return frozenset(out)

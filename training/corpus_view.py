@@ -81,7 +81,11 @@ def _filter(text: str, scope: Scope) -> tuple[str, int, int]:
 
 
 def _line_of(row: dict) -> str:
-    lob = row.get("lob")
+    from common.lob import merge_line
+
+    # Rows of a corpus built before classic auto became personal auto count
+    # with personal auto, as they train.
+    lob = merge_line(row.get("lob"))
     return ",".join(sorted(map(str, lob))) if isinstance(lob, list) else str(lob or "unknown")
 
 
@@ -143,6 +147,14 @@ def materialize(
             for epoch in range(1, EPOCH_FILES + 1)
         ]
         view.val_path = paths.corpus_eval_split(corpus_version, "val", tenant_id)
+        if _balance_settings(scope)["max_repeat"] > 1:
+            # Said, not silent: the corpus files are used as they are, so the
+            # small lines are NOT repeated here. Balance needs a scoped run.
+            log.warning(
+                "line_balance is configured but is not applied to the unified scope: its "
+                "epoch files are the corpus's own. Small lines train once per epoch; run a "
+                "line-scoped scope (e.g. personal_lines) to repeat them."
+            )
         return view
 
     for epoch in range(1, EPOCH_FILES + 1):
