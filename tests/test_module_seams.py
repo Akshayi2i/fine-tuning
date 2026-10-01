@@ -45,7 +45,7 @@ def _scored_documents(n: int = 30):
     ):
         for i in range(n):
             documents.append((golden, dict(golden), {
-                "source_id": f"{prefix}{i}", "doc_type": "policy",
+                "source_id": f"{prefix}{i}", "doc_type": "lossrun",
                 "modality_mode": mode, "is_scanned": scanned, "page_count": pages,
                 "field_confidence": {k: 0.96 for k in golden},
             }))

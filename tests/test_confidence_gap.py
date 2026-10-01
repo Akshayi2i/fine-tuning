@@ -100,7 +100,7 @@ def test_proposed_types(path, values, expected):
 # --------------------------------------------------------------------------
 
 GOLD = {
-    "policy": {"policy_number": _env("HO-123"), "total_premium": _env(1200.0)},
+    "policy": {"policy_number": _env("HO-123"), "account_id": _env("A-1200")},
     "auto": {"vehicles": [{"vin": _env("1HGCM82633A004352"), "year": _env(2019)},
                           {"vin": _env("5TFDW5F11KX778685"), "year": _env(2021)}]},
 }
@@ -112,12 +112,12 @@ def test_an_accepted_correct_value_is_not_an_error():
 
 
 def test_an_accepted_wrong_value_is_an_error():
-    tally = score_auto_accept(GOLD, {"policy": {"total_premium": _env(1300.0)}})
+    tally = score_auto_accept(GOLD, {"policy": {"account_id": _env("A-1300")}})
     assert (tally.accepted, tally.wrong) == (1, 1)
 
 
 def test_a_flagged_wrong_value_reached_a_reviewer_not_a_user():
-    tally = score_auto_accept(GOLD, {"policy": {"total_premium": _env(1300.0, flagged=True)}})
+    tally = score_auto_accept(GOLD, {"policy": {"account_id": _env("A-1300", flagged=True)}})
     assert (tally.accepted, tally.wrong, tally.rate) == (0, 0, 0.0)
 
 
@@ -152,7 +152,7 @@ def test_an_omission_is_not_an_accepted_value():
 def test_build_report_emits_the_rate():
     from evaluation.run_eval import build_report
 
-    got = {"policy": {"policy_number": _env("HO-123"), "total_premium": _env(999.0)}}
+    got = {"policy": {"policy_number": _env("HO-123"), "account_id": _env("A-999")}}
     meta = {"source_id": "p1", "doc_type": "policy", "lob": ["personal_auto"],
             "modality_mode": "ocr_plus_image"}
     [full] = build_report("t", [(GOLD, got, meta)]).full_set()

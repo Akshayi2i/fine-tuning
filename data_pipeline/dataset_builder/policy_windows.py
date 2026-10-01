@@ -125,13 +125,15 @@ def window_target(
     report: TargetReport | None = None,
 ) -> dict[str, Any]:
     """The model-form target for one window: its sections, on its pages."""
-    from common.label_mapping import map_label
+    from common.canonical import schema_label
     from common.schema_sections import sections_for
     from common.schemas import required_fields, resolved_schema
 
     # A label written for another line's schema, moved into this line's block
-    # (configs/label_mappings.yaml): Hagerty's `auto` into `classic_auto`.
-    label = map_label(label, lob)
+    # (configs/label_mappings.yaml): Hagerty's `auto` into `classic_auto`. Then
+    # narrowed to what the schema can hold: a key the grammar refuses must not
+    # be taught (common.canonical.within_schema).
+    label = schema_label(label, "policy", None, lob)
     pages = set(plan.pages)
     sliced = {
         name: _within(label[name], name, pages, plan, report)

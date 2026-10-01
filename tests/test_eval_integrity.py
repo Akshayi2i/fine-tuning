@@ -60,7 +60,8 @@ def test_an_empty_extra_field_costs_nothing():
 
 def test_a_window_with_nothing_to_score_is_not_a_zero():
     doc = {"doc_type": "policy", "sections": "decl"}
-    scored = build_report("v", [({"a": "x"}, {"a": "x"}, doc), ({}, {}, doc)])
+    right = {"policy": {"policy_number": "x"}}
+    scored = build_report("v", [(right, right, doc), ({}, {}, doc)])
     assert scored.gate_metrics()["field_normalized_match"] == 1.0
 
 
@@ -282,7 +283,8 @@ def test_a_long_policy_counts_once_not_once_per_window():
     read once, all wrong. Per document that is 0.5; per row it was 0.75."""
     policy = {"doc_type": "policy", "sections": "decl", "source_id": "p1"}
     cert = {"doc_type": "policy", "sections": "decl", "source_id": "c1"}
-    rows = [({"a": "x"}, {"a": "x"}, policy)] * 3 + [({"a": "x"}, {"a": "y"}, cert)]
+    x, y = {"policy": {"policy_number": "x"}}, {"policy": {"policy_number": "y"}}
+    rows = [(x, x, policy)] * 3 + [(x, y, cert)]
     assert build_report("v", rows).gate_metrics()["field_normalized_match"] == 0.5
 
 

@@ -167,9 +167,9 @@ def test_an_image_only_regression_is_visible_as_its_own_gate_metric():
     image-only is a third of the corpus."""
     wrong = {**GOLDEN, "insured_name": "Someone Else"}
     documents = [
-        (GOLDEN, GOLDEN, {"source_id": "p1", "doc_type": "policy",
+        (GOLDEN, GOLDEN, {"source_id": "p1", "doc_type": "lossrun",
                           "modality_mode": "ocr_plus_image", "page_count": 1}),
-        (GOLDEN, wrong, {"source_id": "p2", "doc_type": "policy",
+        (GOLDEN, wrong, {"source_id": "p2", "doc_type": "lossrun",
                          "modality_mode": "image_only", "page_count": 1}),
     ]
     metrics = build_report("v2", documents).gate_metrics()
@@ -182,7 +182,7 @@ def test_error_records_are_kept_not_just_aggregates():
     analysis needs real material."""
     wrong = {**GOLDEN, "policy_number": "WC-8842317-O1"}
     report = build_report("v2", [
-        (GOLDEN, wrong, {"source_id": "p1", "doc_type": "policy",
+        (GOLDEN, wrong, {"source_id": "p1", "doc_type": "lossrun",
                          "modality_mode": "ocr_plus_image", "page_count": 1}),
     ])
     records = report.full_set()[0].error_records
@@ -206,7 +206,7 @@ def test_gate_metrics_are_document_weighted_across_doc_types():
     thirty."""
     wrong = {**GOLDEN, "insured_name": "Wrong"}
     documents = [
-        (GOLDEN, GOLDEN, {"source_id": f"p{i}", "doc_type": "policy",
+        (GOLDEN, GOLDEN, {"source_id": f"p{i}", "doc_type": "lossrun",
                           "modality_mode": "ocr_plus_image", "page_count": 1})
         for i in range(9)
     ] + [

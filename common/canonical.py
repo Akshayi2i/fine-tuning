@@ -224,6 +224,84 @@ def in_schema_order(node: Any, schema: dict[str, Any]) -> Any:
     return walk(node, schema)
 
 
+def within_schema(node: Any, schema: dict[str, Any]) -> tuple[Any, list[str]]:
+    """``node`` without the keys its schema does not declare, and their paths.
+
+    Labels carry structure the canonical schema has no place for: annotation
+    blocks (``fideon:*``, ``text_sections``, ``additional_fields``) and nested
+    shapes of their own (``dwelling_fire.dwellings[].coverages[]`` where the
+    schema has ``dwelling`` and ``property_coverages``) - 18% of the values
+    inside schema sections, half of dwelling fire's. Decoding is held to the
+    schema, so such a key can never be written: kept in a training target it
+    teaches a key the grammar refuses, and kept in a scored label it is a miss
+    no model can fix.
+
+    Only where the schema DECLARES an object's properties is anything dropped;
+    an object or array whose schema says nothing is kept whole.
+    """
+    defs = schema.get("$defs") or {}
+    dropped: list[str] = []
+
+    def resolve(sub: Any, value: Any) -> dict[str, Any]:
+        while isinstance(sub, dict):
+            if "$ref" in sub:
+                ref = sub["$ref"]
+                sub = defs.get(ref.rsplit("/", 1)[-1]) if ref.startswith("#/$defs/") else None
+                continue
+            branches = sub.get("anyOf") or sub.get("oneOf")
+            if branches and "properties" not in sub and "items" not in sub:
+                want = "properties" if isinstance(value, dict) else "items"
+                resolved = [resolve(b, value) for b in branches]
+                sub = next((b for b in resolved if want in b), {})
+            break
+        return sub if isinstance(sub, dict) else {}
+
+    def walk(value: Any, sub: Any, path: str) -> Any:
+        if is_field_value(value):
+            return value
+        sub = resolve(sub, value)
+        if isinstance(value, dict):
+            props = sub.get("properties")
+            if not props:
+                return value
+            kept = {}
+            for key, item in value.items():
+                if key in props:
+                    kept[key] = walk(item, props[key], _join(path, key))
+                else:
+                    dropped.append(_join(path, key))
+            return kept
+        if isinstance(value, list) and sub.get("items") is not None:
+            return [walk(item, sub["items"], f"{path}[{i}]") for i, item in enumerate(value)]
+        return value
+
+    return walk(node, schema, ""), dropped
+
+
+def schema_label(
+    label: Any,
+    doc_type: str,
+    acord_form: str | None = None,
+    lob: str | list[str] | None = None,
+) -> Any:
+    """A golden label as training and scoring use it: moved into its line's
+    block (configs/label_mappings.yaml), then narrowed to what the line's
+    canonical schema can hold. Flat document types are returned as they are."""
+    from common.label_mapping import map_label
+    from common.schemas import SchemaError, is_canonical, resolved_schema
+
+    label = map_label(label, lob)
+    try:
+        canonical = isinstance(label, dict) and is_canonical(doc_type, acord_form, lob)
+    except SchemaError:
+        # No selectable schema (an ACORD document with no form): nothing to
+        # narrow to. Scoring counts such a document invalid on its own terms.
+        return label
+    if not canonical:
+        return label
+    return within_schema(label, resolved_schema(doc_type, acord_form, lob))[0]
+
+
 def training_target(
     label: dict[str, Any],
     doc_type: str,
@@ -238,10 +316,10 @@ def training_target(
     Golden labels keep whatever date format they were written in; only the target
     is converted.
     """
-    from common.label_mapping import map_label
     from common.schemas import is_canonical, required_fields, resolved_schema
 
-    label = map_label(label, lob)          # configs/label_mappings.yaml
+    # Moved into the line's block, narrowed to what the schema can hold.
+    label = schema_label(label, doc_type, acord_form, lob)
     # In the order the decoding grammar writes keys (in_schema_order).
     schema = resolved_schema(doc_type, acord_form, lob)
     if is_canonical(doc_type, acord_form, lob):

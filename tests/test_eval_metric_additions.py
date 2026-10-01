@@ -13,7 +13,7 @@ def _env(value, page=1):
 
 
 LABEL = {"policy": {"policy_number": _env("HO-1"), "effective_date": _env("01/01/2026"),
-                    "expiration_date": _env("01/01/2027"), "premium": _env("1200")},
+                    "expiration_date": _env("01/01/2027"), "account_id": _env("1200")},
          "forms_and_endorsements": [{"form_number": _env("HO 00 03")}, {"form_number": _env("HO 04 90")}]}
 
 
@@ -30,8 +30,8 @@ def _metrics(documents):
 def test_precision_recall_and_f1_separate_writing_wrong_from_leaving_out():
     got = {"policy": {"policy_number": _env("HO-1"),          # right
                       "effective_date": _env("02/02/2026"),   # written, wrong
-                      "agent": _env("HO-1")}}                 # written, not in the label
-    # expiration_date and premium left out
+                      "prior_policy_number": _env("HO-1")}}   # written, not in the label
+    # expiration_date and account_id left out
     m = _metrics([(LABEL, got, _meta())])
     assert m["field_precision"] == pytest.approx(1 / 3)       # 1 right of 3 written
     assert m["field_recall"] == pytest.approx(1 / 4)          # 1 found of 4 in the label
@@ -46,13 +46,13 @@ def test_table_precision_counts_only_rows_the_model_wrote():
 
 def test_accuracy_is_broken_down_by_line_and_by_field():
     perfect = {"policy": dict(LABEL["policy"])}
-    no_premium = {"policy": {k: v for k, v in LABEL["policy"].items() if k != "premium"}}
+    no_premium = {"policy": {k: v for k, v in LABEL["policy"].items() if k != "account_id"}}
     m = _metrics([(LABEL, perfect, _meta("p1", "homeowners")),
                   (LABEL, no_premium, _meta("p2", "homeowners")),
                   (LABEL, {}, _meta("p3", "personal_auto"))])
     assert m["field_accuracy_by_lob"] == {"homeowners": 0.875, "personal_auto": 0.0}
     weakest = m["weakest_fields"]
-    assert weakest[0]["field"] == "policy.premium"          # right once in 3
+    assert weakest[0]["field"] == "policy.account_id"          # right once in 3
     assert weakest[0]["accuracy"] == pytest.approx(1 / 3, abs=1e-4) and weakest[0]["scored"] == 3
 
 
@@ -61,7 +61,7 @@ def test_hallucination_is_measured_only_against_text_that_was_sent():
     otherwise count as invented."""
     read_off_image = {"policy": {"policy_number": _env("HO-7")}}
     m = _metrics([(LABEL, read_off_image, _meta("p1", ocr="", mode="image_only")),
-                  (LABEL, {"policy": {"agent": _env("Nowhere Agency")}}, _meta("p2"))])
+                  (LABEL, {"policy": {"program_name": _env("Nowhere Agency")}}, _meta("p2"))])
     assert m["hallucination_rate"] == 1.0          # the one checked value (p2) is invented
     only_image = _metrics([(LABEL, read_off_image, _meta("p1", ocr="", mode="image_only"))])
     assert "hallucination_rate" not in only_image

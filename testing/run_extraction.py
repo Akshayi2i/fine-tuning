@@ -86,18 +86,21 @@ def metrics_dir(model_version: str, root: Path = TESTING_ROOT) -> Path:
 
 
 def score_against_ground_truth(
-    result: ExtractionResult, golden: dict[str, Any]
+    result: ExtractionResult, golden: dict[str, Any], *, lob: Any = None,
+    acord_form: str | None = None,
 ) -> dict[str, Any]:
     """Per-document metrics, using the SPEC_08 modules.
 
     The same metric code the promotion gate uses, so "correct" means the same
     thing here as it does there.
     """
-    from common.canonical import without_system_fields
+    from common.canonical import schema_label, without_system_fields
     from evaluation.metrics.field_accuracy import score_all_list_fields, score_fields
 
     # The system-supplied fields are filled by serving, not extracted: not scored.
     golden, extraction = without_system_fields(golden), without_system_fields(result.extraction)
+    # Scored on what the line's schema can hold, as run_eval scores it.
+    golden = schema_label(golden, result.doc_type, acord_form, lob)
     accuracy = score_fields(golden, extraction)
     list_reports = score_all_list_fields(golden, extraction)
 
@@ -149,7 +152,8 @@ def run_document(
     }
 
     if golden is not None:
-        scored = score_against_ground_truth(result, golden)
+        scored = score_against_ground_truth(
+            result, golden, lob=request.known_lob, acord_form=request.known_acord_form)
         metrics.update(scored)
         for path, value in metrics["fields"].items():
             expected = golden.get(path)

@@ -563,11 +563,17 @@ def build_report(
         # gold label or frozen eval set that still carries them counts nothing.
         expected, got = without_system_fields(expected), without_system_fields(got)
         # A gold label written for another line's schema is scored in this
-        # line's (configs/label_mappings.yaml), as its training target was built.
-        from common.label_mapping import map_label
+        # line's (configs/label_mappings.yaml), and only on what that schema can
+        # hold - as its training target was built (common.canonical.schema_label).
+        from common.canonical import schema_label
 
-        expected = map_label(expected, metadata.get("lob"))
+        # Both sides: a key outside the schema is not a field this report
+        # measures. The constrained model cannot write one; an unconstrained
+        # output that does fails schema_validity_rate, which is where it counts.
         doc_type = metadata.get("doc_type", "unknown")
+        selectors = (doc_type, metadata.get("acord_form"), metadata.get("lob"))
+        expected = schema_label(expected, *selectors)
+        got = schema_label(got, *selectors)
         for subset in subset_of(metadata):
             buckets.setdefault((doc_type, subset), []).append((expected, got, metadata))
 
