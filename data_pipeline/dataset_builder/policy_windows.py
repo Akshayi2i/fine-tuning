@@ -64,6 +64,13 @@ class TargetReport:
     #: value is unreachable at serving; counting it is how a router or a page
     #: rule that misses real content shows up at corpus build.
     unread: list[str] = field(default_factory=list)
+    #: Row fragments left out of a window because they hold none of their row's
+    #: identifiers there (a premium with no coverage name): no window, and no
+    #: merge, can tell which row such a fragment belongs to.
+    orphaned: list[str] = field(default_factory=list)
+    #: Values with no recorded page that were given the one page whose OCR
+    #: text prints them (:func:`with_inferred_pages`).
+    inferred: list[str] = field(default_factory=list)
 
 
 def routed_pages(
@@ -118,6 +125,72 @@ def plan_windows(
     return plans
 
 
+#: A printed value shorter than this is too common to place by searching:
+#: "1", "Yes" and "100" are on most pages of a policy.
+MIN_PLACEABLE_CHARS = 4
+
+
+def with_inferred_pages(
+    label: dict[str, Any], page_texts: Sequence[str] | None, report: TargetReport | None = None
+) -> dict[str, Any]:
+    """``label`` with a page given to each value that records none, where the
+    document's OCR text prints it on exactly one page.
+
+    A value with no page in a group read over several windows can be asked of
+    no window, so it was left out of training - 1,589 values on the delivered
+    bundles. Placed only when the search is unambiguous: the value's printed
+    text, at least :data:`MIN_PLACEABLE_CHARS` characters, matched on word
+    boundaries, on one page and no other. On none or several it stays
+    unplaced; a guessed page would teach the model to cite the wrong one.
+    A copy when anything is placed; ``label`` itself otherwise.
+    """
+    import copy
+    import re
+
+    from common.normalize import normalize_text
+
+    if not page_texts:
+        return label
+    pages = [normalize_text(text) or "" for text in page_texts]
+    placed: list[tuple[list[str], int]] = []
+
+    def find(value: Any) -> int | None:
+        needle = normalize_text(value)
+        if not needle or len(needle) < MIN_PLACEABLE_CHARS:
+            return None
+        pattern = re.compile(rf"(?<![0-9a-z]){re.escape(needle)}(?![0-9a-z])")
+        hits = [number for number, text in enumerate(pages, start=1) if pattern.search(text)]
+        return hits[0] if len(hits) == 1 else None
+
+    def walk(node: Any, path: list[Any]) -> None:
+        if is_field_value(node):
+            if node.get("page_ref") or (node.get("raw") is None and node.get("parsed") is None):
+                return
+            page = find(node.get("raw") if node.get("raw") is not None else node.get("parsed"))
+            if page is not None:
+                placed.append((path, page))
+            return
+        if isinstance(node, dict):
+            for key, value in node.items():
+                walk(value, [*path, key])
+        elif isinstance(node, list):
+            for index, item in enumerate(node):
+                walk(item, [*path, index])
+
+    walk(label, [])
+    if not placed:
+        return label
+    out = copy.deepcopy(label)
+    for path, page in placed:
+        node = out
+        for step in path:
+            node = node[step]
+        node["page_ref"] = [page]
+        if report is not None:
+            report.inferred.append("".join(f"[{s}]" if isinstance(s, int) else f".{s}" for s in path)[1:])
+    return out
+
+
 def window_target(
     label: dict[str, Any],
     lob: str | list[str] | None,
@@ -169,9 +242,53 @@ def _within(
                 kept[key] = child
         return kept
     if isinstance(node, list):
-        rows = [_within(item, f"{path}[{i}]", pages, plan, report) for i, item in enumerate(node)]
-        return [row for row in rows if row not in (None, {}, [])]
+        keys = _row_identifiers(node, path)
+        rows = []
+        for i, item in enumerate(node):
+            row = _within(item, f"{path}[{i}]", pages, plan, report)
+            if row in (None, {}, []):
+                continue
+            # A fragment that kept none of its row's identifiers in this window
+            # is an orphan: labels record a short value such as a premium of
+            # "1.0" on every page it happens to be printed on, so it reaches
+            # windows that never show its coverage. Taught, the model writes
+            # fragments the merge cannot place; the window that shows the
+            # identifier carries the whole row.
+            if keys and _identified(item, keys) and not _identified(row, keys):
+                if report is not None:
+                    report.orphaned.append(f"{plan.group}:{path}[{i}]")
+                continue
+            rows.append(row)
+        return rows
     return node
+
+
+def _row_identifiers(rows: list[Any], path: str) -> list[str]:
+    """The fields that identify this table's rows: the identifier scoring
+    matches them on, plus a top-level section's declared key
+    (``array_keys`` in configs/schema_sections.yaml), whose fields the merge
+    joins on - a location's address on the page after its number is a half the
+    merge can place."""
+    from common.canonical import values_view
+    from common.schema_sections import array_key
+    from evaluation.metrics.field_accuracy import ROW_IDENTIFIERS, _infer_key_fields
+
+    if not rows or not all(isinstance(r, dict) for r in rows):
+        return []
+    keys = _infer_key_fields(values_view(rows))
+    # Only a named identifier, never the all-fields fallback: every field
+    # being "the key" would make every partial row an orphan.
+    named = [k for k in keys if k in ROW_IDENTIFIERS or k == "building_number"]
+    declared = list(array_key(path)) if "." not in path and "[" not in path else []
+    return [*named, *(k for k in declared if k not in named)]
+
+
+def _identified(row: Any, keys: list[str]) -> bool:
+    from common.canonical import values_view
+
+    if not isinstance(row, dict):
+        return False
+    return any(values_view(row.get(k)) not in (None, "", []) for k in keys)
 
 
 def unread_values(

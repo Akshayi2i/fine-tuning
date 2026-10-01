@@ -221,26 +221,59 @@ def _dedupe(rows: list[Any], path: str, section: str | None, report: MergedPolic
         return out
 
     key_fields = array_key(section) if section else ()
+    # No declared key (the tables inside a line block: vehicles, units,
+    # coverages): the identifier scoring matches rows on - VIN, unit number,
+    # coverage name. Matching only identical rows left a vehicle read across two
+    # windows as two half-rows. Rows sharing an identifier join only when no
+    # field they both state disagrees; otherwise they are different rows.
+    inferred = () if key_fields else _identifiers(rows)
     out: list[Any] = []
     index_of: dict[Any, int] = {}
     for row in rows:
-        # No declared key: only an identical row is the same row.
-        identity = (
-            _row_key(row, key_fields, path) if key_fields
-            else ("exact", repr(values_view(row)))
-        )
+        if key_fields:
+            identity = _row_key(row, key_fields, path)
+        elif inferred:
+            identity = _row_key(row, inferred, path)
+        else:
+            # Nothing identifies these rows: only an identical row is the same row.
+            identity = ("exact", repr(values_view(row)))
         if identity is None or identity not in index_of:
             if identity is not None:
                 index_of[identity] = len(out)
             out.append(row)
             continue
         position = index_of[identity]
+        if inferred and _disagree(out[position], row, path):
+            out.append(row)
+            continue
         kept, other = out[position], row
         if _filled(other) > _filled(kept):
             kept, other = other, kept
         out[position] = _merge_into(kept, other, f"{path}[{position}]", report, top=False)
         report.duplicates_collapsed += 1
     return out
+
+
+def _identifiers(rows: list[Any]) -> tuple[str, ...]:
+    """The named identifier these rows carry, as scoring infers it; ``()``
+    when none is filled in most rows (never the all-fields fallback)."""
+    from evaluation.metrics.field_accuracy import ROW_IDENTIFIERS, _infer_key_fields
+
+    if not rows or not all(isinstance(r, dict) for r in rows):
+        return ()
+    keys = _infer_key_fields(values_view(rows))
+    return tuple(k for k in keys if k in ROW_IDENTIFIERS or k == "building_number")
+
+
+def _disagree(a: dict[str, Any], b: dict[str, Any], path: str) -> bool:
+    """Whether two rows state a different value for any field both carry."""
+    for key, value in a.items():
+        other = b.get(key)
+        if is_field_value(value) and is_field_value(other):
+            stated = (values_view(value), values_view(other))
+            if None not in stated and not _same_value(value, other, f"{path}[].{key}"):
+                return True
+    return False
 
 
 def merge_policy_windows(windows: list[PolicyWindow]) -> MergedPolicy:

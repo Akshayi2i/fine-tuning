@@ -33,6 +33,7 @@ from data_pipeline.dataset_builder.policy_windows import (
     routed_pages,
     unread_values,
     window_target,
+    with_inferred_pages,
 )
 from data_pipeline.dataset_builder.sample_modes import EPOCH_FILES, ModeAssignment, sample_modes
 from data_pipeline.dataset_builder.split_groups import (
@@ -241,9 +242,12 @@ def _policy_window_rows(
     plans = plan_windows(document.lob, routed, declarations_page)
 
     report = TargetReport()
+    # Pages found from the document's CLEAN text, whatever this row's mode: the
+    # target is the same answer in every mode, only the input differs.
+    label = with_inferred_pages(document.golden_label, document.ocr_pages, report)
     rows: list[dict[str, Any]] = []
     for plan in plans:
-        target = window_target(document.golden_label, document.lob, plan, report)
+        target = window_target(label, document.lob, plan, report)
         indices = [page - 1 for page in plan.pages]
         window_ocr = None if ocr_pages is None else [ocr_pages[i] for i in indices]
         if window_ocr is not None and mode == "noisy_ocr_image":
@@ -279,7 +283,7 @@ def _policy_window_rows(
         rows.append(row)
 
     notes = [f"window {mode}: unread {path}" for path in unread_values(
-        document.golden_label, document.lob, plans
+        label, document.lob, plans
     )]
     notes += [f"window {mode}: unplaced {path}" for path in report.unplaced]
     if notes:

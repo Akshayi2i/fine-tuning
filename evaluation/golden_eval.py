@@ -226,9 +226,32 @@ def evaluate_version(
     body = report.as_dict()
     body["documents_failed"] = failed
     body.update(real_only_section(version, triples, corpus_version=corpus_version, scope=scope))
+    body["windowing_ceiling"] = windowing_ceiling(documents)
     client.write_json(paths.eval_report(version, scope=scope.name), body)
     log.info("golden eval of %s: %d document-mode run(s), %d failed", version, len(triples), failed)
     return body
+
+
+def windowing_ceiling(documents: Sequence[GoldenDocument]) -> dict[str, Any] | None:
+    """What reading these policies in windows loses before any model runs
+    (evaluation.windowing_ceiling): the oracle merge over the same documents
+    and pages the gate just scored. Reported beside the gate, never gated -
+    it measures the pipeline, not the candidate. Read against
+    field_normalized_match it says how much of the gap is the model's.
+    """
+    from evaluation.windowing_ceiling import ceiling, oracle
+
+    results = []
+    for doc in documents:
+        if doc.doc_type != "policy":
+            continue
+        texts = [doc.page_texts.get(p, "") for p in sorted(doc.page_texts)]
+        try:
+            results.append(oracle(doc.source_id, doc.golden, doc.lob, len(doc.image_keys),
+                                  texts if any(texts) else None, doc.synthetic))
+        except Exception as exc:  # noqa: BLE001 - a diagnostic must never fail the gate
+            log.warning("windowing ceiling: %s could not be measured: %s", doc.source_id, exc)
+    return ceiling(results) if results else None
 
 
 def real_only_section(

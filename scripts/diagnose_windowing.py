@@ -34,133 +34,13 @@ from __future__ import annotations
 import argparse
 import csv
 import json
-import re
 import sys
 from collections import Counter, defaultdict
-from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-REASONS = ("no_page_ref", "unread_page", "row_unmatched", "merge")
-
-
-@dataclass
-class DocumentResult:
-    source_id: str
-    lob: str
-    synthetic: bool
-    pages: int
-    windows: int = 0
-    gold_values: int = 0
-    outside_schema: int = 0
-    recovered: int = 0
-    lost: Counter = field(default_factory=Counter)
-    gold_rows: int = 0
-    merged_rows: int = 0
-    conflicts: int = 0
-    lost_values: list[tuple[str, str, str]] = field(default_factory=list)
-
-    @property
-    def recall(self) -> float | None:
-        return self.recovered / self.gold_values if self.gold_values else None
-
-
-def oracle(source_id: str, label: dict, lob: Any, page_count: int,
-           ocr_pages: list[str] | None, synthetic: bool = False) -> DocumentResult:
-    """Slice ``label`` into its windows, merge the slices, compare with ``label``."""
-    from common.canonical import schema_label, values_view, without_system_fields
-    from common.label_mapping import map_label
-    from data_pipeline.dataset_builder.policy_windows import (
-        TargetReport,
-        plan_windows,
-        routed_pages,
-        unread_values,
-        window_target,
-    )
-    from serving.policy_merge import PolicyWindow, merge_policy_windows
-
-    line = ", ".join(lob) if isinstance(lob, list) else str(lob)
-    result = DocumentResult(source_id, line, synthetic, page_count)
-    routed, declarations_page = routed_pages(ocr_pages, page_count)
-    plans = plan_windows(lob, routed, declarations_page)
-    report = TargetReport()
-    windows = [PolicyWindow(group=p.group, pages=list(p.pages),
-                            extraction=window_target(label, lob, p, report)) for p in plans]
-    merged = merge_policy_windows(windows)
-    result.windows, result.conflicts = len(plans), len(merged.conflicts)
-
-    mapped = map_label(label, lob)
-    scored = without_system_fields(schema_label(label, "policy", None, lob))
-    result.outside_schema = _stated(without_system_fields(mapped)) - _stated(scored)
-    gold = values_view(scored)
-    got = values_view(without_system_fields(merged.extraction))
-    reasons = {
-        "no_page_ref": {_bare(p.split(":", 1)[1]) for p in report.unplaced},
-        "unread_page": {_bare(p) for p in unread_values(mapped, lob, plans)},
-    }
-
-    def lose(path: str, value: Any, unmatched_row: bool) -> None:
-        bare = _bare(path)
-        if bare in reasons["no_page_ref"] or any(bare.startswith(r + ".") for r in reasons["no_page_ref"]):
-            reason = "no_page_ref"
-        elif bare in reasons["unread_page"]:
-            reason = "unread_page"
-        elif unmatched_row:
-            reason = "row_unmatched"
-        else:
-            reason = "merge"
-        result.lost[reason] += 1
-        result.lost_values.append((path, str(value)[:80], reason))
-
-    def compare(expected: Any, actual: Any, path: str, unmatched_row: bool = False) -> None:
-        from common.normalize import values_match
-        from evaluation.metrics.field_accuracy import _infer_key_fields, _is_empty, _row_key
-
-        if isinstance(expected, dict):
-            sub = actual if isinstance(actual, dict) else {}
-            for key, value in expected.items():
-                compare(value, sub.get(key), f"{path}.{key}" if path else key, unmatched_row)
-        elif isinstance(expected, list) and expected and all(isinstance(r, dict) for r in expected):
-            rows = actual if isinstance(actual, list) else []
-            result.gold_rows += len(expected)
-            result.merged_rows += len(rows)
-            keys = _infer_key_fields(expected)
-            pool: dict[tuple, list[Any]] = defaultdict(list)
-            for row in rows:
-                pool[_row_key(row, keys)].append(row)
-            for index, row in enumerate(expected):
-                match = pool.get(_row_key(row, keys))
-                compare(row, match.pop(0) if match else None, f"{path}[{index}]",
-                        unmatched_row or not match)
-        elif not _is_empty(expected):
-            result.gold_values += 1
-            if values_match(expected, actual, field_path=path):
-                result.recovered += 1
-            else:
-                lose(path, expected, unmatched_row)
-
-    compare(gold, got, "")
-    return result
-
-
-def _stated(node: Any) -> int:
-    """Stated values in a label: envelopes with a raw or parsed value."""
-    from common.canonical import is_field_value
-
-    if is_field_value(node):
-        return int(node.get("raw") is not None or node.get("parsed") is not None)
-    if isinstance(node, dict):
-        return sum(_stated(v) for v in node.values())
-    if isinstance(node, list):
-        return sum(_stated(v) for v in node)
-    return 0
-
-
-def _bare(path: str) -> str:
-    return re.sub(r"\[\d+\]", "[]", path)
-
+from evaluation.windowing_ceiling import REASONS, DocumentResult, oracle  # noqa: E402
 
 # --------------------------------------------------------------------------
 # Sources
