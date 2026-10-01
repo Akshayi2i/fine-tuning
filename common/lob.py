@@ -45,6 +45,30 @@ class LobError(ValueError):
     """Raised on a value outside the LOB enum."""
 
 
+#: Lines read as another line. Classic auto IS personal auto: one line of
+#: business, one canonical schema (``personal_auto.json``, block ``auto``). The
+#: Hagerty labels were already written that way. Applied wherever a line is
+#: read - labels, bundle and label metadata, schema selection - so a stored
+#: ``classic_auto`` never selects a schema, a split, a scope or a report row of
+#: its own.
+MERGED_LINES: dict[str, str] = {"classic_auto": "personal_auto"}
+
+
+def merge_line(lob: object) -> object:
+    """``lob`` with every merged line replaced by the line it is read as, in the
+    shape it came (a string, a list - de-duplicated, order kept - or None)."""
+    if isinstance(lob, str):
+        return MERGED_LINES.get(lob.strip().lower(), lob)
+    if isinstance(lob, (list, tuple)):
+        out: list[object] = []
+        for value in lob:
+            merged = merge_line(value)
+            if merged not in out:
+                out.append(merged)
+        return out
+    return lob
+
+
 @lru_cache(maxsize=1)
 def lob_values() -> tuple[str, ...]:
     """The supported LOB values, read from the one schema that defines them."""
@@ -67,9 +91,9 @@ def normalize_lob(value: object) -> list[str]:
     if value is None:
         return []
     if isinstance(value, str):
-        return [value] if value else []
+        return [merge_line(value)] if value else []
     if isinstance(value, (list, tuple)):
-        return [v for v in value if v]
+        return merge_line([v for v in value if v])
     raise LobError(
         f"line_of_business must be a list of values (arch v2.1 §0b), got {type(value).__name__}"
     )

@@ -24,7 +24,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-LINES = ("homeowners", "personal_auto", "classic_auto", "dwelling_fire", "recreational_vehicle",
+LINES = ("homeowners", "personal_auto", "dwelling_fire", "recreational_vehicle",
          "personal_umbrella", "ocean_marine", "motorcycle")
 
 MONEY_WORDS = ("premium", "limit", "amount", "deductible", "value", "cost", "fee", "price", "charge",

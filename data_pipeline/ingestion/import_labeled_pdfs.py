@@ -69,7 +69,10 @@ class LabeledPdf:
 
     @property
     def lob(self) -> Any:
-        return self.metadata.get("lob") or self.golden.get("line_of_business")
+        from common.lob import merge_line
+
+        # Classic auto is read as personal auto (common.lob.MERGED_LINES).
+        return merge_line(self.metadata.get("lob") or self.golden.get("line_of_business"))
 
 
 @dataclass

@@ -90,7 +90,8 @@ scopes:
   personal_lines:
     lineage: personal_lines
     doc_types: [policy]
-    lines: [homeowners, personal_auto, dwelling_fire, ocean_marine, classic_auto,
+    # Classic auto is personal auto (common.lob.MERGED_LINES), not a line of its own.
+    lines: [homeowners, personal_auto, dwelling_fire, ocean_marine,
             motorcycle, recreational_vehicle, personal_umbrella]
     # classify stays, as in every scope: a personal-lines release must still
     # recognise a non-policy document and refuse it.

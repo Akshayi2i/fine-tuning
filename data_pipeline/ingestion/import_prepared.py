@@ -194,7 +194,10 @@ def import_document(
         )
 
     acord_form = doc.metadata.get("acord_form")
-    lob = doc.metadata.get("lob") or doc.golden.get("line_of_business")
+    from common.lob import merge_line
+
+    # Classic auto is read as personal auto (common.lob.MERGED_LINES).
+    lob = merge_line(doc.metadata.get("lob") or doc.golden.get("line_of_business"))
     try:
         errors = list(iter_validation_errors(doc.golden, doc_type, acord_form, lob))
     except SchemaError as exc:

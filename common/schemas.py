@@ -263,7 +263,9 @@ def schema_key(
     lines = [lob] if isinstance(lob, str) else list(lob or [])
     base = doc_type
     if len(lines) == 1:
-        line = str(lines[0]).strip().lower()
+        from common.lob import merge_line
+
+        line = str(merge_line(str(lines[0]).strip().lower()))
         scoped = f"{doc_type}:{LOB_SCHEMA_ALIASES.get(line, line)}"
         if scoped in _sources():
             base = scoped

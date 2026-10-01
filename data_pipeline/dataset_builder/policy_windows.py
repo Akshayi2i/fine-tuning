@@ -203,8 +203,7 @@ def window_target(
     from common.schemas import required_fields, resolved_schema
 
     # A label written for another line's schema, moved into this line's block
-    # (configs/label_mappings.yaml): Hagerty's `auto` into `classic_auto`. Then
-    # narrowed to what the schema can hold: a key the grammar refuses must not
+    # (configs/label_mappings.yaml). Then narrowed to what the schema can hold: a key the grammar refuses must not
     # be taught (common.canonical.within_schema).
     label = schema_label(label, "policy", None, lob)
     pages = set(plan.pages)

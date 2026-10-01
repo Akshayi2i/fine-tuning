@@ -95,6 +95,12 @@ class SourceDocument:
     def family(self) -> str:
         return self.group_id or self.source_id
 
+    def __post_init__(self) -> None:
+        # Classic auto is read as personal auto (common.lob.MERGED_LINES).
+        from common.lob import merge_line
+
+        self.lob = merge_line(self.lob)
+
 
 @dataclass
 class BuildResult:

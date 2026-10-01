@@ -16,7 +16,6 @@
         "personal_auto",
         "dwelling_fire",
         "ocean_marine",
-        "classic_auto",
         "motorcycle",
         "recreational_vehicle",
         "personal_umbrella"
@@ -37,7 +36,6 @@
           "personal_auto",
           "dwelling_fire",
           "ocean_marine",
-          "classic_auto",
           "motorcycle",
           "recreational_vehicle",
           "personal_umbrella"

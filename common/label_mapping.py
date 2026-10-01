@@ -1,10 +1,10 @@
 """Labels written for one line's schema, used under another's (configs/label_mappings.yaml).
 
-The Hagerty labels keep their vehicles, drivers and coverages under ``auto``;
-the classic-auto schema reads them from ``classic_auto``. Without this every
-classic-auto line-block window trained on an empty target. The stored labels
-are never changed: the mapping is applied where training targets are built and
-where gold labels are scored.
+A line whose labels keep their data in another line's block is moved into its
+own block, with fields renamed, before training targets are built and before
+gold labels are scored. The stored labels are never changed. No mapping is
+configured today: classic auto, the one line that needed it, is now read as
+personal auto itself (common.lob.MERGED_LINES).
 """
 
 from __future__ import annotations

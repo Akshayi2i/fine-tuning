@@ -40,6 +40,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from common.lob import merge_line  # noqa: E402
 from evaluation.windowing_ceiling import REASONS, DocumentResult, oracle  # noqa: E402
 
 # --------------------------------------------------------------------------
@@ -59,7 +60,7 @@ def from_bundles(root: Path, limit: int | None):
         with fitz.open(pdf) as doc:
             pages = doc.page_count
         yield (bundle.name, json.loads((bundle / "golden.json").read_text(encoding="utf-8")),
-               meta.get("lob"), pages, None, bool(meta.get("synthetic")))
+               merge_line(meta.get("lob")), pages, None, bool(meta.get("synthetic")))
 
 
 def from_blob(tenant: str | None, limit: int | None):
@@ -79,7 +80,7 @@ def from_blob(tenant: str | None, limit: int | None):
         pages = int(client.read_json(meta_key).get("page_count") or 0)
         texts = [client.read_text(paths.processed_page("policy", source_id, p, "md", tenant))
                  for p in range(1, pages + 1)]
-        yield source_id, label, meta.get("lob"), pages, texts, bool(meta.get("synthetic"))
+        yield source_id, label, merge_line(meta.get("lob")), pages, texts, bool(meta.get("synthetic"))
 
 
 # --------------------------------------------------------------------------

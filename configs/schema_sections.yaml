@@ -86,7 +86,7 @@ groups:
     # What KIND of policy document this is - declarations, renewal offer,
     # cancellation, endorsement. That is stated near the front, with the
     # declarations, which is why it shares their page rule rather than the
-    # routed set. Only ocean_marine, classic_auto and personal_umbrella carry it.
+    # routed set. Only ocean_marine and personal_umbrella carry it.
     sections:
       - document_type_detail
 

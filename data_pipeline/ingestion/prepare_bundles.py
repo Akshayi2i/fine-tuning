@@ -138,6 +138,10 @@ def prepare_bundles(
                 report.relined[f"{lob} -> {new_lob}"] += 1
                 lob = new_lob
                 break
+        from common.lob import merge_line
+
+        # Classic auto is read as personal auto (common.lob.MERGED_LINES).
+        lob = str(merge_line(lob))
         if lines is not None and lob not in lines:
             report.skipped_lines[lob] += 1
             continue

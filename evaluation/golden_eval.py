@@ -108,11 +108,18 @@ def load_golden_set(
             image_keys=[images[p] for p in sorted(images)],
             page_texts={p: texts.get(p, "") for p in sorted(images)},
             acord_form=metadata.get("acord_form"),
-            lob=metadata.get("lob"),
+            lob=merge_line(metadata.get("lob")),
             is_scanned=bool(metadata.get("is_scanned", False)),
             synthetic=bool(metadata.get("synthetic", False)),
         ))
     return documents
+
+
+def merge_line(lob: Any) -> Any:
+    """Classic auto is read as personal auto (common.lob.MERGED_LINES)."""
+    from common.lob import merge_line as merged
+
+    return merged(lob)
 
 
 def evaluate(

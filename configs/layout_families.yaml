@@ -30,7 +30,6 @@ families:
       - personal_auto
       - dwelling_fire
       - ocean_marine           # watercraft / boat
-      - classic_auto
       - motorcycle
       - recreational_vehicle
       - personal_umbrella

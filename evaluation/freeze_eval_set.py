@@ -31,6 +31,7 @@ from typing import Any
 
 from artifact_registry import paths
 from artifact_registry.blob_client import BlobClient
+from common.lob import merge_line
 
 log = logging.getLogger(__name__)
 
@@ -182,7 +183,8 @@ def freeze_eval_set(
         client.write_json(f"{base}/metadata.json", {
             "doc_type": doc_type,
             "acord_form": metadata.get("acord_form"),
-            "lob": metadata.get("lob"),
+            # Classic auto is read as personal auto (common.lob.MERGED_LINES).
+            "lob": merge_line(metadata.get("lob")),
             "is_scanned": is_scanned(ocr_meta),
             # A delivered split can place synthetic twins in test; the gate then
             # reports the real documents' scores apart (golden_eval "real_only").

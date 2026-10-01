@@ -609,10 +609,10 @@ def test_a_package_policy_uses_the_generic_schema_rather_than_one_of_its_lines()
 #: canonical JSON whatever its line, so the generic key resolves to their
 #: `_fallback.json`. Pinning it here would pin the shape we just replaced.
 _FLAT_SCHEMA_TEXT = {
-    ("lossrun", None): "a441703fbaf9f5858bcf1e5d54aeb0e1a3a91030e46ac012d428a72d2fbb3edd",
-    ("acord", "25"): "21fb86cdbe3e2358fbe514a24c4bc17737bf19fcb77381b620665fd6ec73db51",
-    ("acord", "125"): "eb37ee58f8e068097e334f753072b2c0899c5a047792d8e71fe54bd7ef6e200c",
-    ("acord", "140"): "bcac38a83e4064249e0c665051b53938f90742847cb5498953e3b0abb3afac84",
+    ("lossrun", None): "bfa81452535699ba295d9c99bf9d5d52e9cfe7fd14e66403a31d50ca0ab7d7d4",
+    ("acord", "25"): "a6581f7783d69d6867806df89080cc705b388c27cbe5517fbb559bb25c3b4ade",
+    ("acord", "125"): "62b47a3628cc84a96addf4aa0093414e327c3486bf85b09e4bd818a6266a124a",
+    ("acord", "140"): "ba327b5db7e8b2b02cc82ef19f29c891bda4dbc131f608eb51df43c16895b5ce",
 }
 
 
@@ -640,7 +640,8 @@ def test_every_personal_lines_lob_has_a_registered_canonical_schema():
     from common.schemas import CANONICAL_FAMILY, schema_key
 
     lobs = lobs_in_family(CANONICAL_FAMILY)
-    assert len(lobs) == 8
+    # Classic auto is personal auto (common.lob.MERGED_LINES).
+    assert len(lobs) == 7
     for lob in lobs:
         assert schema_key("policy", None, lob) == f"policy:{lob}", (
             f"{lob} is declared in the {CANONICAL_FAMILY} family but has no canonical schema, "
