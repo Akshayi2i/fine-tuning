@@ -104,7 +104,11 @@ def load_golden_set(
         documents.append(GoldenDocument(
             source_id=source_id,
             doc_type=doc_type,
-            golden=client.read_json(f"{base}/golden.json"),
+            # A rule-added value the page does not print is not expected of
+            # the model either (label_verification), as in its training targets.
+            golden=verified_label(
+                client.read_json(f"{base}/golden.json"), [texts.get(p, "") for p in sorted(images)]
+            ),
             image_keys=[images[p] for p in sorted(images)],
             page_texts={p: texts.get(p, "") for p in sorted(images)},
             acord_form=metadata.get("acord_form"),
@@ -113,6 +117,12 @@ def load_golden_set(
             synthetic=bool(metadata.get("synthetic", False)),
         ))
     return documents
+
+
+def verified_label(label: dict[str, Any], page_texts: list[str]) -> dict[str, Any]:
+    from data_pipeline.dataset_builder.label_verification import verified_label as verify
+
+    return verify(label, page_texts)
 
 
 def merge_line(lob: Any) -> Any:

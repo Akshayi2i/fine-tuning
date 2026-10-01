@@ -26,6 +26,7 @@ from common.canonical import CanonicalLabelError, has_envelopes, training_target
 from common.constants import MODALITY_MODES, TRAINER_SPECIAL_TAGS
 from common.schemas import is_canonical
 from data_pipeline.dataset_builder.cap_check import CapReport, estimate_row, evaluate
+from data_pipeline.dataset_builder.label_verification import VerificationReport, verified_label
 from data_pipeline.dataset_builder.noisy_ocr_augment import corrupt_ocr_pages
 from data_pipeline.dataset_builder.policy_windows import (
     TargetReport,
@@ -248,9 +249,13 @@ def _policy_window_rows(
     plans = plan_windows(document.lob, routed, declarations_page)
 
     report = TargetReport()
-    # Pages found from the document's CLEAN text, whatever this row's mode: the
-    # target is the same answer in every mode, only the input differs.
-    label = with_inferred_pages(document.golden_label, document.ocr_pages, report)
+    # A value a rule added to a synthetic label is taught only if the document's
+    # own text prints it (label_verification). From the CLEAN text, whatever
+    # this row's mode: the target is the same answer in every mode, only the
+    # input differs.
+    checked = VerificationReport()
+    label = verified_label(document.golden_label, document.ocr_pages, checked)
+    label = with_inferred_pages(label, document.ocr_pages, report)
     rows: list[dict[str, Any]] = []
     for plan in plans:
         target = window_target(label, document.lob, plan, report)
@@ -292,6 +297,13 @@ def _policy_window_rows(
         label, document.lob, plans
     )]
     notes += [f"window {mode}: unplaced {path}" for path in report.unplaced]
+    if checked.dropped or checked.repaged or checked.unverifiable:
+        details.append(
+            f"window {mode}: of {checked.checked} rule-added label value(s), "
+            f"{len(checked.dropped)} not printed on the page and left out, "
+            f"{len(checked.repaged)} moved to the page that prints them, "
+            f"{checked.unverifiable} unverifiable (no OCR text)"
+        )
     if notes:
         log.warning(
             "%s (%s): %d gold value(s) no window can carry - printed on pages no window of "
