@@ -124,3 +124,16 @@ def test_the_golden_eval_reports_the_windowing_ceiling():
                          is_scanned=False, synthetic=False)
     section = windowing_ceiling([doc])
     assert section["documents"] == 1 and section["value_recall"] == 1.0
+
+
+def test_rows_sharing_only_a_weak_identifier_are_never_joined():
+    """`description` names a kind of row, not one row: two discounts both called
+    "Multi-policy" with the second half missing its amount are two discounts."""
+    def discount(description, **fields):
+        return {"description": _env(description, 1), **{k: _env(v, 1) for k, v in fields.items()}}
+
+    merged = merge_policy_windows([
+        PolicyWindow("lineblk", [1], {"auto": {"discounts": [discount("Multi-policy", amount=50)]}}),
+        PolicyWindow("lineblk", [2], {"auto": {"discounts": [discount("Multi-policy", applies_to="VEH 2")]}}),
+    ])
+    assert len(merged.extraction["auto"]["discounts"]) == 2

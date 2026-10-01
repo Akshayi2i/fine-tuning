@@ -254,15 +254,30 @@ def _dedupe(rows: list[Any], path: str, section: str | None, report: MergedPolic
     return out
 
 
+#: Identifiers strong enough to join two windows' rows on. Scoring may match on
+#: weaker ones (``description``, ``state``, ``label``, ``rank``) because a wrong
+#: match there costs one comparison; a wrong JOIN merges two real rows into one
+#: and loses the second, so the merge only trusts a value that names one row.
+JOIN_IDENTIFIERS: frozenset[str] = frozenset({
+    "claim_number", "policy_number", "form_number", "vin", "vin_or_hull_id",
+    "hull_identification_number", "serial_number", "loan_number", "license_number",
+    "docket_number", "vehicle_number", "driver_number", "unit_number", "motor_number",
+    "item_number", "installment_number", "location_number", "building_number",
+    "structure_number", "residence_number", "object_number", "agreement_number",
+    "coverage_code", "coverage_name", "endorsement_name", "discount_name", "name",
+    "individual_name", "entity_name",
+})
+
+
 def _identifiers(rows: list[Any]) -> tuple[str, ...]:
-    """The named identifier these rows carry, as scoring infers it; ``()``
-    when none is filled in most rows (never the all-fields fallback)."""
-    from evaluation.metrics.field_accuracy import ROW_IDENTIFIERS, _infer_key_fields
+    """The strong identifier these rows carry, as scoring infers it; ``()``
+    when none is filled in most rows - those rows join only when identical."""
+    from evaluation.metrics.field_accuracy import _infer_key_fields
 
     if not rows or not all(isinstance(r, dict) for r in rows):
         return ()
     keys = _infer_key_fields(values_view(rows))
-    return tuple(k for k in keys if k in ROW_IDENTIFIERS or k == "building_number")
+    return tuple(k for k in keys if k in JOIN_IDENTIFIERS)
 
 
 def _disagree(a: dict[str, Any], b: dict[str, Any], path: str) -> bool:
