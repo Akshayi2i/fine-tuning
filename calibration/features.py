@@ -36,6 +36,8 @@ import logging
 import math
 import re
 from dataclasses import dataclass, field
+from functools import cache
+from pathlib import Path
 from typing import Any
 
 from common.normalize import normalize_text, values_match
@@ -44,10 +46,18 @@ log = logging.getLogger(__name__)
 
 #: Field types, each with its own calibrator (arch v2.1 §5.2). Identifiers and
 #: money are exact-match and unforgiving; names and addresses are fuzzy-matched;
-#: free text is reported but never gated.
+#: free text is reported but never gated. ``number`` is a count, a year or a
+#: percentage: exact-match like money, but not an amount.
 FIELD_TYPES = (
-    "identifier", "money", "date", "entity", "address", "enum", "free_text",
+    "identifier", "money", "date", "number", "entity", "address", "enum", "free_text",
 )
+
+#: The reviewed type of every canonical policy field (proposed by
+#: scripts/propose_field_types.py, decided by a person). A field's type sets
+#: the error it may carry when accepted without review, so the table outranks
+#: the name heuristic, which put 130 money, number and identifier fields into
+#: free text.
+FIELD_TYPE_TABLE = Path(__file__).resolve().parent.parent / "configs" / "field_types.yaml"
 
 _IDENTIFIER_SHAPE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9\-/ .]{2,}$")
 
@@ -130,16 +140,35 @@ class FieldFeatures:
         }
 
 
+@cache
+def field_type_table(path: Path = FIELD_TYPE_TABLE) -> dict[str, str]:
+    """The reviewed field types, by path without list markers; empty until the
+    table has been reviewed and committed. An unknown type is an error, not a
+    silent free_text: a typo there would quietly change what is auto-accepted."""
+    if not path.exists():
+        return {}
+    import yaml
+
+    table = (yaml.safe_load(path.read_text(encoding="utf-8")) or {}).get("fields") or {}
+    unknown = {f: t for f, t in table.items() if t not in FIELD_TYPES}
+    if unknown:
+        raise ValueError(f"{path}: unknown field types {unknown}; allowed: {FIELD_TYPES}")
+    return {str(f): str(t) for f, t in table.items()}
+
+
 def infer_field_type(field_path: str, value: Any = None) -> str:
     """Which calibrator this field belongs to.
 
-    Name-based, reusing ``common.normalize``'s inference so a field is
+    The reviewed table first (configs/field_types.yaml). Otherwise name-based, reusing ``common.normalize``'s inference so a field is
     *normalised* and *calibrated* under the same notion of what it is. Two
     different answers to "what kind of field is this" is how a money field gets
     compared as text and calibrated as a number.
     """
     from common.normalize import infer_field_kind
 
+    reviewed = field_type_table().get(re.sub(r"\[\d*\]", "", field_path))
+    if reviewed:
+        return reviewed
     kind = infer_field_kind(field_path)
     mapping = {
         "identifier": "identifier",

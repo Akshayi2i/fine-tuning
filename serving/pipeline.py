@@ -729,12 +729,21 @@ def extract(
     else:
         log.warning(
             "no calibrator set supplied for %s, so confidence falls back to the v1 raw "
-            "aggregate against a fixed %.2f threshold. That number is length-biased and tied "
-            "to no measured error rate (arch v2.1 §5.1) — load the release bundle's "
-            "calibrators to get the guarantee.", request.source_id, review_threshold,
+            "aggregate, and EVERY field is flagged for review: that number is length-biased "
+            "and tied to no measured error rate (arch v2.1 §5.1) — load the release bundle's "
+            "calibrators to get the guarantee.", request.source_id,
         )
         raw = field_confidences(all_spans)
         calibrated = apply_calibration(raw, calibration, review_threshold=review_threshold)
+        # No measured threshold, no promise. Accepting a field above a fixed 0.70
+        # claimed an error rate nobody measured; the confidence is still reported,
+        # as a diagnostic, but nothing is accepted on it.
+        for path, f in calibrated.fields.items():
+            if not f.needs_review:
+                calibrated.fields[path] = replace(
+                    f, needs_review=True, reason="no fitted calibrator; nothing is auto-accepted"
+                )
+                calibrated.review_flags.append(f"{path}:uncalibrated")
 
     # --- list completeness: the signal logprobs cannot see ------------------
     completeness = check_document(

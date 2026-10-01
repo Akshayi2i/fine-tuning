@@ -69,6 +69,10 @@ GATING_METRICS: dict[str, Direction] = {
     "confusable_misattribution_rate": "lower_is_better",
     "false_null_rate": "lower_is_better",
     "lossrun_totals_reconciliation_rate": "higher_is_better",
+    # Of the values delivered without a review flag, the share that were wrong,
+    # on the golden set through serving with the release's thresholds
+    # (evaluation.metrics.auto_accept). The number the thresholds promise.
+    "auto_accept_error_rate": "lower_is_better",
 }
 
 #: Gating under arch v2.1 §15.2, but **not enforced yet** — nothing produces
@@ -87,8 +91,6 @@ PENDING_GATING_METRICS: dict[str, str] = {
                              "selected/provenance pages in eval metadata",
     "hallucination_rate": "metric written; needs the OCR text of the pages that were sent "
                           "carried through eval metadata (§15.2)",
-    "auto_accept_error_rate": "calibration.thresholds — WRITTEN; needs the calibrator set and "
-                              "threshold set applied on the serving path (§5.4)",
 }
 
 #: Metrics that only exist when the eval set contains the relevant documents.
@@ -106,6 +108,9 @@ CONDITIONAL_METRICS: frozenset[str] = frozenset({
     "lossrun_totals_reconciliation_rate",
     # Only routed Policies exercise page selection.
     "page_selection_recall",
+    # Only canonical outputs carry review flags. When present it faces its
+    # floor like any other metric.
+    "auto_accept_error_rate",
 })
 
 
@@ -167,6 +172,11 @@ PILOT_FLOORS: dict[str, float] = {
     "lob_detection_accuracy": 0.85,
     "confusable_misattribution_rate": 0.05,
     "lossrun_totals_reconciliation_rate": 0.80,
+    # A pilot choice, not a measured one: at most 2 in 100 unreviewed values
+    # wrong. The per-type targets are stricter (1% for money, dates, numbers,
+    # identifiers; 2% enums; 5% names and addresses), so a release whose
+    # thresholds hold on unseen documents passes with room.
+    "auto_accept_error_rate": 0.02,
 }
 
 #: Non-inferiority margins in absolute units (arch v2.1 §15.5). Per metric,
@@ -188,6 +198,9 @@ NON_INFERIORITY_DELTA: dict[str, float] = {
     "confusable_misattribution_rate": 0.010,
     "false_null_rate": 0.010,
     "lossrun_totals_reconciliation_rate": 0.015,
+    # Half a point: on a 2% ceiling, more would let a release double the wrong
+    # values users receive unreviewed and still count as no worse.
+    "auto_accept_error_rate": 0.005,
 }
 DEFAULT_DELTA = 0.015
 

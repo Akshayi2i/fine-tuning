@@ -215,6 +215,7 @@ def _metrics(**over) -> dict[str, float]:
     base["ece_confidence"] = 0.04                   # lower is better
     base["confusable_misattribution_rate"] = 0.02   # lower is better
     base["false_null_rate"] = 0.03                  # lower is better
+    base["auto_accept_error_rate"] = 0.01           # lower is better
     base.update(over)
     return base
 

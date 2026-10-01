@@ -46,6 +46,7 @@ DEFAULT_ERROR_TARGETS: dict[str, float] = {
     "identifier": 0.01,
     "money": 0.01,
     "date": 0.01,
+    "number": 0.01,
     "enum": 0.02,
     "entity": 0.05,
     "address": 0.05,

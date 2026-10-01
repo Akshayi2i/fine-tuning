@@ -289,6 +289,7 @@ def score_subset(
     scored: Sequence[tuple[dict[str, Any], dict[str, Any], dict[str, Any]]],
 ) -> SubsetReport:
     """Score one doc type × subset from ``(expected, got, metadata)`` triples."""
+    from evaluation.metrics.auto_accept import AutoAcceptTally, score_auto_accept
     from evaluation.metrics.confusable import aggregate_misattribution, score_misattribution
     from evaluation.metrics.coverage_metrics import (
         expected_calibration_error,
@@ -324,6 +325,9 @@ def score_subset(
     # dropping them from the gate would have made it pass by no longer checking
     # the two things this project exists to get right.
     misattributions = []
+    # Values delivered without a review flag, and how many were wrong: what
+    # the review thresholds promise, measured on documents they never saw.
+    auto_accept = AutoAcceptTally()
     confidences: list[float] = []
     correctness: list[bool] = []
 
@@ -355,6 +359,7 @@ def score_subset(
             field_tally[0] += bool(result.correct)
             field_tally[1] += 1
 
+        auto_accept.add(score_auto_accept(expected, got))
         misattributions.append(
             score_misattribution(
                 expected, got, doc_type, source_id=metadata.get("source_id", "")
@@ -455,6 +460,8 @@ def score_subset(
             if total >= 3
         ][:15] or None,
         "schema_validity_rate": validity_rate,
+        # None when no value carried a flag (a flat extraction): not measured.
+        "auto_accept_error_rate": auto_accept.rate,
         # Absent, not 0.0, when no document in the set carries a line to score.
         "lob_detection_accuracy": lob.overall if lob.scored else None,
         "lob_accuracy_by_value": lob.accuracy_by_value(),
