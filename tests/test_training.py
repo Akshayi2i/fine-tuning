@@ -547,7 +547,9 @@ def test_explicit_evaluation_settings_win_over_the_early_stopping_defaults():
 
     assert swift.args["metric_for_best_model"] == "eval_loss"
     assert swift.args["greater_is_better"] is False
-    assert swift.args["load_best_model_at_end"] is True
+    # Off by the config, deliberately: checkpoint selection chooses what ships, and
+    # on, the trainer refuses to save resume points between evaluations.
+    assert swift.args["load_best_model_at_end"] is False
 
 
 def test_checkpoint_selection_does_not_happen_here():

@@ -120,9 +120,21 @@ evaluation:
 
   # The last 3 checkpoints plus the best-loss one are what checkpoint_eval
   # generates over, so fewer than 4 would discard a candidate before it is scored.
+  # Counted in EVALUATION checkpoints: with resume checkpoints saved between
+  # evaluations, the trainer keeps enough of them that these 4 survive.
   save_total_limit: 4
 
-  load_best_model_at_end: true
+  # A resume point at least this often (~1 h on one H200 at the measured 51 s per
+  # step), so a crash costs at most about an hour of training, not the run. An
+  # evaluation still falls on every n-th of these. Each checkpoint carries the
+  # optimizer state a resume needs (~1.8 GB for a rank-64 adapter).
+  checkpoint_every_steps: 70
+
+  # Off: what ships is chosen by generated field F1 over the saved checkpoints
+  # (checkpoint_eval), never the weights loss liked best, so loading them at the
+  # end changed nothing that ships. On, the trainer refuses to save between
+  # evaluations, and resume points could be no closer than the evaluations.
+  load_best_model_at_end: false
   metric_for_best_model: "eval_loss"
   greater_is_better: false
   early_stopping_patience: 3

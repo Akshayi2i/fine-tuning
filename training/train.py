@@ -126,6 +126,73 @@ def _eval_interval(train_rows: int | None, *, configured: int, effective_batch: 
     return max(1, min(configured, steps // MIN_EVALUATIONS or 1))
 
 
+def _checkpoint_cadence(interval: int, evaluation: dict[str, Any]) -> dict[str, int]:
+    """Save a resume point at least every ``checkpoint_every_steps``, evaluate on
+    every n-th of them, and keep enough that the last evaluation checkpoints
+    checkpoint selection compares are never rotated away.
+
+    Without a separate cadence a checkpoint was saved only at an evaluation, and
+    a crash cost everything since the last one - hours, once evaluations are few.
+    """
+    every = int(evaluation.get("checkpoint_every_steps") or interval)
+    save_steps = max(1, min(every, interval))
+    per_eval = max(1, round(interval / save_steps))
+    return {
+        "save_steps": save_steps,
+        "eval_steps": save_steps * per_eval,
+        # The configured limit counts evaluation checkpoints; resume points in
+        # between would otherwise push the earlier candidates out.
+        "save_total_limit": int(evaluation["save_total_limit"]) * per_eval + 1,
+    }
+
+
+#: Written beside the adapter checkpoints when ms-swift returns successfully.
+#: The pipeline's "trained" means this file, never the directory: ms-swift
+#: creates the directory when training STARTS, so a crashed run looked finished
+#: and a rerun went straight on to choose among its partial checkpoints.
+TRAINING_COMPLETE = "training_complete.json"
+
+
+def training_completed(output_dir: str | Path) -> bool:
+    return (Path(output_dir) / TRAINING_COMPLETE).is_file()
+
+
+def mark_training_complete(output_dir: str | Path, run_id: str) -> None:
+    import json
+    from datetime import UTC, datetime
+
+    Path(output_dir).mkdir(parents=True, exist_ok=True)
+    (Path(output_dir) / TRAINING_COMPLETE).write_text(json.dumps({
+        "run_id": run_id, "completed_at": datetime.now(UTC).isoformat(),
+    }), encoding="utf-8")
+
+
+def resume_point(output_dir: str | Path) -> Path | None:
+    """The latest complete checkpoint of an unfinished run, or None.
+
+    Complete = it holds the trainer state, the adapter and the optimizer state:
+    a run killed while saving leaves a checkpoint without them, and resuming
+    from it would fail or silently restart the optimizer.
+    """
+    import re
+
+    root = Path(output_dir)
+    if not root.is_dir() or training_completed(root):
+        return None
+    candidates = []
+    for checkpoint in root.rglob("checkpoint-*"):
+        match = re.fullmatch(r"checkpoint-(\d+)", checkpoint.name)
+        if not (match and checkpoint.is_dir()):
+            continue
+        names = {f.name for f in checkpoint.iterdir()}
+        has_adapter = any(n.startswith("adapter_model") for n in names)
+        has_optimizer = bool(names & {"optimizer.pt", "optimizer.bin"}) or any(
+            n.startswith("global_step") for n in names)
+        if "trainer_state.json" in names and has_adapter and has_optimizer:
+            candidates.append((int(match.group(1)), checkpoint))
+    return max(candidates)[1] if candidates else None
+
+
 def corpus_max_length(scope: Scope | None = None) -> int:
     """The single ``max_length`` for a mixed-task corpus.
 
@@ -308,9 +375,7 @@ def build_training_config(
         # Sized to the run, not fixed at 50: at pilot volume a whole run is ~56
         # optimizer steps, so a fixed 50 gave one evaluation and one checkpoint,
         # and checkpoint selection had nothing to choose between.
-        "eval_steps": interval,
-        "save_steps": interval,
-        "save_total_limit": evaluation["save_total_limit"],
+        **_checkpoint_cadence(interval, evaluation),
         # Standard HF TrainingArguments. There is deliberately no early-stopping
         # patience flag: "early_stopping_patience" is not an argument ms-swift 3
         # accepts, and what ships is chosen by generated field F1 over every
@@ -661,6 +726,17 @@ def train(
         log.info("dry run — configuration recorded, nothing launched")
         return swift, manifest
 
+    resumed = None if continue_from else resume_point(staging)
+    if resumed is not None:
+        # The SAME run, carried on: ms-swift restores the weights, the optimizer,
+        # the learning-rate schedule and the step, and skips the batches already
+        # trained on, into the run directory it was writing. Not --continue-from,
+        # which starts a NEW run from the weights with the schedule at zero.
+        swift.args["resume_from_checkpoint"] = str(resumed)
+        swift.args["output_dir"] = str(resumed.parent)
+        swift.args["add_version"] = False
+        log.info("resuming the unfinished run from %s", resumed)
+
     manifest = launch_and_record(swift, manifest, client)
     return swift, manifest
 
@@ -849,6 +925,8 @@ def launch_and_record(
         raise
     manifest.status = "trained"
     write_manifest(manifest, client)
+    if manifest.artifacts and manifest.artifacts.staging_path:
+        mark_training_complete(manifest.artifacts.staging_path, manifest.run_id)
     return manifest
 
 

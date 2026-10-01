@@ -321,7 +321,17 @@ def discover_checkpoints(output_dir: str) -> tuple[list[str], str | None]:
     best_loss = None
     state = Path(checkpoints[-1]) / "trainer_state.json"
     if state.exists():
-        recorded = json.loads(state.read_text(encoding="utf-8")).get("best_model_checkpoint")
+        trainer_state = json.loads(state.read_text(encoding="utf-8"))
+        recorded = trainer_state.get("best_model_checkpoint")
         if recorded:
             best_loss = str(latest_run / Path(recorded).name)
+        # Candidates are the checkpoints an evaluation fell on, and the last one.
+        # The others are resume points saved between evaluations (hourly): scoring
+        # them all would multiply selection time without a loss to compare them by.
+        eval_steps = int(trainer_state.get("eval_steps") or 0)
+        save_steps = int(trainer_state.get("save_steps") or 0)
+        if eval_steps and save_steps and eval_steps > save_steps:
+            last = checkpoint_step(checkpoints[-1])
+            checkpoints = [c for c in checkpoints
+                           if checkpoint_step(c) % eval_steps == 0 or checkpoint_step(c) == last]
     return checkpoints, best_loss

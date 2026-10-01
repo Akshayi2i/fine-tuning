@@ -913,7 +913,19 @@ def _is_trained(ctx: StageContext) -> bool:
     v1 also required one staged adapter per document type, because a run was not
     finished until the whole fan-out was. There is no fan-out now.
     """
-    return ctx.volume.exists(paths.scoped_staging_adapter_dir(ctx.scope.name, ctx.out_version))
+    # On the pod, the run's own completion marker on the mount: the in-memory
+    # volume record dies with the process, so a rerun after a later stage failed
+    # retrained from step 0. The directory alone proves nothing - ms-swift
+    # creates it when training STARTS - so an interrupted run is not "trained";
+    # training runs again and resumes from its last checkpoint (train.resume_point).
+    import os
+
+    from training.train import training_completed
+
+    adapter_dir = paths.scoped_staging_adapter_dir(ctx.scope.name, ctx.out_version)
+    if os.path.isdir(adapter_dir):
+        return training_completed(adapter_dir)
+    return ctx.volume.exists(adapter_dir)
 
 
 def stage_training(ctx: StageContext) -> StageResult:

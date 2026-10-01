@@ -730,10 +730,14 @@ def test_push_adapters_leaves_only_the_merged_model_staged(client, controller):
 # --------------------------------------------------------------------------
 
 
-def test_a_pod_without_the_staging_volume_is_refused():
+def test_a_pod_without_the_staging_volume_is_refused(tmp_path):
     """A pod with no volume writes to pod-local disk, terminates, and the work is
     gone — silently, because every write succeeded."""
-    controller = RunPodController(backend=LocalBackend(), volume_id=None, git_commit="abc1234")
+    # A mount that does not exist, named explicitly: the default /workspace
+    # exists on some developer machines (D:\\workspace on Windows), and then the
+    # in-process path is allowed and this test asserted the machine, not the code.
+    controller = RunPodController(backend=LocalBackend(), volume_id=None, git_commit="abc1234",
+                                  volume_mount=str(tmp_path / "no-such-mount"))
     with pytest.raises(PodLaunchError, match="no staging volume attached"):
         controller.launch(controller.spec_for("train_foundation"))
 
