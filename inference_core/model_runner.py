@@ -705,6 +705,7 @@ def generate(
     adapter: str | None = None,
     want_logprobs: bool = True,
     json_schema: dict[str, Any] | None = None,
+    max_new_tokens: int | None = None,
 ) -> Generation:
     """Generate from prepared messages.
 
@@ -714,13 +715,12 @@ def generate(
             (arch §4a), not an error.
         json_schema: the resolved target schema to constrain this request to.
             Per request because it is per document type.
+        max_new_tokens: this request's answer limit (common.config.answer_cap),
+            never above the configured one.
     """
-    import dataclasses
     import time
 
-    config = (
-        dataclasses.replace(model.config, json_schema=json_schema) if json_schema else model.config
-    )
+    config = _request_config(model.config, json_schema, max_new_tokens)
     started = time.perf_counter()
     try:
         result = model.backend.generate(messages, config, adapter=adapter)
@@ -744,6 +744,20 @@ def generate(
     return result
 
 
+def _request_config(
+    config: RunnerConfig, json_schema: dict[str, Any] | None, max_new_tokens: int | None,
+) -> RunnerConfig:
+    """The config for one request: its schema, and its answer limit when it has one."""
+    import dataclasses
+
+    changes: dict[str, Any] = {}
+    if json_schema:
+        changes["json_schema"] = json_schema
+    if max_new_tokens:
+        changes["max_new_tokens"] = min(int(max_new_tokens), int(config.max_new_tokens))
+    return dataclasses.replace(config, **changes) if changes else config
+
+
 def generate_batch(
     model: LoadedModel,
     requests: list[tuple[list[dict[str, Any]], dict[str, Any] | None]],
@@ -754,19 +768,17 @@ def generate_batch(
     """Several independent generations, run together where the backend can.
 
     ``requests`` is ``[(messages, json_schema), ...]`` — each constrained to its
-    own schema, as a policy's windows are. One result per request, in order; a
-    failed request is a :class:`ModelRunnerError` in its slot, never raised, so
-    one window cannot lose the others. The checks :func:`generate` applies —
-    logprobs present — apply to each result.
+    own schema, as a policy's windows are — or ``(messages, json_schema,
+    max_new_tokens)`` with a per-request answer limit (common.config.answer_cap).
+    One result per request, in order; a failed request is a
+    :class:`ModelRunnerError` in its slot, never raised, so one window cannot
+    lose the others. The checks :func:`generate` applies — logprobs present —
+    apply to each result.
     """
-    import dataclasses
-
-    configs = [
-        dataclasses.replace(model.config, json_schema=schema) if schema else model.config
-        for _messages, schema in requests
-    ]
+    configs = [_request_config(model.config, request[1], request[2] if len(request) > 2 else None)
+               for request in requests]
     raw = model.backend.generate_batch(
-        [messages for messages, _schema in requests], configs, adapter=adapter
+        [request[0] for request in requests], configs, adapter=adapter
     )
 
     out: list[Generation | ModelRunnerError] = []

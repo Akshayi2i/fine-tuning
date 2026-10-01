@@ -243,6 +243,17 @@ def pixel_budget(tasks: Any = None) -> tuple[int, int]:
     return budget
 
 
+def answer_cap(task: str | None, doc_type: str | None = None) -> int:
+    """Most tokens one answer of this task may run to: its reserved ``max_output_tokens``.
+
+    Training targets are refused above it (cap_check), so a generation that
+    needs more is not an answer the model was taught - it is a loop. Capping
+    there, rather than at the serving-wide max_new_tokens, stops a looping
+    declarations window at 4,096 tokens instead of 8,192.
+    """
+    return int(sequence_for_task(task or "extract", doc_type)["max_output_tokens"])
+
+
 def sequence_for_task(task: str, doc_type: str | None = None) -> dict[str, Any]:
     """The sequence cap and reserved output budget for one task (arch v2.1 §7a).
 

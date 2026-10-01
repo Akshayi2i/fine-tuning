@@ -241,6 +241,14 @@ def _build_request(
     return built.messages, schema
 
 
+def _window_answer_cap(group: str, doc_type: str | None) -> int:
+    """A window's answer limit: its section task's reserved budget, as in training."""
+    from common.config import answer_cap
+    from common.schema_sections import task_for
+
+    return answer_cap(task_for(group), doc_type)
+
+
 def _parse_generation(
     result: Generation, route_: Route, *, refuse_truncated: bool = False
 ) -> tuple[dict[str, Any], dict[str, Any]]:
@@ -366,14 +374,14 @@ def _extract_policy_windows(
     while pending:
         rounds += 1
         requests = [
-            _build_request(
+            (*_build_request(
                 model, route_,
                 [_image_for(request, page) for page in pages],
                 None if image_only else [texts.get(page) or _EMPTY_PAGE for page in pages],
                 request.modality_mode,
                 page_numbers=pages, total_pages=page_count,
                 lob=lob, sections=group,
-            )
+            ), _window_answer_cap(group, route_.schema_doc_type))
             for group, pages in pending
         ]
         started = time.perf_counter()

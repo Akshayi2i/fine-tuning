@@ -137,8 +137,10 @@ def generate_validation(
     if constrain is None:
         constrain = bool(getattr(model.config, "structured_outputs", False))
 
+    from common.config import answer_cap
+
     out: list[ValidationGeneration] = []
-    pending: list[tuple[ValidationGeneration, list[dict[str, Any]], dict[str, Any] | None]] = []
+    pending: list[tuple[ValidationGeneration, list[dict[str, Any]], dict[str, Any] | None, int]] = []
     for row in rows:
         entry = ValidationGeneration(row=row, golden={})
         out.append(entry)
@@ -160,22 +162,24 @@ def generate_validation(
         except Exception as exc:  # noqa: BLE001 - one bad row must not lose the rest
             _record_failure(entry, exc, "setup")
             continue
-        pending.append((entry, messages, schema))
+        # The row's own answer budget: a longer answer is a loop, not an answer.
+        pending.append((entry, messages, schema, answer_cap(row.get("task"), row.get("doc_type"))))
 
     size = max(1, batch_rows)
     for first in range(0, len(pending), size):
         chunk = pending[first:first + size]
-        results = generate_batch(model, [(m, s) for _e, m, s in chunk], adapter=adapter)
+        results = generate_batch(model, [(m, s, cap) for _e, m, s, cap in chunk], adapter=adapter)
         if len(chunk) > 1 and all(isinstance(r, Exception) for r in results):
             # A whole call fails together (one unreadable page image refuses the
             # batch): retry its rows alone, so the bad one is the only loss.
             results = []
-            for _entry, messages, schema in chunk:
+            for _entry, messages, schema, cap in chunk:
                 try:
-                    results.append(generate(model, messages, adapter=adapter, json_schema=schema))
+                    results.append(generate(model, messages, adapter=adapter, json_schema=schema,
+                                            max_new_tokens=cap))
                 except Exception as exc:  # noqa: BLE001
                     results.append(exc)
-        for (entry, _messages, _schema), result in zip(chunk, results, strict=True):
+        for (entry, _messages, _schema, _cap), result in zip(chunk, results, strict=True):
             _finish(entry, result)
         log.info("validation generation: %d/%d row(s)%s", min(first + size, len(pending)),
                  len(pending), f" ({adapter})" if adapter else "")
