@@ -238,8 +238,10 @@ def training_target(
     Golden labels keep whatever date format they were written in; only the target
     is converted.
     """
+    from common.label_mapping import map_label
     from common.schemas import is_canonical, required_fields, resolved_schema
 
+    label = map_label(label, lob)          # configs/label_mappings.yaml
     # In the order the decoding grammar writes keys (in_schema_order).
     schema = resolved_schema(doc_type, acord_form, lob)
     if is_canonical(doc_type, acord_form, lob):

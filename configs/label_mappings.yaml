@@ -1,0 +1,39 @@
+# Labels written for one line's schema, used under another's.
+#
+# The Hagerty labels were authored as personal auto: their vehicles, drivers and
+# coverages sit under `auto`. Hagerty policies are extracted as classic auto
+# (data/bundle_lob_overrides.csv), whose schema reads them from `classic_auto` -
+# so every classic-auto line-block window trained on an EMPTY target, teaching
+# the model that a classic-auto policy has no vehicles and no coverages.
+#
+# Applied when training targets are built and when gold labels are scored
+# (common.label_mapping), never to the stored labels. Only when the label has
+# the source block and not the target one: a label written in the target
+# format is used as it is.
+#
+# Per section: where it goes, and fields renamed on the way. Fields are then
+# kept only if the target schema defines them; the rest (no classic-auto field
+# exists for them) are dropped rather than guessed into a near neighbour.
+classic_auto:
+  from: auto
+  to: classic_auto
+  sections:
+    vehicles:
+      to: vehicles
+      rename:
+        body_type: body_style
+        # Hagerty prints the agreed value; personal auto has no such field, so
+        # the labels carried it as the stated amount.
+        stated_amount: agreed_value
+        total_loss_settlement_basis: valuation_basis
+    drivers:
+      to: operators
+    liability_coverages:
+      to: liability_coverages
+      rename:
+        uninsured_motorist_bodily_injury_limit: uninsured_motorist_limit
+        underinsured_motorist_bodily_injury_limit: underinsured_motorist_limit
+    physical_damage_coverages:
+      to: physical_damage_coverages
+      rename:
+        roadside_assistance_limit: roadside_assistance

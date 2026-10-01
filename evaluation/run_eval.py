@@ -555,6 +555,11 @@ def build_report(
         # (common.canonical.SYSTEM_SUPPLIED_FIELDS). Stripped from both sides, so a
         # gold label or frozen eval set that still carries them counts nothing.
         expected, got = without_system_fields(expected), without_system_fields(got)
+        # A gold label written for another line's schema is scored in this
+        # line's (configs/label_mappings.yaml), as its training target was built.
+        from common.label_mapping import map_label
+
+        expected = map_label(expected, metadata.get("lob"))
         doc_type = metadata.get("doc_type", "unknown")
         for subset in subset_of(metadata):
             buckets.setdefault((doc_type, subset), []).append((expected, got, metadata))
