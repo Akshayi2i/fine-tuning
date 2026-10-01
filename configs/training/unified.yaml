@@ -156,6 +156,16 @@ logging:
 
 seed: 42
 
+# Lines of business with few training documents are repeated in every epoch
+# file, so the largest line (homeowners: 593 of 1,329 training documents) does
+# not decide what the model learns for the small ones (motorcycle 33, ocean
+# marine 44, umbrella 55). A line under min_documents is repeated
+# ceil(min_documents / its documents) times, at most max_repeat. Validation and
+# test are never repeated. 0 turns it off.
+line_balance:
+  min_documents: 100
+  max_repeat: 3
+
 distributed:
   # One H200 SXM 141GB in this deployment (sized originally for an A100 80GB). If a task cap does not fit, ms-swift SEQUENCE
   # PARALLELISM comes first (§9.3) - DeepSpeed ZeRO is not used unless that is

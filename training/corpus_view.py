@@ -47,6 +47,8 @@ class CorpusView:
     val_rows: int = 0
     test_rows: int = 0
     dropped_rows: int = 0
+    #: Line of business -> times its rows appear in each epoch file (line_balance).
+    line_repeats: dict[str, int] = field(default_factory=dict)
 
     @property
     def train_rows(self) -> int:
@@ -76,6 +78,49 @@ def _filter(text: str, scope: Scope) -> tuple[str, int, int]:
         else:
             dropped += 1
     return "\n".join(kept) + ("\n" if kept else ""), len(kept), dropped
+
+
+def _line_of(row: dict) -> str:
+    lob = row.get("lob")
+    return ",".join(sorted(map(str, lob))) if isinstance(lob, list) else str(lob or "unknown")
+
+
+def _balance_settings(scope: Scope) -> dict[str, int]:
+    from common.config import training_config
+
+    settings = training_config(scope.training_config).get("line_balance") or {}
+    return {"min_documents": int(settings.get("min_documents") or 0),
+            "max_repeat": int(settings.get("max_repeat") or 1)}
+
+
+def line_repeats(rows: list[dict], *, min_documents: int, max_repeat: int) -> dict[str, int]:
+    """How many times each line's rows go into an epoch file (``line_balance``).
+
+    Counted in DOCUMENTS, not rows: a line of long policies has many rows per
+    document and is not small for it.
+    """
+    documents: dict[str, set] = {}
+    for row in rows:
+        documents.setdefault(_line_of(row), set()).add(row.get("source_id"))
+    if min_documents <= 0 or max_repeat <= 1 or not documents:
+        return {line: 1 for line in documents}
+    # Toward the largest line, never past it: when every line is small (a smoke
+    # corpus), repeating all of them alike would multiply the run's length and
+    # change nothing about the balance.
+    target = min(min_documents, max(len(ids) for ids in documents.values()))
+    return {
+        line: 1 if len(ids) >= target else min(max_repeat, -(-target // len(ids)))
+        for line, ids in documents.items()
+    }
+
+
+def _balance(body: str, repeats: dict[str, int]) -> tuple[str, int]:
+    """``body`` with each row written as many times as its line's repeat count."""
+    out: list[str] = []
+    for line in body.splitlines():
+        if line.strip():
+            out.extend([line] * repeats.get(_line_of(json.loads(line)), 1))
+    return "\n".join(out) + ("\n" if out else ""), len(out)
 
 
 def materialize(
@@ -108,6 +153,16 @@ def materialize(
                 "built; it does not build one of its own."
             )
         body, kept, dropped = _filter(client.read_text(source), scope)
+        if epoch == 1:
+            # One set of repeat counts for every epoch, from the documents of
+            # the first: every epoch file holds every training document once.
+            balance = _balance_settings(scope)
+            view.line_repeats = line_repeats(
+                [json.loads(line) for line in body.splitlines() if line.strip()], **balance)
+            boosted = {line: n for line, n in view.line_repeats.items() if n > 1}
+            if boosted:
+                log.info("line balance: repeating %s in every epoch file", boosted)
+        body, kept = _balance(body, view.line_repeats)
         target = paths.corpus_scope_epoch_file(corpus_version, epoch, scope.name, tenant_id)
         client.write_text(target, body)
         view.epoch_files.append(target)
