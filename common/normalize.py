@@ -55,10 +55,12 @@ _ORG_ABBREV = {
     # _PUNCT has already removed it.
 }
 
-#: Two-digit years below this resolve into the 1900s under Python's `%y`
-#: pivot. Policy and loss-run dates are contemporary — a two-digit year is
-#: always this century or the next — so anything under it is moved forward.
-_CENTURY_PIVOT = 2000
+#: How far ahead a two-digit year may land. `27` is 2027 - an expiration, a
+#: renewal - but `85` is 1985: a date of birth, a date licensed, a year built.
+#: Reading every two-digit year as this century wrote `07/04/85` as 2085, into
+#: training targets and served output alike. Ten years covers policy terms and
+#: the dates printed about them; further out, the last century is meant.
+_TWO_DIGIT_YEAR_HORIZON = 10
 
 _DATE_FORMATS = (
     "%Y-%m-%d", "%m/%d/%Y", "%m/%d/%y", "%d/%m/%Y", "%m-%d-%Y", "%d-%m-%Y",
@@ -103,13 +105,16 @@ def normalize_date(value: Any) -> str | None:
             parsed = datetime.strptime(raw, fmt).date()
         except ValueError:
             continue
-        # Two-digit years. `%y` already resolved 69 -> 1969 and 68 -> 2068 via
-        # Python's POSIX pivot, so `parsed.year < 100` never fired and the
-        # comment described something the code did not do. Insurance dates do
-        # not reach back to the 1960s, so anything before the pivot is pulled
-        # forward a century — `01/02/69` is 2069, not 1969.
-        if "%y" in fmt and parsed.year < _CENTURY_PIVOT:
-            parsed = parsed.replace(year=parsed.year + 100)
+        if "%y" in fmt:
+            # Not Python's own pivot (69 -> 1969, 68 -> 2068): this century
+            # unless that is beyond the horizon, then the last one.
+            year = 2000 + parsed.year % 100
+            if year > date.today().year + _TWO_DIGIT_YEAR_HORIZON:
+                year -= 100
+            try:
+                parsed = parsed.replace(year=year)
+            except ValueError:  # 29 February in a year that has none
+                continue
         return parsed.isoformat()
     return None
 

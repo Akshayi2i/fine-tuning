@@ -129,6 +129,10 @@ def render_document(
         "table_row_counts": existing.get("table_row_counts", {}) if was_ocred else {},
         "failed_pages": existing.get("failed_pages", []) if was_ocred else [],
     }
+    # Preserved too. Dropped, a scan was later read as a digital document: out
+    # of the scanned eval subset, and scored against the wrong comparison.
+    if was_ocred and "is_scanned" in existing:
+        meta["is_scanned"] = existing["is_scanned"]
     if was_ocred:
         log.warning(
             "%s was OCR'd; re-rendered its page images at %dpx and kept its OCR metadata. "

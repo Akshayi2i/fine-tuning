@@ -189,12 +189,11 @@ def test_a_release_whose_unreviewed_values_are_3pct_wrong_is_blocked():
 def test_without_calibrators_serving_accepts_nothing():
     """The v1 transform accepted a field above a fixed 0.70, an error rate
     nobody measured. Its confidence is still reported; nothing is accepted."""
-    from serving.doc_type_classifier import StaticClassifier
-    from serving.pipeline import extract
-    from tests.test_serving_pipeline import CALIBRATION, _request, model  # noqa: F401
     from artifact_registry.blob_client import BlobClient, InMemoryBackend
     from inference_core.model_runner import EchoBackend, load_model
-    from tests.test_serving_pipeline import RESPONSE
+    from serving.doc_type_classifier import StaticClassifier
+    from serving.pipeline import extract
+    from tests.test_serving_pipeline import CALIBRATION, RESPONSE, _request, model  # noqa: F401
 
     client = BlobClient(backend=InMemoryBackend(), container="main", raw_container="raw")
     loaded = load_model("base", client, backend_impl=EchoBackend(RESPONSE))

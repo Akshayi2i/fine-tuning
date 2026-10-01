@@ -242,6 +242,10 @@ def evaluate_version(
     report = build_report(version, triples, corpus_version=corpus_version, scope=scope)
     body = report.as_dict()
     body["documents_failed"] = failed
+    # Whether the documents were served through fitted calibrators. Without
+    # them every field is flagged, and the gate must not reuse this report
+    # once the release has calibrators (pipeline_dag.eval_report_metrics).
+    body["calibrated"] = calibrators is not None
     body.update(real_only_section(version, triples, corpus_version=corpus_version, scope=scope))
     body["windowing_ceiling"] = windowing_ceiling(documents)
     client.write_json(paths.eval_report(version, scope=scope.name), body)

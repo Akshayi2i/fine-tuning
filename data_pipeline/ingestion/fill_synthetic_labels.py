@@ -48,6 +48,9 @@ from common.normalize import infer_field_kind, normalize_currency, normalize_dat
 
 DEFAULT_REVIEWED = Path("data") / "source data" / "gold json"
 
+#: Recorded in a completed label's ``fideon:filled``, beside the paths added.
+FILLED_FROM = "reviewed gold of the source (fill_synthetic_labels)"
+
 #: Sections copied from neither side: free text the generator rewrites itself.
 SKIP_KEYS = ("text_sections",)
 
@@ -187,6 +190,9 @@ class _Context:
     substrings: list[tuple[str, str]]  # (old, new), longest first, for text that quotes a party
     pages: int | None
     stats: FillStats
+    #: The envelopes this fill added, kept as objects: a row's index can change
+    #: between the source and the merged label, an object's identity cannot.
+    added: list[dict] = field(default_factory=list)
 
 
 def _context(source: dict, twin: dict, pages: int | None, stats: FillStats) -> _Context:
@@ -292,6 +298,7 @@ def _merge(src: Any, syn: Any, path: str, ctx: _Context) -> Any:
         added = _transform(src, path, ctx)
         if added is not None:
             ctx.stats.added[_section(path)] += 1
+            ctx.added.append(added)
         return added
     if isinstance(src, dict):
         result = dict(syn) if isinstance(syn, dict) else {}
@@ -353,6 +360,18 @@ def fill(source: dict, twin: dict, *, pages: int | None = None) -> tuple[dict, F
     if isinstance(absent, list):
         present = {re.sub(r"\[\d+\]", "[]", p) for p, _ in _flat(merged)}
         merged["fideon:absent"] = [p for p in absent if p not in present]
+    # Which values were computed here rather than read off the twin's page.
+    # ocr_check compares exactly these with the page, and label_verification
+    # keeps one for training only where the page prints it; unrecorded, both
+    # had nothing to check and every computed value was trusted.
+    mine = {id(node) for node in ctx.added}
+    paths = [path for path, node in _flat(merged) if id(node) in mine]
+    earlier = ((twin.get("fideon:filled") or {}).get("paths")) or []
+    if paths or earlier:
+        merged["fideon:filled"] = {
+            "from": FILLED_FROM,
+            "paths": list(dict.fromkeys([*earlier, *paths])),
+        }
     return merged, stats
 
 

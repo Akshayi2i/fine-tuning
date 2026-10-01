@@ -206,8 +206,12 @@ def read_lob_overrides(path: Path) -> list[tuple[str, str]]:
     if rows and not {"source_prefix", "lob"} <= set(rows[0]):
         raise BundleError(f"{path} needs the columns source_prefix,lob,reason")
     out = []
+    from common.lob import merge_line
+
     for r in rows:
-        lob = r["lob"].strip()
+        # Classic auto is read as personal auto (common.lob.MERGED_LINES): an
+        # override file written before the merge still names it.
+        lob = str(merge_line(r["lob"].strip()))
         if lob not in known_lines():
             raise BundleError(f"{path}: {lob!r} is not a line with a canonical schema")
         out.append((r["source_prefix"].strip(), lob))

@@ -360,6 +360,33 @@ def _infer_key_fields(rows: list[Any]) -> list[str]:
                    if not isinstance(v, _CONTAINER_TYPES)})
 
 
+def rows_aligned_to(expected: Any, got: Any) -> Any:
+    """``expected`` with every table's rows in the order ``got`` holds them.
+
+    Rows are paired by identity (:func:`_infer_key_fields`, :func:`_row_key`),
+    as list recall pairs them, so ``vehicles[2].vin`` in the result is the label
+    row the model's ``vehicles[2]`` reads. A model row the label does not hold
+    pairs with ``{}``; a label row the model left out has no place and is
+    dropped. For comparing by path: by position, one omitted or reordered row
+    shifted every row after it and every correct value in them read as wrong.
+    Both sides as values (``values_view``).
+    """
+    if isinstance(got, dict):
+        source = expected if isinstance(expected, dict) else {}
+        aligned = {key: rows_aligned_to(source.get(key), value) for key, value in got.items()}
+        return {**source, **aligned}
+    if isinstance(got, list) and got and all(isinstance(row, dict) for row in got):
+        rows = expected if isinstance(expected, list) else []
+        keys = _infer_key_fields(rows) if rows else []
+        pool = _index_rows(rows, keys)
+        out = []
+        for row in got:
+            candidates = pool.get(_row_key(row, keys)) if rows else None
+            out.append(rows_aligned_to(candidates.pop(0) if candidates else {}, row))
+        return out
+    return expected
+
+
 def find_list_fields(obj: dict[str, Any], prefix: str = "") -> dict[str, list[dict[str, Any]]]:
     """Every repeating structure in a document, nested ones included.
 

@@ -156,11 +156,22 @@ TEXT_LAYER_MIN_CHARS = 30
 
 
 def text_layer_pages(pdf_bytes: bytes) -> list[bool]:
-    """Per page, whether the PDF carries a text layer (a digital page, not a scan)."""
+    """Per page, whether it is a digital page rather than a scan.
+
+    A page with a text layer is digital. So is an EMPTY page - no text, no
+    image, no drawing: there is nothing on it to OCR. Counting it as a scan
+    sent a whole digital policy with one blank page through OCR mode and into
+    the scanned eval subset. A page with no text layer but an image or
+    drawings on it is a scan (or might be), and is read by OCR.
+    """
     import pymupdf
 
     with pymupdf.open(stream=pdf_bytes, filetype="pdf") as doc:
-        return [len(page.get_text().strip()) >= TEXT_LAYER_MIN_CHARS for page in doc]
+        return [
+            len(page.get_text().strip()) >= TEXT_LAYER_MIN_CHARS
+            or not (page.get_images() or page.get_drawings())
+            for page in doc
+        ]
 
 
 def pages_from_content_list(blocks: Iterable[dict[str, Any]], page_count: int) -> list[str]:

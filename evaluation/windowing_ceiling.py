@@ -111,9 +111,11 @@ def oracle(source_id: str, label: dict, lob: Any, page_count: int,
             for row in rows:
                 pool[_row_key(row, keys)].append(row)
             for index, row in enumerate(expected):
-                match = pool.get(_row_key(row, keys))
-                compare(row, match.pop(0) if match else None, f"{path}[{index}]",
-                        unmatched_row or not match)
+                candidates = pool.get(_row_key(row, keys))
+                found = candidates.pop(0) if candidates else None
+                # Decided on the row found, not on what is left after taking it:
+                # a row matched once was counted as unmatched.
+                compare(row, found, f"{path}[{index}]", unmatched_row or found is None)
         elif not _is_empty(expected):
             result.gold_values += 1
             if values_match(expected, actual, field_path=path):

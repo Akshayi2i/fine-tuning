@@ -254,8 +254,9 @@ def calibration_samples(
     the calibrator has already been pulled toward.
     """
     from calibration.features import build_document_features
+    from common.canonical import values_view
     from common.normalize import values_match
-    from evaluation.metrics.field_accuracy import flatten_scalars
+    from evaluation.metrics.field_accuracy import flatten_scalars, rows_aligned_to
 
     halves: dict[str, list[tuple[Any, bool]]] = {"calibration": [], "threshold": []}
     unassigned = 0
@@ -268,7 +269,13 @@ def calibration_samples(
             # No generation means no features. The failure is already counted in
             # the scored metrics; it has no token evidence to calibrate on.
             continue
-        expected = flatten_scalars(generation.golden)
+        # The label's rows in the order the model wrote its own, paired by
+        # identifier: compared by position, one omitted or reordered row made
+        # every later row's correct values "wrong", and the calibrator learned
+        # to distrust them.
+        expected = flatten_scalars(rows_aligned_to(
+            values_view(generation.golden), values_view(generation.extraction or {})
+        ))
         for features in build_document_features(
             extraction=generation.extraction or {},
             spans=generation.logprobs_by_path,

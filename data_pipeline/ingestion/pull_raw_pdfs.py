@@ -124,14 +124,35 @@ def _existing_checksums(client: BlobClient, doc_type: str, tenant_id: str | None
     return seen
 
 
-def _existing_source_ids(client: BlobClient, doc_type: str, tenant_id: str | None) -> list[str]:
-    prefix = f"raw-documents/{paths._tenant(tenant_id)}/{doc_type}/"
+#: Every place a document's id is the key of something stored.
+_ID_ROOTS = ("raw-documents", "processed", "golden-labels")
+
+
+def taken_source_ids(client: BlobClient, doc_type: str, tenant_id: str | None) -> list[str]:
+    """Every source_id already in use for this type, wherever it is in use.
+
+    PDF ingestion counted the raw layer and the prepared import counted the
+    labels, so each handed out ids the other had already given: ``policy_0001``
+    twice, the second overwriting the first's pages and label. A root this
+    client may not read (the raw layer is restricted to ingestion and OCR) is
+    skipped - the other roots still hold every id that reached them.
+    """
     out = set()
-    for key in client.list(prefix):
-        parts = key.split("/")
-        if len(parts) >= 4 and is_valid_source_id(parts[3]):
-            out.add(parts[3])
+    for root in _ID_ROOTS:
+        prefix = f"{root}/{paths._tenant(tenant_id)}/{doc_type}/"
+        try:
+            keys = list(client.list(prefix))
+        except Exception:  # noqa: BLE001 - a root outside this client's reach
+            continue
+        for key in keys:
+            parts = key.split("/")
+            if len(parts) >= 4 and is_valid_source_id(parts[3]):
+                out.add(parts[3])
     return sorted(out)
+
+
+def _existing_source_ids(client: BlobClient, doc_type: str, tenant_id: str | None) -> list[str]:
+    return taken_source_ids(client, doc_type, tenant_id)
 
 
 def ingest_pdf(

@@ -291,12 +291,27 @@ def test_a_page_without_a_text_layer_sends_the_document_through_ocr(monkeypatch)
 
     doc = pymupdf.open()
     doc.new_page().insert_text((72, 72), "DECLARATIONS page with a real text layer on it, typed")
-    doc.new_page()                                          # a scanned endorsement: no text
+    # A scanned endorsement: a page image and no text.
+    scan = pymupdf.Pixmap(pymupdf.csRGB, pymupdf.IRect(0, 0, 60, 80))
+    scan.clear_with(200)
+    doc.new_page().insert_image(pymupdf.Rect(0, 0, 595, 842), pixmap=scan)
     doc.new_page().insert_text((72, 72), "SCHEDULE page with a real text layer on it, typed")
     calls = _fake_mineru(monkeypatch, CONTENT, scanned=False)   # MinerU alone would say "text"
     pages = MinerUEngine().process(doc.tobytes(), device="cuda", max_long_side_px=800)
     assert calls["mode"] == "ocr"
     assert [p.scanned for p in pages] == [False, True, False]
+
+
+def test_a_blank_page_does_not_make_a_digital_pdf_a_scan():
+    """Nothing is on it to OCR. One blank page sent a whole typed policy through
+    OCR mode and into the scanned eval subset."""
+    pymupdf = pytest.importorskip("pymupdf")
+    from data_pipeline.ocr.run_mineru import text_layer_pages
+
+    doc = pymupdf.open()
+    doc.new_page().insert_text((72, 72), "DECLARATIONS page with a real text layer on it, typed")
+    doc.new_page()                                              # blank: no text, image or drawing
+    assert text_layer_pages(doc.tobytes()) == [True, True]
 
 
 # #6 — a serving pod without MinerU does not fail the OCR pin

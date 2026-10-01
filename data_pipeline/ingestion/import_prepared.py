@@ -209,12 +209,12 @@ def import_document(
             "checked, and the first symptom is a model that learned the wrong shape."
         )
 
-    # Ids come from the same counter labeling uses, so an imported document and a
-    # labeled one can never collide on a source_id — the key every later stage
-    # joins on.
-    from data_pipeline.labeling.export_golden_labels import list_labeled_source_ids
+    # The next id unused ANYWHERE - raw PDFs, processed pages, labels - so an
+    # imported document cannot take the id of one that was ingested as a PDF
+    # (or the reverse) and overwrite its pages and label.
+    from data_pipeline.ingestion.pull_raw_pdfs import taken_source_ids
 
-    existing = list_labeled_source_ids(client, doc_type, tenant_id)
+    existing = taken_source_ids(client, doc_type, tenant_id)
     source_id = source_id or next_source_id(existing, doc_type)
 
     for page, image in enumerate(doc.images, start=1):

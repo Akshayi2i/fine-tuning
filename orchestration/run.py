@@ -253,6 +253,9 @@ def _add_package_flags(parser: argparse.ArgumentParser, *, version_required: boo
                             default=list(ACTIVE_DOC_TYPES),
                             help="must match the finetune run that produced this version")
         parser.add_argument("--tenant", default=None)
+        parser.add_argument("--corpus-version", dest="corpus_version", default="",
+                            help="the corpus the version trained on; read from its run "
+                                 "manifest when omitted")
 
 
 def build_parser() -> argparse.ArgumentParser:

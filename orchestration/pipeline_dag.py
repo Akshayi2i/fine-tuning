@@ -304,9 +304,23 @@ def stage_ingestion(ctx: StageContext) -> StageResult:
     if ctx.input_dir is None:
         raise PipelineError("ingestion needs --input; pass --skip-ingest to reuse what is in Blob")
 
+    # One folder per document type, or one type. A flat folder read once per
+    # type stored every PDF as an ACORD, a policy AND a Loss Run: dedup is per
+    # type, and the raw layer is write-once.
+    typed = [dt for dt in ctx.doc_types if (ctx.input_dir / dt).is_dir()]
+    if not typed and len(ctx.doc_types) > 1:
+        raise PipelineError(
+            f"{ctx.input_dir} has no {'/, '.join(ctx.doc_types)}/ subfolder, so nothing says "
+            "which document type each PDF is. Put each type's PDFs in a folder named after it, "
+            "or pass one type with --doc-types."
+        )
+    skipped = [dt for dt in ctx.doc_types if typed and dt not in typed]
+    if skipped:
+        log.info("no %s/ folder under %s: nothing to ingest for those types", skipped, ctx.input_dir)
+
     ingested, duplicates, failed = [], [], []
-    for doc_type in ctx.doc_types:
-        source = ctx.input_dir / doc_type if (ctx.input_dir / doc_type).is_dir() else ctx.input_dir
+    for doc_type in typed or ctx.doc_types:
+        source = ctx.input_dir / doc_type if typed else ctx.input_dir
         result = ingest_directory(source, doc_type, ctx.raw, tenant_id=ctx.tenant_id)
         ingested += result.ingested
         duplicates += [name for name, _sid in result.skipped_duplicates]
@@ -1206,10 +1220,16 @@ def eval_report_metrics(ctx: StageContext) -> dict[str, Any]:
     # policy candidate on the UNIFIED model's numbers — or found no report and
     # failed — while stage_push recorded the scoped key on the manifest.
     summary_key = paths.eval_report(ctx.out_version, scope=ctx.scope.name)
+    calibrators, thresholds = release_calibration(ctx, "bf16")
     if ctx.client.exists(summary_key):
         report = ctx.client.read_json(summary_key)
         metrics = report.get("gate_metrics") or report.get("candidate_metrics") or {}
-        if metrics:
+        if metrics and calibrators is not None and report.get("calibrated") is not True:
+            # Scored before this release had calibrators: every field was
+            # flagged, so auto_accept_error_rate read a trivial 0.0. Not reused.
+            log.info("the eval report at %s was made without calibrators; scoring again "
+                     "with the release's", summary_key)
+        elif metrics:
             log.info("gate metrics read from %s", summary_key)
             return dict(metrics)
 
@@ -1233,11 +1253,37 @@ def eval_report_metrics(ctx: StageContext) -> dict[str, Any]:
             ctx.client, model,
             version=ctx.out_version, corpus_version=ctx.corpus, scope=ctx.scope,
             tenant_id=ctx.tenant_id,
-            calibrators=ctx.calibrators.get("bf16"), thresholds=ctx.thresholds.get("bf16"),
+            calibrators=calibrators, thresholds=thresholds,
         )
     finally:
         release_model(model)
     return dict(report.get("gate_metrics") or {})
+
+
+def release_calibration(ctx: StageContext, fmt: str) -> tuple[Any, Any]:
+    """This release's calibrators and thresholds for one serving format.
+
+    From this process when calibrate ran in it, otherwise from where calibrate
+    saved them. A gate resumed in a new process (``--from-stage
+    evaluation_gate``) had neither, so the golden set was served uncalibrated:
+    everything flagged, nothing accepted, and auto_accept_error_rate a trivial
+    0.0 that measured nothing.
+    """
+    calibrators, thresholds = ctx.calibrators.get(fmt), ctx.thresholds.get(fmt)
+    if calibrators is not None or not ctx.release_id:
+        return calibrators, thresholds
+    key = paths.release_calibrators(ctx.release_id, fmt, ctx.tenant_id)
+    if not ctx.client.exists(key):
+        return None, None
+    from calibration.feature_calibrator import CalibratorSet
+    from calibration.thresholds import ThresholdSet
+
+    body = ctx.client.read_json(key)
+    calibrators = CalibratorSet.from_dict(body["calibrators"])
+    thresholds = ThresholdSet.from_dict(body["thresholds"])
+    ctx.calibrators[fmt], ctx.thresholds[fmt] = calibrators, thresholds
+    log.info("loaded the %s calibrators of %s from %s", fmt, ctx.release_id, key)
+    return calibrators, thresholds
 
 
 def default_baseline_metrics(ctx: StageContext) -> dict[str, Any] | None:
@@ -1329,12 +1375,18 @@ def stage_evaluation_gate(ctx: StageContext) -> StageResult:
     # record with it — which is what `vit_gate` reads to decide whether the
     # vision encoder is the bottleneck.
     report_key = paths.gate_decision(ctx.out_version, scope=ctx.scope.name)
+    # Before the decision is written, not after: `package --from-stage package`
+    # reads the recorded decision, and one saying "passed" for a version the
+    # cascade then blocked let it be published.
+    cascade = foundation_upgrade_work_list(ctx) if result.passed else None
+    cascade_blocked = bool(cascade and cascade.blocking)
     decision = {
         "version": ctx.out_version,
         "candidate_metrics": candidate,
         "gate_metrics": candidate,
         "baseline_metrics": baseline,
-        "passed": result.passed,
+        "passed": result.passed and not cascade_blocked,
+        "cascade_blocked": cascade.describe() if cascade_blocked else None,
         "failed_gates": result.failed_gates,
         # The full verdict per metric — floor, interval and basis — not just a
         # delta. "Why was this blocked" needs the evidence, not the difference.
@@ -1367,8 +1419,7 @@ def stage_evaluation_gate(ctx: StageContext) -> StageResult:
             gate_result=result,
         )
 
-    cascade = foundation_upgrade_work_list(ctx)
-    if cascade.blocking:
+    if cascade_blocked:
         raise GateBlocked(
             f"{ctx.out_version} passed its own gate but cannot be promoted yet. "
             f"{cascade.describe()}. Every per-type adapter was trained on top of the previous "
@@ -1760,12 +1811,51 @@ def assert_gate_passed(ctx: StageContext) -> None:
         )
 
 
+def resolve_corpus_version(ctx: StageContext) -> None:
+    """The corpus a standalone ``package`` works against: the one its run trained on.
+
+    ``package`` had no way to name it, so ``ctx.corpus`` fell back to the MODEL
+    version. Calibration then found no validation rows and skipped, the eval-set
+    leak check compared against a corpus that did not exist and passed, and the
+    bundle build failed on the missing corpus manifest - after the weights were
+    already published. Read from the run manifest; refused when neither that nor
+    ``--corpus-version`` names a corpus that exists.
+    """
+    if ctx.corpus_version or ctx.dry_run:
+        return
+    from registry_utils.query_registry import RegistryQueryError
+    from registry_utils.query_registry import get as get_manifest
+
+    run_id = ctx.scope.run_id(ctx.out_version)
+    try:
+        recorded = get_manifest(run_id, ctx.client).dependencies.corpus_version
+    except (RegistryQueryError, KeyError, FileNotFoundError, AttributeError):
+        recorded = ""
+    recorded = str(recorded or "").removeprefix("corpus/")
+    if recorded:
+        ctx.corpus_version = recorded
+        log.info("packaging %s against corpus %s, from its run manifest", run_id, recorded)
+        return
+    if ctx.client.exists(paths.corpus_manifest(ctx.out_version, ctx.tenant_id)):
+        return  # the corpus shares the model version's name
+    raise PipelineError(
+        f"no corpus is known for {ctx.out_version}: its run manifest ({run_id}) records none and "
+        f"there is no corpus named {ctx.out_version}. Pass --corpus-version with the corpus the "
+        "version trained on; calibration and the eval-set leak check both read it."
+    )
+
+
 def assert_staged(ctx: StageContext) -> None:
     """Fail loudly, with remediation, when the version is not on the volume."""
+    import os
+
     if ctx.from_blob:
         return
     expected = paths.scoped_staging_adapter_dir(ctx.scope.name, ctx.out_version)
-    if ctx.volume.exists(expected):
+    # The mount itself, as _is_trained reads it: the volume record lives in the
+    # process that trained, so a `package` run later - a new process - found
+    # nothing recorded and refused a version that was sitting on the disk.
+    if ctx.volume.exists(expected) or os.path.isdir(expected):
         return
     raise PipelineError(
         f"version {ctx.out_version} is not on the staging volume — expected {expected}. "
@@ -1909,7 +1999,29 @@ def _clear_staged_scope(ctx: StageContext) -> int:
             paths.staging_quantized_model_dir(ctx.out_version, fmt, scope=ctx.scope.name)
             for fmt in ctx.formats
         ]
-    return sum(ctx.volume.clear(path) for path in owned)
+    return sum(ctx.volume.clear(path) + _remove_from_mount(path) for path in owned)
+
+
+def _remove_from_mount(path: str) -> int:
+    """Delete a staged artifact from the real volume; 1 when something went.
+
+    The volume record is in memory, so clearing it freed nothing: every
+    packaged version left its adapter and merged model (tens of GB) on the
+    mount. Only ever a path inside the staging root, never the root itself.
+    """
+    import os
+    import shutil
+
+    root = os.path.realpath(paths.staging_root())
+    target = os.path.realpath(path)
+    if not os.path.exists(target) or target == root or not target.startswith(root + os.sep):
+        return 0
+    if os.path.isdir(target):
+        shutil.rmtree(target)
+    else:
+        os.remove(target)
+    log.info("removed %s from the staging volume", path)
+    return 1
 
 
 def _record_dry_run_push(ctx: StageContext) -> dict[str, str]:
@@ -2348,7 +2460,7 @@ def run_stages(ctx: StageContext, stages: Sequence[Stage], *, command: str = "fi
     report = RunReport(command=command, version=ctx.out_version)
     preconditions = []
     if command == "package" and stages:
-        preconditions.append(assert_staged)
+        preconditions += [resolve_corpus_version, assert_staged]
     if any(stage.command == "package" for stage in stages):
         # Before any work, including a whole `all` training run: an invalid id
         # used to surface only when calibrate tried to SAVE, after fitting.
