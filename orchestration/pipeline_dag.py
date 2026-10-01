@@ -1035,6 +1035,17 @@ def _rediscover_checkpoints(ctx: StageContext) -> None:
         ctx.checkpoints, ctx.best_loss_checkpoint = discover_checkpoints(staged)
 
 
+def _selection_settings(ctx: StageContext) -> dict[str, float]:
+    """The validation cut's settings for checkpoint selection, from the scope's config."""
+    from common.config import training_config
+
+    evaluation = training_config(ctx.scope.training_config)["evaluation"]
+    return {
+        "validation_sample_rows": int(evaluation.get("validation_sample_rows") or 0),
+        "selection_tie_break_margin": float(evaluation.get("selection_tie_break_margin") or 0.0),
+    }
+
+
 def stage_checkpoint_eval(ctx: StageContext) -> StageResult:
     """Pick the checkpoint that ships, by GENERATED field F1.
 
@@ -1073,10 +1084,16 @@ def stage_checkpoint_eval(ctx: StageContext) -> StageResult:
                 ctx.corpus, "val", ctx.scope.name, ctx.tenant_id
             ),
             images_root=paths.staging_train_images_dir(ctx.corpus, ctx.tenant_id),
+            sample_rows=int(_selection_settings(ctx)["validation_sample_rows"]),
         )
 
     try:
         report = select_best(checkpoints, scorer, best_loss=ctx.best_loss_checkpoint)
+        full = getattr(scorer, "full", None)
+        if full is not None:
+            from evaluation.checkpoint_eval import break_tie
+
+            report = break_tie(report, full, _selection_settings(ctx)["selection_tie_break_margin"])
     except CheckpointEvalError as exc:
         raise PipelineError(
             f"no checkpoint could be selected for {ctx.out_version}: {exc}. Merging an "

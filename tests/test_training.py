@@ -704,13 +704,16 @@ def test_the_command_uses_ms_swift_3_names_only():
 
 def test_the_evaluation_interval_is_sized_to_the_run():
     """A fixed 50 steps gave a ~56-step pilot run one evaluation, and checkpoint
-    selection nothing to choose between."""
+    selection nothing to choose between - and the delivered corpus ~50
+    evaluations, 50-60 h of validating. The validation cut divides every run into
+    evaluations_per_run checks."""
     small, _ = T.build_training_config(corpus_paths=EPOCH_PATHS, output_dir="/o", train_rows=450)
-    assert small.args["eval_steps"] == small.args["save_steps"]
     steps = -(-450 // 8)
     assert steps // small.args["eval_steps"] >= T.MIN_EVALUATIONS
-    big, _ = T.build_training_config(corpus_paths=EPOCH_PATHS, output_dir="/o", train_rows=10**6)
-    assert big.args["eval_steps"] == 50, "a large run keeps the configured interval"
+    big, _ = T.build_training_config(corpus_paths=EPOCH_PATHS, output_dir="/o", train_rows=20_000)
+    big_steps = -(-20_000 // 8)
+    assert big_steps // big.args["eval_steps"] in (9, 10)          # ~10 checks, not ~50
+    assert big.args["eval_steps"] % big.args["save_steps"] == 0    # each check lands on a save
 
 
 def test_train_vit_is_refused_until_the_vision_targets_are_known(monkeypatch):

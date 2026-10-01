@@ -135,6 +135,17 @@ evaluation:
   # end changed nothing that ships. On, the trainer refuses to save between
   # evaluations, and resume points could be no closer than the evaluations.
   load_best_model_at_end: false
+
+  # The validation cut. In-training checks per run, each on a fixed stratified
+  # sample of the validation split (evaluation.validation_sample); checkpoint
+  # selection ranks its candidates on the same sample. On the delivered corpus,
+  # every 50 steps on all ~3,300 rows cost 50-60 h of a ~35 h training run.
+  evaluations_per_run: 10
+  validation_sample_rows: 400
+  # When the top two candidates are closer than this in field accuracy on the
+  # sample, those two are scored again on the full validation split, which
+  # decides. Sample noise only matters inside such a margin.
+  selection_tie_break_margin: 0.015
   metric_for_best_model: "eval_loss"
   greater_is_better: false
   early_stopping_patience: 3

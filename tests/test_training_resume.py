@@ -46,9 +46,9 @@ def test_nothing_to_resume_from_an_empty_or_missing_directory(tmp_path):
 
 def test_resume_points_fall_between_evaluations_and_candidates_survive():
     cadence = T._checkpoint_cadence(250, {"checkpoint_every_steps": 70, "save_total_limit": 4})
-    assert cadence["save_steps"] == 70
+    assert cadence["save_steps"] == 63                             # at least every 70 steps
     assert cadence["eval_steps"] % cadence["save_steps"] == 0      # an evaluation lands on a save
-    assert cadence["eval_steps"] == 280                            # 4 saves per evaluation
+    assert cadence["eval_steps"] == 252                            # ~where the cut put it (250)
     assert cadence["save_total_limit"] == 4 * 4 + 1                # the 4 evaluation checkpoints kept
 
 

@@ -135,8 +135,13 @@ def stage_training_data(
     images_root: str | Path | None = None,
     workers: int = DOWNLOAD_WORKERS,
     max_pixels: int | None = None,
+    val_filter: Callable[[list[dict[str, Any]]], list[dict[str, Any]]] | None = None,
 ) -> StagedData:
     """Copy and convert a run's data onto local disk. Returns the local paths.
+
+    ``val_filter`` narrows the validation rows before conversion - the fixed
+    validation sample (``evaluation.validation_sample``), which needs the line
+    and reading mode the conversion drops.
 
     **Every row is converted and checked before a single image is fetched.** A
     row carrying a trainer tag, an unknown content block, or a task whose pixel
@@ -172,6 +177,8 @@ def stage_training_data(
 
     for name, key in sources:
         rows = _read_rows(client, key)
+        if val_filter is not None and name.startswith("val/"):
+            rows = val_filter(rows)
         if max_pixels is not None:
             _refuse_other_budgets(rows, max_pixels)
         converted.append((

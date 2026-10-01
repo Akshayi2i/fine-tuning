@@ -117,12 +117,22 @@ _ATTN_IMPL = {"flash_attention_2": "flash_attn"}
 MIN_EVALUATIONS = 5
 
 
-def _eval_interval(train_rows: int | None, *, configured: int, effective_batch: int) -> int:
-    """Steps between evaluations (and saves): the configured value, shrunk so a
-    run gets at least :data:`MIN_EVALUATIONS`. Unknown row counts keep it."""
+def _eval_interval(
+    train_rows: int | None, *, configured: int, effective_batch: int, evaluations: int | None = None,
+) -> int:
+    """Steps between evaluations.
+
+    With ``evaluations`` (the validation cut), the run is divided into that many
+    checks, however long it is: a fixed interval made the number of checks grow
+    with the corpus, ~50 on the delivered one. Without it, the configured value,
+    shrunk so a run gets at least :data:`MIN_EVALUATIONS`. Unknown row counts keep
+    the configured value.
+    """
     if not train_rows:
         return configured
     steps = max(1, -(-train_rows // max(1, effective_batch)))
+    if evaluations:
+        return max(1, -(-steps // max(1, evaluations)))
     return max(1, min(configured, steps // MIN_EVALUATIONS or 1))
 
 
@@ -134,9 +144,12 @@ def _checkpoint_cadence(interval: int, evaluation: dict[str, Any]) -> dict[str, 
     Without a separate cadence a checkpoint was saved only at an evaluation, and
     a crash cost everything since the last one - hours, once evaluations are few.
     """
-    every = int(evaluation.get("checkpoint_every_steps") or interval)
-    save_steps = max(1, min(every, interval))
-    per_eval = max(1, round(interval / save_steps))
+    every = max(1, int(evaluation.get("checkpoint_every_steps") or interval))
+    # The fewest saves per evaluation that keep them at least `every` apart, and
+    # the save interval that divides the evaluation interval evenly: evaluations
+    # stay where the cut put them, saves come a little MORE often than `every`.
+    per_eval = max(1, -(-interval // every))
+    save_steps = max(1, -(-interval // per_eval))
     return {
         "save_steps": save_steps,
         "eval_steps": save_steps * per_eval,
@@ -277,6 +290,7 @@ def build_training_config(
     interval = _eval_interval(
         train_rows,
         configured=int(evaluation["eval_steps"]),
+        evaluations=int(evaluation.get("evaluations_per_run") or 0) or None,
         effective_batch=int(batch["per_device_train_batch_size"])
         * int(batch["gradient_accumulation_steps"]),
     )
@@ -695,11 +709,18 @@ def train(
 
         epochs = len(swift.args["dataset"])
         prune_image_caches(paths.staging_train_images_dir(corpus_version, tenant_id))
+        from evaluation.validation_sample import validation_sample
+
+        sample_rows = int(training_config(scope.training_config)["evaluation"].get(
+            "validation_sample_rows") or 0)
         staged = stage_training_data(
             view.epoch_files[:epochs], view.val_path, client,
             paths.staging_train_data_dir(scope.name, out_version),
             images_root=paths.staging_train_images_dir(corpus_version, tenant_id),
             max_pixels=int(swift.env["MAX_PIXELS"]),
+            # The in-training checks read the fixed validation sample, chosen on
+            # the corpus rows before staging strips the line and mode off them.
+            val_filter=(lambda rows: validation_sample(rows, sample_rows)) if sample_rows else None,
         )
         swift.args["dataset"] = staged.epoch_files
         swift.args["val_dataset"] = [staged.val_path]

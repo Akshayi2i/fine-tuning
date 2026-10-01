@@ -86,6 +86,9 @@ class SelectionReport:
     selected: str | None = None
     scores: list[CheckpointScore] = field(default_factory=list)
     skipped: list[tuple[str, str]] = field(default_factory=list)
+    #: Set when the top two were within the tie-break margin on the sample and
+    #: were scored again on the full validation split.
+    tie_break: dict[str, Any] | None = None
 
     @property
     def best_loss_checkpoint(self) -> str | None:
@@ -121,6 +124,7 @@ class SelectionReport:
             "loss_and_f1_disagreed": self.loss_and_f1_disagreed,
             "candidates": [s.as_dict() for s in self.scores],
             "skipped": [{"checkpoint": c, "reason": r} for c, r in self.skipped],
+            "tie_break": self.tie_break,
         }
 
 
@@ -268,8 +272,36 @@ def generation_scorer(rows: list[dict[str, Any]], model: Any) -> Scorer:
     return score
 
 
+def break_tie(report: SelectionReport, full_scorer: Scorer, margin: float) -> SelectionReport:
+    """Re-decide a near-tie on the full validation split.
+
+    The candidates were ranked on the validation sample. When the top two are
+    closer than ``margin``, sample noise can order them either way, so both are
+    scored again on every validation row and that result decides. Further apart,
+    the sample's order stands.
+    """
+    if len(report.scores) < 2 or report.margin >= margin:
+        return report
+    first, second = sorted(report.scores, key=lambda s: (s.field_f1, s.step), reverse=True)[:2]
+    full: dict[str, float] = {}
+    for candidate in (first, second):
+        full[candidate.checkpoint] = float(
+            dict(full_scorer(candidate.checkpoint)).get("field_normalized_match", 0.0))
+    winner = max((first, second), key=lambda s: (full[s.checkpoint], s.step))
+    report.tie_break = {
+        "margin_on_sample": report.margin, "threshold": margin,
+        "full_validation_field_f1": {c: round(v, 4) for c, v in full.items()},
+        "decided": winner.checkpoint, "changed_choice": winner.checkpoint != report.selected,
+    }
+    log.info("near-tie (%.4f < %.4f) broken on the full validation split: %s",
+             report.margin, margin, winner.checkpoint)
+    report.selected = winner.checkpoint
+    return report
+
+
 def vllm_scorer(
-    *, client: Any, val_path: str, model: Any = None, images_root: str | None = None
+    *, client: Any, val_path: str, model: Any = None, images_root: str | None = None,
+    sample_rows: int = 0,
 ) -> Scorer:
     """A :func:`generation_scorer` over the stored validation split, on the base.
 
@@ -289,7 +321,16 @@ def vllm_scorer(
         from training.stage_data import localize_rows
 
         rows = localize_rows(rows, client, images_root)
-    return generation_scorer(rows, model)
+    if not sample_rows:
+        return generation_scorer(rows, model)
+    # Candidates are ranked on the fixed validation sample, the rows the training
+    # checks read; ``.full`` scores every row, for the near-tie (break_tie). One
+    # engine serves both.
+    from evaluation.validation_sample import validation_sample
+
+    score = generation_scorer(validation_sample(rows, sample_rows), model)
+    score.full = generation_scorer(rows, model)  # type: ignore[attr-defined]
+    return score
 
 
 def discover_checkpoints(output_dir: str) -> tuple[list[str], str | None]:
