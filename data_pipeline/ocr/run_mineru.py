@@ -454,6 +454,23 @@ def benchmark_gpu(
         "seconds_per_page": round(seconds / len(pages), 2) if pages else None,
     }
 
+def shard_of(source_ids: Iterable[str], shard: str) -> list[str]:
+    """Share ``I/N`` of ``source_ids``: every N-th document, from the I-th, in id order.
+
+    The same list in every process, so N processes with I = 0..N-1 cover every
+    document exactly once - one MinerU per GPU instead of one GPU working while
+    the others wait. Interleaved rather than in blocks, so long and short
+    documents spread evenly and the processes finish together.
+    """
+    try:
+        index, count = (int(part) for part in shard.split("/"))
+    except ValueError as exc:
+        raise ValueError(f"--shard takes I/N, e.g. 0/4, not {shard!r}") from exc
+    if not 0 <= index < count:
+        raise ValueError(f"--shard {shard!r}: I must be 0..{count - 1}")
+    return [sid for position, sid in enumerate(sorted(source_ids)) if position % count == index]
+
+
 def main(argv: Iterable[str] | None = None) -> int:  # pragma: no cover - thin CLI
     parser = argparse.ArgumentParser(description="Run MinerU OCR + page rendering (GPU by default)")
     parser.add_argument("--doc-type", required=True, choices=list(ACTIVE_DOC_TYPES))
@@ -466,6 +483,10 @@ def main(argv: Iterable[str] | None = None) -> int:  # pragma: no cover - thin C
     # accepts a single value is a way to be surprised later, not a choice.
     parser.add_argument("--tenant", default=None)
     parser.add_argument("--force-reprocess", action="store_true")
+    parser.add_argument("--shard", default=None, metavar="I/N",
+                        help="process only this share of the documents (0-based I of N), so N "
+                             "processes - one per GPU, each with its own CUDA_VISIBLE_DEVICES - "
+                             "split one batch between them")
     args = parser.parse_args(list(argv) if argv is not None else None)
     # On the pod, run detached in tmux: a closed laptop must not stop this job.
     from orchestration.detach import detach_module_if_needed
@@ -481,6 +502,8 @@ def main(argv: Iterable[str] | None = None) -> int:  # pragma: no cover - thin C
         find_unprocessed(client, args.doc_type, args.tenant)
         if args.all_unprocessed else args.source_ids
     )
+    if args.shard:
+        source_ids = shard_of(source_ids, args.shard)
     if not source_ids:
         print("nothing to process")
         return 0
