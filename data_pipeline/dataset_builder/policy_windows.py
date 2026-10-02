@@ -130,8 +130,17 @@ def plan_windows(
 MIN_PLACEABLE_CHARS = 4
 
 
+def multi_window_sections(lob: str | list[str] | None, plans: Sequence[PolicyWindowPlan]) -> set[str]:
+    """The label sections read over several windows: the only ones where a
+    value with no recorded page cannot be placed."""
+    from common.schema_sections import sections_for
+
+    return {name for plan in plans if not plan.single for name in sections_for(plan.group, lob)}
+
+
 def with_inferred_pages(
-    label: dict[str, Any], page_texts: Sequence[str] | None, report: TargetReport | None = None
+    label: dict[str, Any], page_texts: Sequence[str] | None, report: TargetReport | None = None,
+    *, sections: set[str] | None = None,
 ) -> dict[str, Any]:
     """``label`` with a page given to each value that records none, where the
     document's OCR text prints it on exactly one page.
@@ -143,6 +152,12 @@ def with_inferred_pages(
     boundaries, on one page and no other. On none or several it stays
     unplaced; a guessed page would teach the model to cite the wrong one.
     A copy when anything is placed; ``label`` itself otherwise.
+
+    ``sections`` limits the search to those top-level sections
+    (:func:`multi_window_sections`). A group read in ONE window keeps a value
+    with no page as it is; given a page there, a declarations value whose only
+    exact match was a notice on page 7 was moved to page 7 and then dropped
+    from the declarations window it had always been taught in.
     """
     import copy
     import re
@@ -177,7 +192,9 @@ def with_inferred_pages(
             for index, item in enumerate(node):
                 walk(item, [*path, index])
 
-    walk(label, [])
+    for name, section in label.items():
+        if sections is None or name in sections:
+            walk(section, [name])
     if not placed:
         return label
     out = copy.deepcopy(label)
@@ -253,7 +270,14 @@ def _within(
             # windows that never show its coverage. Taught, the model writes
             # fragments the merge cannot place; the window that shows the
             # identifier carries the whole row.
-            if keys and _identified(item, keys) and not _identified(row, keys):
+            #
+            # Unless it holds table rows of its own that ARE identified here: a
+            # vehicle whose VIN is on page 6 and whose coverages table is on
+            # page 7 is real content of the page-7 window. Dropping it taught
+            # those coverages in no window at all. The serving merge joins such
+            # a fragment to its row when only one row can own it.
+            if (keys and _identified(item, keys) and not _identified(row, keys)
+                    and not _holds_rows(row)):
                 if report is not None:
                     report.orphaned.append(f"{plan.group}:{path}[{i}]")
                 continue
@@ -280,6 +304,16 @@ def _row_identifiers(rows: list[Any], path: str) -> list[str]:
     named = [k for k in keys if k in ROW_IDENTIFIERS or k == "building_number"]
     declared = list(array_key(path)) if "." not in path and "[" not in path else []
     return [*named, *(k for k in declared if k not in named)]
+
+
+def _holds_rows(row: Any) -> bool:
+    """Whether a row still carries a table of its own after slicing. Nested
+    rows went through the same rule, so any that remain are identified on
+    these pages (or belong to a table nothing identifies)."""
+    return isinstance(row, dict) and any(
+        isinstance(value, list) and value and all(isinstance(r, dict) and not is_field_value(r) for r in value)
+        for value in row.values()
+    )
 
 
 def _identified(row: Any, keys: list[str]) -> bool:

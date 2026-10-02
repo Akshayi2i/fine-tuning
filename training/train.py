@@ -237,7 +237,45 @@ def run_fingerprint(corpus_version: str, corpus_manifest: Any, recorded: Any, sc
         "corpus_manifest_sha256": hashlib.sha256(corpus.encode()).hexdigest(),
         "scope": getattr(scope, "name", None),
         **{name: getattr(recorded, name, None) for name in _FINGERPRINT_SETTINGS},
+        "settings_sha256": _settings_hash(scope),
     }
+
+
+def _settings_hash(scope: Any) -> str | None:
+    """Every setting that shapes what is trained on, as one hash.
+
+    The training file (line balance, dropout, validation sample ...), the pixel
+    budget and the sequence caps. Lowering line_balance.max_repeat and resuming
+    left fewer rows than the checkpoint's step count: ms-swift ran zero steps,
+    exited 0, and the old checkpoints were selected as a finished run. Left
+    out: ``distributed`` and the per-device batch, which follow the GPU count -
+    resuming on another pod is the point of resuming.
+    """
+    import hashlib
+    import json
+
+    name = getattr(scope, "training_config", None)
+    if not name:
+        return None
+    try:
+        import yaml
+
+        from common.config import SHARED_SEQUENCE_CONFIG, SHARED_VISION_CONFIG, training_config
+
+        cfg = json.loads(json.dumps(training_config(name), default=str))
+        cfg.pop("distributed", None)
+        batch = dict(cfg.get("batch") or {})
+        for key in ("per_device_train_batch_size", "per_device_eval_batch_size",
+                    "gradient_accumulation_steps"):
+            batch.pop(key, None)
+        cfg["batch"] = batch
+        shared = [yaml.safe_load(path.read_text(encoding="utf-8")) for path in
+                  (SHARED_VISION_CONFIG, SHARED_SEQUENCE_CONFIG)]
+    except Exception as exc:  # noqa: BLE001 - a fingerprint must not stop a run from starting
+        log.warning("the run fingerprint could not read the training settings: %s", exc)
+        return None
+    body = json.dumps([cfg, shared], sort_keys=True, default=str)
+    return hashlib.sha256(body.encode()).hexdigest()
 
 
 def record_fingerprint(output_dir: str | Path, fingerprint: dict) -> None:
@@ -805,6 +843,13 @@ def train(
         train_rows=train_rows,
     )
 
+    # Before the manifest is rewritten and every page image is staged: a resume
+    # that will be refused should be refused in seconds, having changed nothing.
+    fingerprint = run_fingerprint(corpus_version, corpus_manifest, recorded, scope)
+    resumed = None if (continue_from or dry_run) else resume_point(staging)
+    if resumed is not None:
+        assert_resumable(staging, fingerprint)
+
     if not dry_run:
         # ms-swift reads LOCAL files in ITS row format. The view is Blob keys in
         # the corpus's own shape — handed over as-is, the trainer finds nothing,
@@ -852,12 +897,9 @@ def train(
         log.info("dry run — configuration recorded, nothing launched")
         return swift, manifest
 
-    fingerprint = run_fingerprint(corpus_version, corpus_manifest, recorded, scope)
-    resumed = None if continue_from else resume_point(staging)
     if resumed is None:
         record_fingerprint(staging, fingerprint)
     else:
-        assert_resumable(staging, fingerprint)
         # The SAME run, carried on: ms-swift restores the weights, the optimizer,
         # the learning-rate schedule and the step, and skips the batches already
         # trained on, into the run directory it was writing. Not --continue-from,

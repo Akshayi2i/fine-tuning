@@ -311,8 +311,9 @@ def stage_ingestion(ctx: StageContext) -> StageResult:
     if not typed and len(ctx.doc_types) > 1:
         raise PipelineError(
             f"{ctx.input_dir} has no {'/, '.join(ctx.doc_types)}/ subfolder, so nothing says "
-            "which document type each PDF is. Put each type's PDFs in a folder named after it, "
-            "or pass one type with --doc-types."
+            "which document type each PDF is. Put each type's PDFs in a folder named after it "
+            f"({ctx.input_dir.name}/policy/...), or run a scope that covers one type "
+            "(--scope policy, --scope personal_lines)."
         )
     skipped = [dt for dt in ctx.doc_types if typed and dt not in typed]
     if skipped:

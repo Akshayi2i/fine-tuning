@@ -51,6 +51,7 @@ def oracle(source_id: str, label: dict, lob: Any, page_count: int,
     from common.label_mapping import map_label
     from data_pipeline.dataset_builder.policy_windows import (
         TargetReport,
+        multi_window_sections,
         plan_windows,
         routed_pages,
         unread_values,
@@ -65,7 +66,8 @@ def oracle(source_id: str, label: dict, lob: Any, page_count: int,
     plans = plan_windows(lob, routed, declarations_page)
     report = TargetReport()
     # As the dataset build does: pages placed from the OCR text, when there is one.
-    placed = with_inferred_pages(label, ocr_pages, report)
+    placed = with_inferred_pages(label, ocr_pages, report,
+                                 sections=multi_window_sections(lob, plans))
     windows = [PolicyWindow(group=p.group, pages=list(p.pages),
                             extraction=window_target(placed, lob, p, report)) for p in plans]
     merged = merge_policy_windows(windows)

@@ -75,7 +75,9 @@ def should_detach() -> bool:
 def run_name(hint: str) -> str:
     """``finetune-20261003-141502`` — unique per start, valid for pod_run.sh."""
     stamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
-    return f"{re.sub(r'[^A-Za-z0-9._-]+', '-', hint).strip('-') or 'job'}-{stamp}"
+    # The process id too: four OCR shards started by one loop share a second,
+    # and the second to claim the name was refused and never started.
+    return f"{re.sub(r'[^A-Za-z0-9._-]+', '-', hint).strip('-') or 'job'}-{stamp}-{os.getpid()}"
 
 
 def detach(command: Sequence[str], hint: str) -> str:

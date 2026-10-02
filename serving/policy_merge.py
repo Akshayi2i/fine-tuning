@@ -67,6 +67,10 @@ class MergedPolicy:
     extraction: dict[str, Any] = field(default_factory=dict)
     spans: dict[str, Any] = field(default_factory=dict)
     conflicts: list[str] = field(default_factory=list)
+    #: Rows that came back without their identifier and were joined to the one
+    #: identified row of their table. Right when the table has one row; flagged,
+    #: because a second row whose identifier was never read would look the same.
+    joined_unidentified: list[str] = field(default_factory=list)
     duplicates_collapsed: int = 0
     unkeyed_rows: int = 0
 
@@ -74,7 +78,8 @@ class MergedPolicy:
     def review_flags(self) -> list[str]:
         """A conflict is two windows reading one field differently. The merge
         kept one mechanically; a person should see which."""
-        return [f"{path}:merge_conflict" for path in sorted({c.split(":", 1)[0] for c in self.conflicts})]
+        flags = [f"{path}:merge_conflict" for path in sorted({c.split(":", 1)[0] for c in self.conflicts})]
+        return flags + [f"{path}:joined_without_identifier" for path in sorted(set(self.joined_unidentified))]
 
 
 # --------------------------------------------------------------------------
@@ -275,6 +280,53 @@ JOIN_IDENTIFIERS: frozenset[str] = frozenset({
 })
 
 
+def _attach_unidentified(node: Any, path: str, report: MergedPolicy, *, top: bool) -> Any:
+    """Join rows that carry no identifier to the single identified row of their table.
+
+    A row read across two windows comes back in two parts, and the part from the
+    window that does not show the identifier (a vehicle's coverages, a page after
+    its VIN) has nothing to be matched on. When the table holds exactly ONE
+    identified row, the fragment is that row's; with two or more it is left as it
+    is - which row owns it cannot be known. Tables inside a line block only: a
+    top-level section's declared key already says what its rows are matched on.
+    A fragment that states a different value for a field the row also states is
+    never joined.
+    """
+    from evaluation.metrics.field_accuracy import ROW_IDENTIFIERS
+
+    if is_field_value(node):
+        return node
+    if isinstance(node, dict):
+        for key, value in node.items():
+            node[key] = _attach_unidentified(value, f"{path}.{key}", report, top=False)
+        return node
+    if not (isinstance(node, list) and node and all(isinstance(r, dict) and not is_field_value(r) for r in node)):
+        return node
+    rows = [_attach_unidentified(row, f"{path}[{i}]", report, top=False) for i, row in enumerate(node)]
+    if top:
+        return rows
+
+    def stated(row: dict[str, Any], name: str) -> bool:
+        return is_field_value(row.get(name)) and values_view(row[name]) not in (None, "")
+
+    name = next((n for n in ROW_IDENTIFIERS if n in JOIN_IDENTIFIERS and any(stated(r, n) for r in rows)), None)
+    if name is None:
+        return rows
+    identified = [i for i, row in enumerate(rows) if stated(row, name)]
+    if len(identified) != 1:
+        return rows
+    owner = rows[identified[0]]
+    out = []
+    for row in rows:
+        if row is owner or _disagree(owner, row, path):
+            out.append(row)
+            continue
+        # In place: the owner keeps its position, and its envelopes their spans.
+        _merge_into(owner, row, path, report, top=False)
+        report.joined_unidentified.append(path)
+    return out
+
+
 def _identifiers(rows: list[Any]) -> tuple[str, ...]:
     """The strong identifier these rows carry, as scoring infers it; ``()``
     when none is filled in most rows - those rows join only when identical."""
@@ -323,6 +375,11 @@ def merge_policy_windows(windows: list[PolicyWindow]) -> MergedPolicy:
                 report.extraction[key] = (
                     _dedupe(value, key, key, report) if isinstance(value, list) else value
                 )
+
+    # Once, on the finished document: only then is it known how many rows a
+    # table has, and so whether a fragment has exactly one row it can belong to.
+    for key, value in report.extraction.items():
+        report.extraction[key] = _attach_unidentified(value, key, report, top=True)
 
     _collect_spans(report.extraction, "", by_id, report.spans)
     # Counted once, on the result: arrays are re-deduplicated as each window

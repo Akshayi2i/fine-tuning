@@ -74,15 +74,34 @@ def check_gpu(results: list[Check]) -> None:
         results.append(Check("gpu", "FAIL", "torch sees no CUDA device",
                              "run from /workspace/venv on the pod; check nvidia-smi"))
         return
-    free, total = torch.cuda.mem_get_info()
-    name = torch.cuda.get_device_name(0)
-    detail = f"{name}: {free / 2**30:.0f} of {total / 2**30:.0f} GiB free"
-    if free < MIN_FREE_GPU_SHARE * total:
-        results.append(Check("gpu", "FAIL", detail + " - another process holds the card",
+    # Every visible card: training uses them all (distributed.gpus: auto), and
+    # a leftover vLLM server or OCR shard on GPU 2 passed a check of GPU 0, then
+    # took the run down at model load on rank 2.
+    count = torch.cuda.device_count()
+    busy, lines = [], []
+    for index in range(count):
+        free, total = torch.cuda.mem_get_info(index)
+        lines.append(f"{index}: {free / 2**30:.0f}/{total / 2**30:.0f} GiB free")
+        if free < MIN_FREE_GPU_SHARE * total:
+            busy.append(index)
+    detail = f"{count} x {torch.cuda.get_device_name(0)} ({'; '.join(lines)})"
+    if busy:
+        results.append(Check("gpu", "FAIL", detail + f" - another process holds GPU {busy}",
                              "nvidia-smi --query-compute-apps=pid,process_name --format=csv; stop it "
                              "(a vLLM server: tmux kill-session -t model)"))
-    else:
-        results.append(Check("gpu", "PASS", detail))
+        return
+    results.append(Check("gpu", "PASS", detail))
+    try:
+        from common.config import training_config
+        from training.train import _accumulation_steps, training_gpus
+
+        cfg = training_config("unified")
+        gpus = training_gpus(cfg.get("distributed", {}))
+        _accumulation_steps(cfg["batch"], gpus)      # refuses a batch the GPUs do not divide
+        results.append(Check("training gpus", "PASS", f"training will use {gpus} of {count} GPU(s)"))
+    except Exception as exc:  # noqa: BLE001 - e.g. a batch size the GPU count does not divide
+        results.append(Check("training gpus", "FAIL", f"{type(exc).__name__}: {exc}"[:300],
+                             "configs/training/unified.yaml: distributed.gpus / effective_batch_size"))
 
 
 def check_packages(results: list[Check]) -> None:

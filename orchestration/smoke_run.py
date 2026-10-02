@@ -79,6 +79,50 @@ def select_sources(bundles: Path, *, train_sources: int = 4, val_sources: int = 
     return chosen
 
 
+def assert_fresh(client, tenant: str, version: str, steps: list[str]) -> None:
+    """Refuse a smoke run that would land on an earlier one's leftovers.
+
+    Labels, OCR output and the corpus are kept per tenant, and the run registry
+    per version. A second smoke run under the same names imported its documents
+    beside the first run's, then found the corpus "already built" and the
+    training "already complete", re-merged the OLD adapter and reported success
+    without training on the new batch at all.
+
+    Checked only when the run starts from the beginning (``import``): resuming a
+    failed run with ``--steps check,finetune`` is the same run, and is allowed.
+    """
+    from artifact_registry import paths
+    from data_pipeline.labeling.export_golden_labels import list_labeled_source_ids
+
+    if "import" not in steps:
+        return
+    held = list_labeled_source_ids(client, "policy", tenant)
+    problems = []
+    if held:
+        problems.append(f"tenant {tenant!r} already holds {len(held)} imported document(s)")
+    if client.exists(paths.corpus_manifest(version, tenant)):
+        problems.append(f"corpus {version} already exists for tenant {tenant!r}")
+    if "finetune" in steps:
+        from common.scopes import load_scopes
+        from registry_utils.query_registry import RegistryQueryError
+        from registry_utils.query_registry import get as get_manifest
+
+        run_id = load_scopes()["personal_lines"].run_id(version)
+        try:
+            status = get_manifest(run_id, client).status
+        except (RegistryQueryError, KeyError, FileNotFoundError):
+            status = None
+        if status is not None:
+            problems.append(f"run {run_id} already exists (status {status})")
+    if problems:
+        raise SmokeError(
+            "; ".join(problems) + ". This smoke run would reuse that state instead of testing the "
+            "new batch. Start it under names nothing has used: --tenant smoke2 --version v0.1 "
+            "(any unused pair). To carry on a smoke run that stopped part-way, leave out "
+            "select and import: --steps check,preflight,finetune."
+        )
+
+
 def stage_subset(folders: list[Path], out: Path) -> int:
     """Link (or copy) the chosen folders into ``out``, replacing an earlier subset."""
     if out.exists():
@@ -105,11 +149,15 @@ def commands(*, batch_dir: Path, subset_dir: Path, tenant: str, version: str,
                 "--all-unprocessed", "--tenant", tenant],
         "check": [py, "-m", "data_pipeline.ocr_check", "--doc-type", "policy", "--tenant", tenant,
                   "--out", str(check_out)],
+        # --min-labels-per-type 1: the 25-document floor is for a real run. A
+        # smoke subset of sources WITHOUT synthetic twins is 6 documents, and
+        # both steps refused it; it only ever passed on the twins' numbers.
         "preflight": [py, "-m", "orchestration.preflight", "--scope", "personal_lines", "--tenant", tenant,
                       "--corpus-version", version, "--out-version", version, "--ocr-check", str(check_out),
-                      "--out", str(check_out / "preflight.json")],
+                      "--out", str(check_out / "preflight.json"), "--min-labels-per-type", "1"],
         "finetune": [py, "-m", "orchestration.run", "finetune", "--scope", "personal_lines", "--skip-ingest",
-                     "--corpus-version", version, "--out-version", version, "--tenant", tenant],
+                     "--corpus-version", version, "--out-version", version, "--tenant", tenant,
+                     "--min-labels-per-type", "1"],
     }
 
 
@@ -132,6 +180,14 @@ def main(argv: list[str] | None = None) -> int:  # pragma: no cover - thin CLI o
 
     if detach_module_if_needed("orchestration.smoke_run", argv, hint="smoke"):
         return 0
+
+    from artifact_registry.blob_client import BlobClient
+
+    try:
+        assert_fresh(BlobClient(), args.tenant, args.version, steps)
+    except SmokeError as exc:
+        print(f"smoke: {exc}", flush=True)
+        return 1
 
     batch_dir = WORKSPACE / "intake" / args.batch
     subset_dir = WORKSPACE / "intake" / f"{args.tenant}-{args.batch}"

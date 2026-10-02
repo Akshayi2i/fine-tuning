@@ -468,10 +468,10 @@ def benchmark_gpu(
 def shard_of(source_ids: Iterable[str], shard: str) -> list[str]:
     """Share ``I/N`` of ``source_ids``: every N-th document, from the I-th, in id order.
 
-    The same list in every process, so N processes with I = 0..N-1 cover every
-    document exactly once - one MinerU per GPU instead of one GPU working while
-    the others wait. Interleaved rather than in blocks, so long and short
-    documents spread evenly and the processes finish together.
+    N processes with I = 0..N-1 cover every document exactly once - one MinerU
+    per GPU instead of one GPU working while the others wait. A document's
+    shard depends on its id alone, so the split holds whenever each process
+    lists the documents and however many are already done.
     """
     try:
         index, count = (int(part) for part in shard.split("/"))
@@ -479,7 +479,13 @@ def shard_of(source_ids: Iterable[str], shard: str) -> list[str]:
         raise ValueError(f"--shard takes I/N, e.g. 0/4, not {shard!r}") from exc
     if not 0 <= index < count:
         raise ValueError(f"--shard {shard!r}: I must be 0..{count - 1}")
-    return [sid for position, sid in enumerate(sorted(source_ids)) if position % count == index]
+    # By the id itself, not by its place in the list: the list of documents
+    # still to do shrinks as they finish, so a shard restarted alone - or one
+    # that listed a moment later - took a different slice, and documents fell
+    # into no shard or into two.
+    import zlib
+
+    return [sid for sid in sorted(source_ids) if zlib.crc32(sid.encode("utf-8")) % count == index]
 
 
 def main(argv: Iterable[str] | None = None) -> int:  # pragma: no cover - thin CLI

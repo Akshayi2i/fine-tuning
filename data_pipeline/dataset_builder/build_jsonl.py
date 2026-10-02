@@ -30,6 +30,7 @@ from data_pipeline.dataset_builder.label_verification import VerificationReport,
 from data_pipeline.dataset_builder.noisy_ocr_augment import corrupt_ocr_pages
 from data_pipeline.dataset_builder.policy_windows import (
     TargetReport,
+    multi_window_sections,
     plan_windows,
     routed_pages,
     unread_values,
@@ -253,9 +254,17 @@ def _policy_window_rows(
     # own text prints it (label_verification). From the CLEAN text, whatever
     # this row's mode: the target is the same answer in every mode, only the
     # input differs.
-    checked = VerificationReport()
-    label = verified_label(document.golden_label, document.ocr_pages, checked)
-    label = with_inferred_pages(label, document.ocr_pages, report)
+    # Once per document, not once per reading mode: it depends on neither.
+    cached = getattr(document, "_verified", None)
+    if cached is None:
+        checked = VerificationReport()
+        cached = (verified_label(document.golden_label, document.ocr_pages, checked), checked)
+        document._verified = cached
+    label, checked = cached
+    # Only in sections read over several windows: one window keeps a value
+    # that records no page as it is (policy_windows.with_inferred_pages).
+    label = with_inferred_pages(label, document.ocr_pages, report,
+                                sections=multi_window_sections(document.lob, plans))
     rows: list[dict[str, Any]] = []
     for plan in plans:
         target = window_target(label, document.lob, plan, report)
@@ -297,6 +306,9 @@ def _policy_window_rows(
         label, document.lob, plans
     )]
     notes += [f"window {mode}: unplaced {path}" for path in report.unplaced]
+    # Row fragments left out because their window shows none of the row's
+    # identifiers and no table of their own: not taught, so said.
+    notes += [f"window {mode}: orphaned {path}" for path in sorted(set(report.orphaned))]
     if checked.dropped or checked.repaged or checked.unverifiable:
         details.append(
             f"window {mode}: of {checked.checked} rule-added label value(s), "

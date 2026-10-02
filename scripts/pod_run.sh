@@ -91,6 +91,16 @@ cmd_start() {
     # run its tools from the wrong environment.
     printf 'export PATH=%q\n' "$PATH"
     if [ -n "${VIRTUAL_ENV:-}" ]; then printf 'export VIRTUAL_ENV=%q\n' "$VIRTUAL_ENV"; fi
+    # The caller's GPU selection, set or not - for the same reason. Sharded OCR
+    # gives each process its own CUDA_VISIBLE_DEVICES; inherited from the tmux
+    # server instead, all four shards landed on one card, and the first shard's
+    # single GPU leaked into every later job, so training ran on one GPU of four
+    # without saying so.
+    if [ -n "${CUDA_VISIBLE_DEVICES+x}" ]; then
+      printf 'export CUDA_VISIBLE_DEVICES=%q\n' "$CUDA_VISIBLE_DEVICES"
+    else
+      echo 'unset CUDA_VISIBLE_DEVICES'
+    fi
     # Tells the command it is already detached, so it does not detach again.
     echo 'export FIDEON_DETACHED=1'
     printf 'echo "=== %s started $(date -u +%%FT%%TZ) on $(hostname) ==="\n' "$name"

@@ -43,6 +43,11 @@ log = logging.getLogger(__name__)
 DEFAULT_OUT = Path("/workspace/ocr_check")
 #: How much lower the added fields' found rate may be than the original fields'.
 DEFAULT_MAX_GAP = 0.05
+#: Below this share of ALL labelled values found on a page they cite, the OCR
+#: text itself is suspect - empty pages, a wrong page numbering - whatever the
+#: added-versus-original comparison says. Deliberately low: it is there to
+#: catch OCR that did not work, not to grade labels.
+MIN_FOUND_RATE = 0.50
 CHECKED = ("ok", "wrong_page", "not_found", "no_page_ref")
 
 
@@ -155,11 +160,21 @@ def run_check(client: BlobClient, doc_type: str, *, tenant_id: str | None = None
 
 def verdict(report: OcrCheckReport, max_gap: float = DEFAULT_MAX_GAP) -> tuple[bool, str]:
     """Pass when added fields are found about as often as original ones."""
+    # First, did OCR produce text the labels can be found in at all? A batch of
+    # original documents has no added fields, so the comparison below had
+    # nothing to compare and passed whatever the pages held - empty included.
+    overall = report.rate(report.rows)
+    if overall is None:
+        return False, "no labelled value could be checked against the OCR text"
+    if overall < MIN_FOUND_RATE:
+        return False, (f"only {overall:.1%} of labelled values are found on a page they cite (under "
+                       f"{MIN_FOUND_RATE:.0%}): the OCR text is empty or misnumbered, or the labels "
+                       "cite the wrong pages. Read the worst documents before training.")
     synthetic = [r for r in report.rows if r.kind == "synthetic"]
     added = report.rate([r for r in synthetic if r.origin == "added"])
     original = report.rate([r for r in synthetic if r.origin == "original"])
     if added is None:
-        return True, "no added fields to check"
+        return True, f"labelled values found {overall:.1%}; no rule-added fields to compare"
     if original is None:
         return False, "no original synthetic fields to compare the added ones with"
     gap = round(original - added, 4)
