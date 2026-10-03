@@ -278,6 +278,95 @@ def within_schema(node: Any, schema: dict[str, Any]) -> tuple[Any, list[str]]:
     return walk(node, schema, ""), dropped
 
 
+#: The confidence source of a value the pipeline wrote because the schema has
+#: the key and nothing was extracted for it - the schema's "structural".
+SKELETON_SOURCE = "structural"
+
+
+def empty_field_value() -> dict[str, Any]:
+    """An envelope for a key the model gave no value: null, score 0, not flagged.
+
+    Not flagged: most of a schema's fields are simply not on a given policy, and
+    flagging every one would bury the fields that do need a person.
+    """
+    return {"raw": None, "parsed": None,
+            "confidence": {"score": 0.0, "source": SKELETON_SOURCE},
+            "page_ref": [], "flagged": False}
+
+
+def with_all_keys(output: dict[str, Any], schema: dict[str, Any]) -> dict[str, Any]:
+    """``output`` with every key its canonical schema declares, in schema order.
+
+    The model writes only what it found - asking it to write 1,500 keys per
+    window would multiply output length and latency for nulls - so the served
+    JSON had a different key set for every document and for every model. This
+    fills the rest after the fact: a missing value becomes
+    :func:`empty_field_value`, a missing object its own full set of keys, a
+    missing table ``[]``. A table's rows each get every key of a row; the NUMBER
+    of rows is what the model found, and is not padded. Values present are
+    never changed. A bare (non-envelope) field is added only when the schema
+    allows it to be null, so the result stays valid.
+    """
+    defs = schema.get("$defs") or {}
+
+    def resolve(sub: Any, value: Any) -> dict[str, Any]:
+        for _ in range(20):
+            if not isinstance(sub, dict):
+                return {}
+            if "$ref" in sub:
+                ref = sub["$ref"]
+                sub = defs.get(ref.rsplit("/", 1)[-1]) if ref.startswith("#/$defs/") else None
+                continue
+            branches = sub.get("anyOf") or sub.get("oneOf")
+            if branches and "properties" not in sub and "items" not in sub:
+                want = "items" if isinstance(value, list) else "properties"
+                sub = next((b for b in (resolve(b, value) for b in branches) if want in b), {})
+                continue
+            return sub
+        return {}
+
+    def is_envelope_schema(sub: dict[str, Any]) -> bool:
+        return {"raw", "parsed", "page_ref"} <= set(sub.get("properties") or {})
+
+    def allows_null(sub: dict[str, Any]) -> bool:
+        kind = sub.get("type")
+        return kind == "null" or (isinstance(kind, list) and "null" in kind)
+
+    missing = object()
+
+    def walk(value: Any, sub: Any, depth: int) -> Any:
+        sub = resolve(sub, value)
+        if depth > 30 or not sub:
+            return None if value is missing else value
+        if is_envelope_schema(sub):
+            return empty_field_value() if value is missing or value is None else value
+        props = sub.get("properties")
+        if props:
+            if value is missing or value is None:
+                value = {}
+            if not isinstance(value, dict):
+                return value
+            out: dict[str, Any] = {}
+            for key, child in props.items():
+                filled = walk(value.get(key, missing), child, depth + 1)
+                if filled is not missing:
+                    out[key] = filled
+            out.update({k: v for k, v in value.items() if k not in out})
+            return out
+        if sub.get("type") == "array" or "items" in sub:
+            if value is missing or value is None:
+                return []
+            if not isinstance(value, list):
+                return value
+            return [walk(item, sub.get("items"), depth + 1) for item in value]
+        if value is missing:
+            return None if allows_null(sub) else missing
+        return value
+
+    filled = walk(output, schema, 0)
+    return filled if isinstance(filled, dict) else output
+
+
 def schema_label(
     label: Any,
     doc_type: str,

@@ -817,6 +817,18 @@ def extract(
             )
         flags.append("schema:invalid")
 
+    if canonical:
+        # Every key of the line's schema, whatever the model found: a value it
+        # did not extract is null, not absent, so every served JSON - from the
+        # base model or a trained one - has the same keys (common.canonical.
+        # with_all_keys). After validation, which judges the model's own answer
+        # (an answer missing a required section must still fail), and after
+        # confidence, so the nulls carry none of it.
+        from common.canonical import with_all_keys
+        from common.schemas import load_schema
+
+        output = with_all_keys(output, load_schema(route_.schema_doc_type, route_.schema_acord_form, lob))
+
     result = ExtractionResult(
         source_id=request.source_id,
         doc_type=route_.schema_doc_type,
