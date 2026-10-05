@@ -475,6 +475,7 @@ def build_request(payload: dict[str, Any]) -> ExtractionRequest:
         known_doc_type=payload.get("doc_type"),
         known_acord_form=payload.get("acord_form"),
         known_lob=request_lob(payload),
+        allow_lob_fallback=bool(payload.get("allow_lob_fallback", False)),
         # Serving fills document.source_file_name from this (the model is never
         # asked for it); without it the served output never carried the field.
         source_file_name=_file_name(payload),

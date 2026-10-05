@@ -89,6 +89,10 @@ class ExtractionRequest:
     #: canonical output by the system, never asked of the model
     #: (common.canonical.SYSTEM_SUPPLIED_FIELDS), as is the page count.
     source_file_name: str | None = None
+    #: Read a policy whose line is missing or in no layout family with the base
+    #: model against _fallback.json, rather than refusing it. Off unless the
+    #: caller asks: such a policy is never routed silently.
+    allow_lob_fallback: bool = False
 
 
 @dataclass
@@ -457,6 +461,9 @@ def _extract_policy_windows(
     return merged.extraction, merged.spans, round(wall_ms, 1), sorted(routed), flags
 
 
+#: A policy read by the base model against _fallback.json (Fideon SPEC_06 §9a).
+LOB_FALLBACK_FLAG = "route:lob_fallback_used"
+
 #: Review flags a Loss Run's merge and reconciliation leave on the document.
 LOSSRUN_TOTALS_MISMATCH_FLAG = "claims:totals_mismatch"
 LOSSRUN_MERGE_CONFLICT_FLAG = "claims:merge_conflict"
@@ -733,13 +740,22 @@ def extract(
     )
 
     release = None
+    lob_fallback_used = False
+    layout_family = None
     if plan is not None:
         from serving.release_router import UnservedDocType
 
         try:
-            release = plan.release_for(route_.doc_type, request.known_lob)
+            routed = plan.route(route_.doc_type, request.known_lob,
+                                allow_fallback=request.allow_lob_fallback)
         except UnservedDocType as exc:
             raise PipelineError(str(exc)) from exc
+        release, layout_family = routed.release, routed.layout_family
+        if routed.lob_fallback_used:
+            # The base model, no LoRA, against the canonical _fallback.json:
+            # no adapter trained on this line's layout is promoted.
+            lob_fallback_used = True
+            route_ = replace(route_, adapter=None)
 
     # Serve THROUGH the release the plan chose: its adapter and its calibrators.
     # The choice used to be a yes/no check and was then thrown away, so a
@@ -764,7 +780,7 @@ def extract(
     # The line selects the policy's canonical schema. It is the caller's to
     # supply; with none, `schema_key` selects the client's canonical fallback,
     # so a policy's output is canonical JSON either way.
-    lob = request.known_lob
+    lob = None if lob_fallback_used else request.known_lob
     canonical = is_canonical(route_.schema_doc_type, route_.schema_acord_form, lob)
 
     # --- page routing, for long documents only -----------------------------
@@ -898,6 +914,7 @@ def extract(
     )
     flags = merge_review_flags(
         completeness, calibrated.review_flags + route_.review_flags + merge_flags
+        + ([LOB_FALLBACK_FLAG] if lob_fallback_used else [])
     )
 
     # --- the client's canonical envelope -----------------------------------
@@ -985,6 +1002,8 @@ def extract(
             "classifier_method": (
                 route_.classification.method if route_.classification else None
             ),
+            "layout_family": layout_family,
+            "lob_fallback_used": lob_fallback_used,
         },
         latency_ms=latency,
         validation_errors=validation_errors,

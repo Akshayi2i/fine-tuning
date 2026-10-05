@@ -195,6 +195,40 @@ def lobs_in_family(family: str) -> tuple[str, ...]:
     return tuple(entry.get("lobs") or ())
 
 
+class UnknownLineError(ConfigError):
+    """Raised for a line of business in no layout family and not known to have none."""
+
+
+@lru_cache(maxsize=1)
+def lob_to_layout_family() -> dict[str, str | None]:
+    """LOB_TO_LAYOUT_FAMILY: every known line -> its layout family, or None.
+
+    The one table (``configs/layout_families.yaml``): a line listed twice is
+    refused, because training and serving would each pick one.
+    """
+    config = layout_families_config()
+    mapping: dict[str, str | None] = {}
+    entries = [(family, line) for family, entry in (config.get("families") or {}).items()
+               for line in entry.get("lobs") or ()]
+    entries += [(None, line) for line in config.get("no_family") or ()]
+    for family, line in entries:
+        if line in mapping:
+            raise ConfigError(f"line {line!r} is listed twice in {LAYOUT_FAMILIES_CONFIG.name} "
+                              f"({mapping[line]!r} and {family!r}); it must have one layout family")
+        mapping[line] = family
+    return mapping
+
+
+def layout_family_of(line: str) -> str | None:
+    """The layout family of one canonical line; None when it has none. Raises when unknown."""
+    mapping = lob_to_layout_family()
+    if line not in mapping:
+        raise UnknownLineError(
+            f"line of business {line!r} is in no layout family and not listed under no_family in "
+            f"{LAYOUT_FAMILIES_CONFIG.name}; it is never routed silently.")
+    return mapping[line]
+
+
 @lru_cache(maxsize=1)
 def shared_vision_config() -> dict[str, Any]:
     return load_yaml(SHARED_VISION_CONFIG)

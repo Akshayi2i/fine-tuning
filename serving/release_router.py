@@ -83,6 +83,50 @@ class ServedRelease:
         return f"{self.release_id} ({self.scope}) covering {list(self.covers)}{lines}"
 
 
+@dataclass(frozen=True)
+class Routed:
+    """Where one document goes: a release, or the base model with no LoRA.
+
+    ``lob_fallback_used`` means the base model reads the policy against the
+    canonical ``_fallback.json``: its line's layout family has no promoted
+    adapter, the line has no family, or the caller chose the fallback for a
+    line that cannot be routed (Fideon SPEC_06 §9a, handoff item 4).
+    """
+
+    release: ServedRelease | None
+    layout_family: str | None = None
+    lob_fallback_used: bool = False
+
+
+def _unroutable(lob: object) -> str | None:
+    """Why a policy with this line cannot be routed by family, or None when it can."""
+    from common.config import lob_to_layout_family
+    from common.scopes import lob_lines
+
+    lines = lob_lines(lob)
+    if not lines:
+        return ("a policy with no line of business is not routed: its layout family, and so its "
+                "adapter, cannot be known. Send the policy's `lob`, or ask for the base-model "
+                "fallback (allow_lob_fallback) to read it against _fallback.json.")
+    unknown = sorted(line for line in lines if line not in lob_to_layout_family())
+    if unknown:
+        return (f"line(s) of business {unknown} are in no layout family (configs/"
+                "layout_families.yaml), so no adapter can be chosen and none is guessed. Ask for "
+                "the base-model fallback (allow_lob_fallback) to read the policy against "
+                "_fallback.json.")
+    return None
+
+
+def _family(lob: object) -> str | None:
+    """The one layout family of the policy's lines; None for a line with none, or a
+    package whose lines fall in several (read by the base model)."""
+    from common.config import lob_to_layout_family
+    from common.scopes import lob_lines
+
+    families = {lob_to_layout_family()[line] for line in lob_lines(lob)}
+    return families.pop() if len(families) == 1 else None
+
+
 @dataclass
 class ServingPlan:
     """What the endpoint serves, per document type."""
@@ -151,6 +195,31 @@ class ServingPlan:
                 "never trained on this type against a schema it has never seen, and return a "
                 "confident answer nobody can tell apart from a real one."
             ) from None
+
+    def route(self, doc_type: str, lob: object = None, *, allow_fallback: bool = False) -> Routed:
+        """Where this document goes (Fideon SPEC_06 §9a, handoff item 4).
+
+        A policy's line decides its layout family, and the release serving that
+        family answers. When the family has no promoted release - or the line
+        has no family - the base model reads it with no LoRA against
+        ``_fallback.json`` (``lob_fallback_used``). A policy with no line, or a
+        line in no family, is never routed silently: refused, unless the caller
+        chose the fallback. Other types route as :meth:`release_for` does.
+        """
+        if doc_type != "policy":
+            return Routed(self.release_for(doc_type, lob))
+        problem = _unroutable(lob)
+        if problem:
+            if allow_fallback:
+                return Routed(None, None, lob_fallback_used=True)
+            raise UnservedDocType(problem)
+        family = _family(lob)
+        try:
+            return Routed(self.release_for(doc_type, lob), family)
+        except UnservedDocType:
+            # A known line no promoted release covers: read by the base model,
+            # flagged, rather than refused or given to another family's adapter.
+            return Routed(None, family, lob_fallback_used=True)
 
     def describe(self) -> str:
         lines = [f"{dt} -> {r.describe()}" for dt, r in sorted(self.by_doc_type.items())]
