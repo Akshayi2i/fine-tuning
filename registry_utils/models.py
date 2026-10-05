@@ -165,6 +165,11 @@ class DataStats(_Base):
 
     tenant_ids: list[str] = Field(default_factory=list)
 
+    #: Carriers held out per line, lines with a single carrier, families moved
+    #: into test for the hold-out, and twins dropped by the per-seed cap
+    #: (Fideon SPEC_09 amendment items 4 and 5).
+    split_policy: dict[str, Any] = Field(default_factory=dict)
+
     #: Recorded, not enforced, while de-identification is blocked (IMPL-05 §1).
     deidentified: bool = False
     image_redaction: str = "unresolved"

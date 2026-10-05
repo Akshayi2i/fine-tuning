@@ -185,6 +185,14 @@ def check_bundle(bundle: LabeledPdf, doc_type: str) -> DocumentCheck:
     return check
 
 
+def twin_index(metadata: dict[str, Any]) -> int | None:
+    """Which twin of its seed a synthetic document is; ``None`` for a real one."""
+    if not metadata.get("synthetic"):
+        return None
+    value = metadata.get("twin_index", metadata.get("sample"))
+    return int(value) if isinstance(value, (int, str)) and str(value).strip().isdigit() else None
+
+
 def import_bundle(
     bundle: LabeledPdf,
     doc_type: str,
@@ -225,6 +233,12 @@ def import_bundle(
             bundle.metadata.get("policy_number") or bundle.golden.get("policy_number")
         ),
         "template_id": bundle.metadata.get("template_id"),
+        # Fideon SPEC_09 amendment item 8: every example carries its carrier and,
+        # for a synthetic twin, which twin of its seed it is (the bundle's
+        # `sample`). The carrier also decides the per-line hold-out.
+        "carrier": bundle.metadata.get("carrier"),
+        "twin_index": twin_index(bundle.metadata),
+        "render_mode": bundle.metadata.get("render_mode"),
         "synthetic": bool(bundle.metadata.get("synthetic", False)),
         # The delivery's own split (train/val/test), when it was split upstream:
         # the corpus build then uses it as given (split_groups.assign_delivered_splits).

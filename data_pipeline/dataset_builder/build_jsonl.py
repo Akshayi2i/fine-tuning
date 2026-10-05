@@ -92,6 +92,10 @@ class SourceDocument:
     #: (metadata ``template_id``), the family that split was drawn by.
     delivered_split: str | None = None
     template_id: str | None = None
+    #: Which twin of its seed a synthetic document is (None for a real one), and
+    #: the render mode it was generated in (digital / scanned twins, SPEC_21).
+    twin_index: int | None = None
+    render_mode: str | None = None
 
     @property
     def family(self) -> str:
@@ -397,6 +401,10 @@ def build_corpus(
         for row in rows:
             row["group_id"] = document.family
             row["synthetic"] = document.synthetic
+            # Fideon SPEC_09 amendment item 8: carrier and twin index on every
+            # row (the seed is group_id). twin_index is None for real documents.
+            row["carrier"] = document.carrier
+            row["twin_index"] = document.twin_index
             if assignment.half_of(document.family):
                 row["val_half"] = assignment.half_of(document.family)
 

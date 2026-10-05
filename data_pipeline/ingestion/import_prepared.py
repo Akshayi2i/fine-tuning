@@ -44,6 +44,7 @@ from artifact_registry.blob_client import BlobClient
 from common.constants import ACTIVE_DOC_TYPES
 from common.ids import next_source_id
 from common.schemas import SchemaError, iter_validation_errors
+from data_pipeline.ingestion.import_labeled_pdfs import twin_index
 
 log = logging.getLogger(__name__)
 
@@ -260,6 +261,9 @@ def import_document(
         "field_provenance": doc.metadata.get("field_provenance", {}),
         "document_kind": doc.metadata.get("document_kind"),
         "template_id": doc.metadata.get("template_id"),
+        "carrier": doc.metadata.get("carrier"),
+        "twin_index": twin_index(doc.metadata),
+        "render_mode": doc.metadata.get("render_mode"),
         "synthetic": bool(doc.metadata.get("synthetic", False)),
         "labeled_at": datetime.now(UTC).isoformat(),
         "imported_from": doc.directory.name,

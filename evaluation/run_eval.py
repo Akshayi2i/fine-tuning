@@ -195,6 +195,8 @@ class EvalReport:
             ("image_only", "image_only_accuracy"),
             ("scanned", "scanned_accuracy"),
             ("noisy_ocr", "ocr_arbitration_accuracy"),
+            # Reported, never gated (gating.GATING_METRICS leaves it out).
+            ("held_out_carrier", "held_out_carrier_match"),
         ):
             scores: list[tuple[float, int]] = [
                 (value, s.documents)
@@ -247,6 +249,11 @@ def subset_of(document: dict[str, Any]) -> list[str]:
         subsets.append("scanned")
     if document.get("doc_type") == "policy" and int(document.get("page_count", 1)) > 5:
         subsets.append("long_policy")
+    # Reported, not expected in every eval set: documents of the carrier held
+    # out of train and val, one per line (Fideon SPEC_09 amendment item 4).
+    # Its subset report carries accuracy per line.
+    if document.get("held_out_carrier"):
+        subsets.append("held_out_carrier")
     return subsets
 
 

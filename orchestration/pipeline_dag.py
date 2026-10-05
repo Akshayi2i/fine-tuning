@@ -522,13 +522,26 @@ def load_labeled_documents(ctx: StageContext) -> list[Any]:
                 tenant_id=ctx.tenant_id,
                 field_provenance=metadata.get("field_provenance", {}),
                 is_scanned=is_scanned(ocr_meta),
-                carrier=_declared_carrier(label),
+                carrier=_document_carrier(metadata, label),
                 synthetic=bool(metadata.get("synthetic", False)),
                 delivered_split=metadata.get("split"),
                 template_id=metadata.get("template_id"),
+                twin_index=metadata.get("twin_index") if metadata.get("synthetic") else None,
+                render_mode=metadata.get("render_mode"),
             ))
     ctx.grouping = assign_document_groups(ctx, documents)
     return documents
+
+
+def split_policy(split: dict[str, Any]) -> dict[str, Any]:
+    """What the split held out and capped, for the run manifest."""
+    return {
+        "held_out_carriers_by_line": split.get("held_out_carriers_by_line") or {},
+        "single_carrier_lines": split.get("single_carrier_lines") or {},
+        "moved_to_test": split.get("moved_to_test") or {},
+        "twin_cap": split.get("twin_cap"),
+        "twins_dropped": sum((split.get("twins_dropped") or {}).values()),
+    }
 
 
 def use_delivered_families(documents: list[Any]) -> bool:
@@ -583,6 +596,15 @@ def delivered_split_of(documents: list[Any]) -> dict[str, str]:
                 f"{previous} and {split}: one source document and its twins must share a split"
             )
     return split_of
+
+
+def _document_carrier(metadata: dict[str, Any], label: dict[str, Any]) -> str | None:
+    """The carrier a document is held out by: the delivery's own record when it
+    has one (the bundle's `carrier`), else the carrier the label names."""
+    from common.normalize import normalize_carrier
+
+    recorded = normalize_carrier(metadata.get("carrier")) if metadata.get("carrier") else None
+    return recorded or _declared_carrier(label)
 
 
 def _declared_carrier(label: dict[str, Any]) -> str | None:
@@ -810,6 +832,12 @@ def plan_corpus(ctx: StageContext) -> CorpusPlan:
     # One modality draw per train document per epoch (arch v2.1 §6.1). This is
     # the only sampling step: v1's down-sampler discarded rows to fix a 33/33/33
     # expansion, and running it over epoch rows would drop documents from epochs.
+    # At most MAX_TWINS_PER_SEED twins of one seed per render mode train
+    # (Fideon SPEC_09 amendment item 5). Before modes are drawn, so a dropped
+    # twin draws nothing and the mix check measures what trains.
+    from data_pipeline.dataset_builder.split_groups import cap_twins
+
+    documents = cap_twins(documents, assignment, seed=ctx.seed)
     modes = sample_modes(train_source_ids(documents, assignment), seed=ctx.seed)
     assert_mix_is_close(modes)
     built = build_corpus(documents, assignment, seed=ctx.seed, mode_assignment=modes)
@@ -967,6 +995,7 @@ def stage_training(ctx: StageContext) -> StageResult:
         alias_coverage=corpus_manifest.get("alias_coverage", {}),
         confusable_example_count=corpus_manifest.get("confusable_example_count", 0),
         tenant_ids=[paths._tenant(ctx.tenant_id)],
+        split_policy=split_policy(corpus_manifest.get("split_assignment") or {}),
     )
 
     gpu_class = ctx.gpu_class or gpu_class_for("training", scope=ctx.scope.name)

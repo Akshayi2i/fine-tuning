@@ -99,6 +99,18 @@ class GroupSplitAssignment:
 
     #: Carriers placed entirely in test, per doc type.
     held_out_carriers: dict[str, list[str]] = field(default_factory=dict)
+    #: Per doc type, the carrier held out of train and val for each line
+    #: (Fideon SPEC_09 amendment item 4), and the lines with only one carrier,
+    #: which cannot hold one out.
+    held_out_carriers_by_line: dict[str, dict[str, str]] = field(default_factory=dict)
+    single_carrier_lines: dict[str, list[str]] = field(default_factory=dict)
+    #: Families the hold-out moved into test from the split they were delivered in.
+    moved_to_test: dict[str, int] = field(default_factory=dict)
+    #: Every document of a held-out carrier: evaluation reports them apart.
+    held_out_source_ids: list[str] = field(default_factory=list)
+    #: The per-seed twin cap applied to train, and twins it dropped, per family.
+    twin_cap: int | None = None
+    twins_dropped: dict[str, int] = field(default_factory=dict)
 
     #: Groups per split per line of business, per doc type — what the ratio
     #: actually produced for each line.
@@ -142,6 +154,13 @@ class GroupSplitAssignment:
             "counts_by_line": self.counts_by_line,
             "train_only_lines": {k: sorted(v) for k, v in sorted(self.train_only_lines.items())},
             "delivered": self.delivered,
+            "held_out_carriers_by_line": {k: dict(sorted(v.items()))
+                                          for k, v in sorted(self.held_out_carriers_by_line.items())},
+            "single_carrier_lines": {k: sorted(v) for k, v in sorted(self.single_carrier_lines.items())},
+            "moved_to_test": dict(sorted(self.moved_to_test.items())),
+            "held_out_source_ids": sorted(self.held_out_source_ids),
+            "twin_cap": self.twin_cap,
+            "twins_dropped": dict(sorted(self.twins_dropped.items())),
         }
 
 
@@ -294,6 +313,7 @@ def assign_group_splits(
                     continue
                 if record.carrier and record.carrier in held_out:
                     line_buckets["test"].append(record.group_id)
+                    result.held_out_source_ids.extend(record.source_ids)
                     continue
                 if not measured and line is not None:
                     line_buckets["train"].append(record.group_id)
@@ -357,12 +377,70 @@ def assign_group_splits(
 DELIVERED_SPLITS = ("train", "val", "test")
 
 
+#: Fideon SPEC_09 amendment item 4: at least one carrier per line is kept out
+#: of train and validation, and reported apart in evaluation.
+HOLD_OUT_CARRIER_PER_LINE = True
+
+#: Fideon SPEC_09 amendment item 5: at most this many synthetic twins of one
+#: seed, per render mode, train.
+MAX_TWINS_PER_SEED = 20
+
+
+def held_out_carrier_per_line(records: list[GroupRecord], seed: int) -> tuple[dict[str, str], list[str]]:
+    """``({line: carrier held out}, [lines with one carrier])``.
+
+    The carrier with the fewest documents in the line is held out - it costs
+    training the least - with ties broken by a seeded hash so the choice is
+    reproducible. A line needs two carriers to hold one out.
+    """
+    sizes: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))
+    for record in records:
+        if record.line and record.carrier:
+            sizes[record.line][record.carrier] += record.size
+    held, single = {}, []
+    for line, carriers in sorted(sizes.items()):
+        if len(carriers) < 2:
+            single.append(line)
+            continue
+        held[line] = min(carriers, key=lambda c: (carriers[c], _stable_hash(c, seed, f"carrier:{line}")))
+    return held, single
+
+
+def cap_twins(documents: list[Any], assignment: GroupSplitAssignment, *,
+              cap: int = MAX_TWINS_PER_SEED, seed: int = 42) -> list[Any]:
+    """``documents`` with at most ``cap`` synthetic twins per seed and render mode in train.
+
+    A seed is a document's family. The twins kept are chosen by a seeded hash
+    of their ids, so the same corpus always keeps the same ones. Real documents
+    and validation and test are never dropped. What was dropped is recorded on
+    ``assignment`` and so in the corpus manifest.
+    """
+    counts: dict[tuple[str, str], list[Any]] = defaultdict(list)
+    for document in documents:
+        if document.synthetic and assignment.assignment.get(document.family) == "train":
+            counts[(document.family, getattr(document, "render_mode", None) or "default")].append(document)
+    dropped: set[str] = set()
+    assignment.twin_cap = cap
+    for (family, _mode), twins in counts.items():
+        if len(twins) <= cap:
+            continue
+        ordered = sorted(twins, key=lambda d: (_stable_hash(d.source_id, seed, "twin-cap"), d.source_id))
+        for document in ordered[cap:]:
+            dropped.add(document.source_id)
+            assignment.twins_dropped[family] = assignment.twins_dropped.get(family, 0) + 1
+    if dropped:
+        log.info("twin cap: %d twin(s) above %d per seed and render mode left out of train",
+                 len(dropped), cap)
+    return [d for d in documents if d.source_id not in dropped]
+
+
 def assign_delivered_splits(
     groups_by_doc_type: dict[str, list[GroupRecord]],
     split_of_group: dict[str, str],
     *,
     seed: int = 42,
     with_test: bool = True,
+    hold_out_carriers: bool = HOLD_OUT_CARRIER_PER_LINE,
 ) -> GroupSplitAssignment:
     """Use the split the data arrived with, instead of drawing one.
 
@@ -372,12 +450,26 @@ def assign_delivered_splits(
     given; what this still enforces is that it is usable: no family in two
     splits, a non-empty val, and a non-empty test unless the eval set is frozen.
     Validation is halved by group exactly as for a drawn split.
+
+    One exception to "as given": with ``hold_out_carriers`` (the default), one
+    carrier per line with two or more carriers is held out - every family of
+    it goes to test, whatever split it was delivered in (Fideon SPEC_09
+    amendment item 4). Not once the eval set is frozen: the frozen set is the
+    test set and takes no new documents.
     """
     result = GroupSplitAssignment(seed=seed, delivered=True)
     for doc_type, records in sorted(groups_by_doc_type.items()):
         unique = sorted({r.group_id: r for r in records}.values(), key=lambda r: r.group_id)
         if not unique:
             continue
+        held: dict[str, str] = {}
+        if hold_out_carriers and with_test:
+            held, single = held_out_carrier_per_line(unique, seed)
+            if held:
+                result.held_out_carriers_by_line[doc_type] = held
+                result.held_out_carriers[doc_type] = sorted(set(held.values()))
+            if single:
+                result.single_carrier_lines[doc_type] = single
         buckets: dict[str, list[str]] = {name: [] for name in DELIVERED_SPLITS}
         documents = dict.fromkeys(DELIVERED_SPLITS, 0)
         by_line: dict[str, dict[str, int]] = defaultdict(lambda: dict.fromkeys(DELIVERED_SPLITS, 0))
@@ -385,6 +477,11 @@ def assign_delivered_splits(
             split = split_of_group.get(record.group_id)
             if split not in DELIVERED_SPLITS:
                 raise SplitError(f"group {record.group_id} has no delivered split (got {split!r})")
+            if record.line in held and record.carrier == held[record.line]:
+                if split != "test":
+                    result.moved_to_test[doc_type] = result.moved_to_test.get(doc_type, 0) + 1
+                split = "test"
+                result.held_out_source_ids.extend(record.source_ids)
             if split == "test" and not with_test:
                 raise SplitError(
                     f"group {record.group_id} is delivered as test, but the eval set is frozen: "

@@ -160,6 +160,7 @@ def freeze_eval_set(
         )
 
     split = corpus_manifest.get("split_assignment") or {}
+    held_out_ids = set(split.get("held_out_source_ids") or [])
 
     root = paths.golden_eval_set_dir()
     by_type: dict[str, int] = {}
@@ -190,6 +191,10 @@ def freeze_eval_set(
             # reports the real documents' scores apart (golden_eval "real_only").
             "synthetic": bool(metadata.get("synthetic", False)),
             "frozen_from_corpus": corpus_version,
+            # Whether the split held this document's carrier out of train and val
+            # (Fideon SPEC_09 amendment item 4): evaluation reports these apart.
+            "carrier": metadata.get("carrier"),
+            "held_out_carrier": source_id in held_out_ids,
         })
         # Written last: a document counts as part of the set once golden.json
         # exists (eval_set_source_ids), so an interrupted freeze leaves no
@@ -214,6 +219,7 @@ def freeze_eval_set(
         # The carriers the split held out entirely. They are "unseen" to the model
         # only while no document of theirs trains; the build warns when one does.
         "held_out_carriers": split.get("held_out_carriers", {}),
+        "held_out_carriers_by_line": split.get("held_out_carriers_by_line", {}),
     }
     client.write_json(manifest_key(), manifest)
     log.info(

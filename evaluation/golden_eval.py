@@ -58,6 +58,9 @@ class GoldenDocument:
     lob: str | list[str] | None = None
     is_scanned: bool = False
     synthetic: bool = False
+    #: The document's carrier was held out of train and val (Fideon SPEC_09
+    #: amendment item 4); evaluation reports these documents apart.
+    held_out_carrier: bool = False
 
 
 def load_golden_set(
@@ -115,6 +118,7 @@ def load_golden_set(
             lob=merge_line(metadata.get("lob")),
             is_scanned=bool(metadata.get("is_scanned", False)),
             synthetic=bool(metadata.get("synthetic", False)),
+            held_out_carrier=bool(metadata.get("held_out_carrier", False)),
         ))
     return documents
 
@@ -187,6 +191,7 @@ def evaluate(
                 "modality_mode": mode,
                 "is_scanned": doc.is_scanned,
                 "synthetic": doc.synthetic,
+                "held_out_carrier": doc.held_out_carrier,
                 "page_count": len(doc.image_keys),
             }
             try:
