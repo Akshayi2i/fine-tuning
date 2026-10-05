@@ -25,7 +25,8 @@ The finished folder is then uploaded to Blob under
 ``exports/{tenant}/comparisons/{run}/`` (the raw container: it holds policy data),
 checked file by file, and removed from the pod (``--keep-on-pod`` keeps it). The
 command prints the azcopy line that downloads it to the laptop, by default into
-``D:\\Fine-Tuning-reports\\comparisons`` (``--download-to``).
+``D:\\Fine-Tuning\\testing\\results\\comparisons``, inside the laptop's repository
+and git-ignored (``--download-to`` changes it).
 
 Confidence is not calibrated here (no release calibrators), so every field is
 flagged for review in both JSONs; the comparison is about the values.
@@ -200,8 +201,9 @@ def compare_documents(base_model: Any, adapter_model: Any, client: Any, document
     return compared
 
 
-#: Where the download command points by default: the laptop's reports folder.
-DEFAULT_DOWNLOAD_TO = r"D:\Fine-Tuning-reports\comparisons"
+#: Where the download command points by default: the repository on the laptop,
+#: under testing/results/ - git-ignored, so the policy data is never committed.
+DEFAULT_DOWNLOAD_TO = r"D:\Fine-Tuning\testing\results\comparisons"
 
 
 def export_run(out: Path, tenant: str, *, client: Any = None, keep_local: bool = False) -> tuple[str, int]:

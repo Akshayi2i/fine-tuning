@@ -227,4 +227,4 @@ def test_the_download_command_points_at_the_export_and_the_laptop_folder():
 
     command = download_command("exports/compare/comparisons/run-1", container="raw-docs", account="fideonstore")
     assert command == ('azcopy copy "https://fideonstore.blob.core.windows.net/raw-docs/exports/compare/'
-                       'comparisons/run-1?<SAS>" "D:\Fine-Tuning-reports\comparisons" --recursive')
+                       r'comparisons/run-1?<SAS>" "D:\Fine-Tuning\testing\results\comparisons" --recursive')
