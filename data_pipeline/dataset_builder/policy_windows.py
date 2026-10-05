@@ -22,7 +22,16 @@ for it would teach it to invent. A row that spans a window boundary keeps the
 fields each window can see, in both windows; the serving merge collapses the
 halves. ``page_ref`` keeps the DOCUMENT's page numbers: the prompt's markers say
 ``<page 140 of 200>``, and a window-relative number would be wrong by an offset
-nobody would notice.
+nobody would notice - and only the window's own pages: a value printed on pages
+1 and 30 is cited as ``[1]`` by the window showing page 1, which cannot see page
+30 (Fideon SPEC_09 amendment item 1). The serving merge joins a value's pages
+across windows again (``serving.policy_merge``).
+
+Two sections are handled apart (Fideon SPEC_21): ``text_sections`` is never in
+a target - the section builder attaches it at inference - and each
+``additional_fields`` entry (label, value, section_hint, page_ref) is placed by
+its own ``page_ref``, as a field value is. Both only reach a target through a
+schema that defines them; no schema in this repository does yet.
 """
 
 from __future__ import annotations
@@ -33,6 +42,13 @@ from typing import Any
 
 from common.canonical import in_schema_order, is_field_value, to_model_target
 from common.constants import DEFAULT_LONG_DOC_PAGE_THRESHOLD
+
+#: Never in an assistant target: attached at inference by the section builder
+#: (Fideon SPEC_21, ``fideon:fsm_exclude``; SPEC_09 amendment item 1).
+EXCLUDED_FROM_TARGETS = frozenset({"text_sections"})
+
+#: Entries placed by their own page_ref (Fideon SPEC_21 §additional_fields).
+ADDITIONAL_FIELDS = "additional_fields"
 
 
 @dataclass(frozen=True)
@@ -225,12 +241,21 @@ def window_target(
     label = schema_label(label, "policy", None, lob)
     pages = set(plan.pages)
     sliced = {
-        name: _within(label[name], name, pages, plan, report)
+        name: (_additional_within if name == ADDITIONAL_FIELDS else _within)(
+            label[name], name, pages, plan, report)
         for name in sections_for(plan.group, lob)
-        if name in label
+        if name in label and name not in EXCLUDED_FROM_TARGETS
     }
     sliced = {k: v for k, v in sliced.items() if v not in (None, {}, [])}
+    # Entries in SPEC_21's own shape (label, value, section_hint, page_ref), not
+    # FieldValue envelopes: kept as they are rather than slimmed as envelopes.
+    additional = sliced.pop(ADDITIONAL_FIELDS, None)
     target = to_model_target(sliced, required=required_fields("policy", None, lob, plan.group))
+    if additional:
+        target[ADDITIONAL_FIELDS] = [
+            {key: entry[key] for key in ("label", "value", "section_hint", "page_ref") if key in entry}
+            for entry in additional
+        ]
     # In the order the decoding grammar writes keys (in_schema_order): the
     # window's own schema slice, the one it is constrained to.
     return in_schema_order(target, resolved_schema("policy", None, lob, plan.group))
@@ -242,14 +267,7 @@ def _within(
     if is_field_value(node):
         if node.get("raw") is None and node.get("parsed") is None:
             return None
-        refs = {int(p) for p in node.get("page_ref") or []}
-        if not refs:
-            if plan.single:
-                return node
-            if report is not None and plan.window_index == 0:
-                report.unplaced.append(f"{plan.group}:{path}")
-            return None
-        return node if refs & pages else None
+        return _on_pages(node, path, pages, plan, report)
     if isinstance(node, dict):
         kept = {}
         for key, value in node.items():
@@ -284,6 +302,42 @@ def _within(
             rows.append(row)
         return rows
     return node
+
+
+def _on_pages(
+    node: dict[str, Any], path: str, pages: set[int], plan: PolicyWindowPlan, report: TargetReport | None
+) -> dict[str, Any] | None:
+    """``node`` as this window sees it, or None when it is printed on none of its pages.
+
+    A copy, with ``page_ref`` narrowed to the window's pages: the label is
+    cached per document and read by every window and mode, so trimming it in
+    place would trim it for the windows after this one.
+    """
+    refs = {int(p) for p in node.get("page_ref") or []}
+    if not refs:
+        if plan.single:
+            return node
+        if report is not None and plan.window_index == 0:
+            report.unplaced.append(f"{plan.group}:{path}")
+        return None
+    seen = refs & pages
+    return {**node, "page_ref": sorted(seen)} if seen else None
+
+
+def _additional_within(
+    node: Any, path: str, pages: set[int], plan: PolicyWindowPlan, report: TargetReport | None
+) -> list[Any]:
+    """The ``additional_fields`` entries printed on this window's pages, page_ref trimmed."""
+    if not isinstance(node, list):
+        return []
+    kept = []
+    for index, entry in enumerate(node):
+        if not isinstance(entry, dict) or entry.get("value") in (None, "", [], {}):
+            continue
+        placed = _on_pages(entry, f"{path}[{index}]", pages, plan, report)
+        if placed is not None:
+            kept.append(placed)
+    return kept
 
 
 def _row_identifiers(rows: list[Any], path: str) -> list[str]:
