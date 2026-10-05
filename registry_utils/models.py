@@ -433,6 +433,14 @@ class ReleaseBundle(_Base):
     #: release passed every floor below that (evaluation.gating.release_tier).
     #: ``None`` on bundles written before tiers existed.
     tier: Literal["production", "interim"] | None = None
+    #: Recorded, not gated (Fideon SPEC_09 handoff item 6): P95 milliseconds of
+    #: one generation call per adapter, and the peak GPU memory, from the
+    #: golden eval; and where every line of business routes once this release
+    #: is promoted.
+    latency_p95_ms_by_adapter: dict[str, Any] = Field(default_factory=dict)
+    peak_gpu_memory_mb: float | None = None
+    measured_with: str | None = None
+    routing: list[dict[str, Any]] = Field(default_factory=list)
     tenant_scope: str
 
     #: The training scope behind this release (``common.scopes``). Defaulted so

@@ -117,6 +117,9 @@ class ExtractionResult:
     #: A Loss Run's claims against its printed totals (calibration.reconciliation);
     #: None for every other type.
     reconciliation: dict[str, Any] | None = None
+    #: Milliseconds of every generation call this document took - one per
+    #: window, or one for a document read in one call (release measurements).
+    window_latencies_ms: list[float] = field(default_factory=list)
 
     @property
     def needs_review(self) -> bool:
@@ -358,6 +361,7 @@ def _extract_policy_windows(
     lob: str | list[str] | None,
     *,
     page_threshold: int,
+    latencies: list[float] | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any], float | None, list[int], list[str]]:
     """Read a canonical policy window by window, then merge.
 
@@ -443,6 +447,8 @@ def _extract_policy_windows(
                     )
                 continue
             windows.append(PolicyWindow(group, pages, extraction, spans, result.latency_ms))
+            if latencies is not None and result.latency_ms is not None:
+                latencies.append(result.latency_ms)
         pending = retry
 
     if not windows:
@@ -492,6 +498,7 @@ def _extract_lossrun_windows(
     model: LoadedModel,
     route_: Route,
     windows: list[list[int]],
+    latencies: list[float] | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any], float | None, list[int], list[str], dict[str, Any]]:
     """Read a Loss Run longer than one window window by window, then merge.
 
@@ -542,6 +549,8 @@ def _extract_lossrun_windows(
                     failed.append(f"claims:p{pages[0]}")
                 continue
             read.append((pages, extraction, spans))
+            if latencies is not None and result.latency_ms is not None:
+                latencies.append(result.latency_ms)
         pending = retry
 
     if not read:
@@ -792,6 +801,7 @@ def extract(
     latency: float | None = None
     merge_flags: list[str] = []
     reconciliation: dict[str, Any] | None = None
+    window_latencies: list[float] = []
     windows = lossrun_windows(request) if route_.schema_doc_type == "lossrun" else []
 
     if canonical and route_.schema_doc_type == "policy":
@@ -801,13 +811,13 @@ def extract(
         # Always, whatever the length: a threshold computed from prompt length
         # would move between corpus builds and re-shape documents silently.
         extraction, all_spans, latency, pages_used, merge_flags = _extract_policy_windows(
-            request, model, route_, lob, page_threshold=page_threshold,
+            request, model, route_, lob, page_threshold=page_threshold, latencies=window_latencies,
         )
     elif len(windows) > 1:
         # A Loss Run longer than one window: read by window, merged and
         # reconciled. One that fits a window is read in one call below.
         extraction, all_spans, latency, pages_used, merge_flags, reconciliation = (
-            _extract_lossrun_windows(request, model, route_, windows))
+            _extract_lossrun_windows(request, model, route_, windows, latencies=window_latencies))
     elif page_plan and page_plan.routed:
         # The selected pages go in **one** call, not one call per page. Sending
         # them separately asked the model to produce a whole-document JSON from a
@@ -846,6 +856,8 @@ def extract(
             lob=lob,
         )
 
+    if not window_latencies and latency is not None:
+        window_latencies.append(latency)                  # read in one call
     if route_.schema_doc_type == "lossrun":
         if reconciliation is None:
             from serving.lossrun_merge import reconcile_extraction
@@ -1008,6 +1020,7 @@ def extract(
         latency_ms=latency,
         validation_errors=validation_errors,
         reconciliation=reconciliation,
+        window_latencies_ms=window_latencies,
     )
 
     log.info(

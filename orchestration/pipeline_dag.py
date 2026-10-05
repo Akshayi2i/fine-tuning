@@ -2025,7 +2025,41 @@ def build_release_bundle(ctx: StageContext) -> tuple[Any, list[str]]:
         )
     except ValueError as exc:
         raise PipelineError(f"the release bundle for {ctx.release_id} is invalid: {exc}") from exc
+    record_release_measurements(ctx, bundle)
     return bundle, reasons
+
+
+def record_release_measurements(ctx: StageContext, bundle: Any) -> None:
+    """Latency, GPU memory and the routing table, onto the bundle (Fideon SPEC_09 handoff item 6).
+
+    Latency and memory are read from this release's eval report and recorded,
+    not gated. The routing check fails the release step: every line is routed
+    through the serving plan as it stands with this release promoted, and a
+    line that cannot be routed, or one this release was trained for that would
+    not reach it, stops the release here.
+    """
+    from serving.release_router import build_serving_plan
+    from serving.routing_check import RoutingCheckError, plan_with_candidate, routing_table
+
+    report_key = paths.eval_report(ctx.out_version, scope=ctx.scope.name)
+    report = ctx.client.read_json(report_key) if ctx.client.exists(report_key) else {}
+    measured = report.get("release_measurements") or {}
+    bundle.latency_p95_ms_by_adapter = {
+        adapter: entry.get("p95_ms") for adapter, entry in
+        (measured.get("latency_p95_ms_by_adapter") or {}).items()
+    }
+    bundle.peak_gpu_memory_mb = measured.get("peak_gpu_memory_mb")
+    bundle.measured_with = measured.get("measured_with")
+    if not measured:
+        log.warning("%s: no release measurements in %s; latency and GPU memory are not recorded",
+                    bundle.release_id, report_key)
+
+    plan = plan_with_candidate(build_serving_plan(ctx.client, tenant_id=ctx.tenant_id),
+                               json.loads(bundle.model_dump_json()))
+    try:
+        bundle.routing = routing_table(plan, bundle.release_id, bundle.lines)
+    except RoutingCheckError as exc:
+        raise PipelineError(f"{bundle.release_id} is not released: {exc}") from exc
 
 
 def write_release_bundle(ctx: StageContext, bundle: Any) -> None:

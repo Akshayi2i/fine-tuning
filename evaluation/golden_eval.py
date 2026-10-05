@@ -210,6 +210,9 @@ def evaluate(
             if result.reconciliation is not None:
                 # The serving path's own report: the gate reads what production did.
                 metadata["reconciliation"] = result.reconciliation
+            # For the release measurements: which adapter served, and each call's time.
+            metadata["adapter"] = result.route_info.get("adapter")
+            metadata["window_latencies_ms"] = list(result.window_latencies_ms)
             triples.append((doc.golden, result.extraction, metadata))
     return triples
 
@@ -256,6 +259,11 @@ def evaluate_version(
     body["calibrated"] = calibrators is not None
     body.update(real_only_section(version, triples, corpus_version=corpus_version, scope=scope))
     body["windowing_ceiling"] = windowing_ceiling(documents)
+    # P95 latency per adapter and peak GPU memory, for the release bundle
+    # (recorded, not gated; evaluation.release_measurements).
+    from evaluation.release_measurements import measurements
+
+    body["release_measurements"] = measurements(triples)
     client.write_json(paths.eval_report(version, scope=scope.name), body)
     log.info("golden eval of %s: %d document-mode run(s), %d failed", version, len(triples), failed)
     return body

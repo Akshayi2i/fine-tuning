@@ -142,12 +142,20 @@ class ModelBackend(ABC):
         does not lose the others. The default runs them one at a time; a backend
         that can batch (vLLM) overrides it and runs them together.
         """
+        import time
+
         out: list[Generation | Exception] = []
         for messages, config in zip(messages_list, configs, strict=True):
+            started = time.perf_counter()
             try:
-                out.append(self.generate(messages, config, adapter=adapter))
+                result = self.generate(messages, config, adapter=adapter)
             except Exception as exc:  # noqa: BLE001 - reported per request, not raised
                 out.append(exc)
+                continue
+            if result.latency_ms is None:
+                # One at a time, so each request's own time is how long it took.
+                result.latency_ms = round((time.perf_counter() - started) * 1000, 1)
+            out.append(result)
         return out
 
 
