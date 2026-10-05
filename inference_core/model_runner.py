@@ -725,6 +725,21 @@ def load_model(
                        default_adapter=default_adapter)
 
 
+def without_adapter(model: LoadedModel) -> LoadedModel:
+    """The same engine answering with no adapter: the base model.
+
+    For comparing base and base + adapter on the same documents with one model
+    load. The engine was built with LoRA on, and a request with no LoRA request
+    runs the base weights alone.
+    """
+    import dataclasses
+
+    resolved = type(model.resolved)(model.resolved)
+    resolved["kind"] = "base"
+    resolved["foundation_adapter"] = None
+    return dataclasses.replace(model, tag="base", resolved=resolved, default_adapter=None)
+
+
 #: Where an adapter named by a Blob prefix is copied, once per prefix.
 ADAPTER_CACHE = Path("/workspace/adapters") if Path("/workspace").is_dir() else Path.home() / ".cache" / "fideon-adapters"
 

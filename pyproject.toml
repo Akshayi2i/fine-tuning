@@ -75,7 +75,7 @@ serve = ["vllm==0.11.0", "transformers>=4.57,<4.58"]
 # torch pinned to the pod's CUDA 12.8 build, as for OCR: unpinned it resolved the
 # newest torch, built for a CUDA the pod's driver may not run.
 quantize = ["llmcompressor>=0.8", "torch>=2.8,<2.9"]
-eval = ["numpy>=1.26", "scikit-learn>=1.4"]
+eval = ["numpy>=1.26", "scikit-learn>=1.4", "openpyxl>=3.1,<4"]  # openpyxl: testing/comparison.py workbooks
 track = ["mlflow>=2.12"]
 dev = [
     "pytest>=8.0", "pytest-cov>=5.0", "ruff>=0.4", "mypy>=1.10", "types-PyYAML",

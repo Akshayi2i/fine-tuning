@@ -165,6 +165,8 @@ email-validator==2.3.0
     # via
     #   fastapi
     #   pydantic
+et-xmlfile==2.0.0
+    # via openpyxl
 fastapi==0.141.1
     # via
     #   gradio
@@ -465,6 +467,8 @@ opencv-python-headless==5.0.0.93
     # via
     #   mistral-common
     #   vllm
+openpyxl==3.1.5
+    # via insurance-extraction-finetuning
 opentelemetry-api==1.45.0
     # via
     #   mlflow-skinny
