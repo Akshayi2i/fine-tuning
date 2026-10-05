@@ -19,7 +19,7 @@
 # documents of that type AND a measured >2pp win outside the paired-bootstrap
 # 95% CI. Even then they train on the MERGED foundation, decoder-only, one LoRA
 # per request - never stacked. No per-type training config exists until a type
-# graduates; SPEC_06 §4 describes what one must satisfy.
+# graduates; IMPL-06 §4 describes what one must satisfy.
 
 run_type: unified
 

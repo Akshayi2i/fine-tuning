@@ -1,4 +1,4 @@
-"""Importing documents that arrive already prepared (SPEC_03, SPEC_04).
+"""Importing documents that arrive already prepared (IMPL-03, IMPL-04).
 
 Page images, per-page MinerU markdown and a golden JSON written against the
 canonical schema — placed where the pipeline already reads them, so the dataset

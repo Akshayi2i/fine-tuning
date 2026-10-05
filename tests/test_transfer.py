@@ -1,4 +1,4 @@
-"""SPEC_02 §3 — the path-aware push/pull helpers.
+"""IMPL-02 §3 — the path-aware push/pull helpers.
 
 These exist so no caller ever hand-builds a Blob path. That is not tidiness: the
 only place that did build them inline published a Foundation run against the

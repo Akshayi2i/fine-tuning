@@ -10,7 +10,7 @@ Two things here are load-bearing rather than incidental:
     ``common_fields.json`` and ``lob.enum.json`` hold definitions shared across
     document types. Defining a field per-schema instead would let two
     definitions of the same canonical field drift apart, and no test would catch
-    it because each schema still validates on its own (SPEC_01).
+    it because each schema still validates on its own (IMPL-01).
 
 Field descriptions
     Every field carries a ``description`` — a semantic gloss with exclusions.
@@ -50,7 +50,7 @@ CANONICAL_DIR = (
 CANONICAL_FALLBACK = "_fallback"
 
 #: Merged into every line file by the client's registry and never loaded for
-#: extraction on its own (SPEC_00 §5.2). Every line file already carries it.
+#: extraction on its own (Fideon SPEC_00 §5.2). Every line file already carries it.
 _CANONICAL_NOT_REGISTERED = ("_common",)
 
 #: LOB enum values whose canonical file is named differently. The enum is ours
@@ -381,9 +381,9 @@ def validate(
 ) -> None:
     """Validate an extraction or golden label. Raises ``ValidationError``.
 
-    Used by SPEC_04 before a golden label is admitted to the corpus, and by
-    SPEC_11 before an inference response is returned — mirroring the Fideon
-    SPEC_07 Stage 3 audit gate (arch §0a).
+    Used by IMPL-04 before a golden label is admitted to the corpus, and by
+    IMPL-11 before an inference response is returned — mirroring the Fideon
+    Fideon SPEC_07 Stage 3 audit gate (arch §0a).
     """
     validator_for(doc_type, acord_form, lob).validate(instance)
 
@@ -607,7 +607,7 @@ def assert_all_fields_described(doc_type: str, acord_form: str | None = None) ->
     """Fail loudly if any field lacks a ``description``.
 
     Descriptions are prompt text, so a missing one silently removes the model's
-    only semantic anchor for that field (arch §0c). This is a SPEC_01 acceptance
+    only semantic anchor for that field (arch §0c). This is a IMPL-01 acceptance
     criterion, enforced here so it is checkable rather than aspirational.
     """
     missing = [

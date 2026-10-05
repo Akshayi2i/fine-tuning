@@ -1,4 +1,4 @@
-"""Experiment C — the pilot training run (SPEC_15 §3, arch §16c).
+"""Experiment C — the pilot training run (IMPL-15 §3, arch §16c).
 
 25–30 annotated documents per type, pilot split ratios (~70/18/12), Foundation
 plus per-type adapters, evaluated on the held-out pilot test split.
@@ -92,7 +92,7 @@ PILOT_CRITERIA: tuple[Criterion, ...] = (
     Criterion(
         "list_field_recall", 0.75, "higher_is_better",
         "Loss Run corpus row-length variety, and whether MinerU's table row count is reaching the "
-        "row-completeness signal (SPEC_09). Consider list-specific prompt rules.",
+        "row-completeness signal (IMPL-09). Consider list-specific prompt rules.",
     ),
     Criterion(
         "schema_validity_rate", 0.9999, "higher_is_better",
@@ -102,19 +102,19 @@ PILOT_CRITERIA: tuple[Criterion, ...] = (
     ),
     Criterion(
         "image_only_gap", RELATIVE_TOLERANCE, "lower_is_better",
-        "The ViT escalation gate (SPEC_06 vit_gate) — but ONLY if the errors are perception-type. "
+        "The ViT escalation gate (IMPL-06 vit_gate) — but ONLY if the errors are perception-type. "
         "If they are schema or reasoning errors, training the vision encoder fixes nothing and "
         "costs a great deal.",
         derive=lambda m: _relative_gap(m, "image_only_field_f1", "ocr_plus_image_field_f1"),
     ),
     Criterion(
         "row_completeness_detection", 0.80, "higher_is_better",
-        "Cross-check the SPEC_09 sources: is MinerU's per-page table row count present in "
+        "Cross-check the IMPL-09 sources: is MinerU's per-page table row count present in "
         "ocr_meta, and is the document-stated count being parsed?",
     ),
     Criterion(
         "lob_detection_accuracy", 0.85, "higher_is_better",
-        "LoB corpus coverage (SPEC_05 corpus_manifest) — check the >=20%-per-value target before "
+        "LoB corpus coverage (IMPL-05 corpus_manifest) — check the >=20%-per-value target before "
         "blaming the model.",
     ),
     Criterion(
@@ -126,7 +126,7 @@ PILOT_CRITERIA: tuple[Criterion, ...] = (
     Criterion(
         "confusable_misattribution_rate", 0.05, "lower_is_better",
         "confusable_example_count: near zero means the corpus taught the mapping but never the "
-        "boundary. Also check the gloss carries an explicit exclusion clause (SPEC_01).",
+        "boundary. Also check the gloss carries an explicit exclusion clause (IMPL-01).",
     ),
 )
 
@@ -271,7 +271,7 @@ def alias_generalization_gap(
     """Shortfall of the held-out label against the field's dominant label.
 
     Args:
-        alias_report: a SPEC_08 ``AliasAccuracyReport``.
+        alias_report: a IMPL-08 ``AliasAccuracyReport``.
         held_out_label: the surface label kept out of ``train``.
 
     Returns:
@@ -372,6 +372,6 @@ def assert_manifests_written(run_ids: Sequence[str], client: Any) -> None:
     if missing:
         raise PilotError(
             f"pilot run(s) {missing} produced no run manifest. Pilot runs are registry entries "
-            "like any other (SPEC_02); without one, the corpus version, commit and config that "
+            "like any other (IMPL-02); without one, the corpus version, commit and config that "
             "produced the model are unrecoverable."
         )

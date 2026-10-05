@@ -1,4 +1,4 @@
-"""The request pipeline — the canonical extraction path (SPEC_11).
+"""The request pipeline — the canonical extraction path (IMPL-11).
 
 Every extraction goes through here: production requests and the testing harness
 alike. **The harness calls this function; it does not reimplement it.** That is
@@ -464,7 +464,7 @@ def _calibration_for(
     raise PipelineError(
         f"no calibration parameters for doc_type {doc_type!r}; the endpoint holds calibration for "
         f"{sorted(calibration)}. Confidence would otherwise be served raw, which is the one thing "
-        "apply_calibration exists to prevent (SPEC_09)."
+        "apply_calibration exists to prevent (IMPL-09)."
     )
 
 

@@ -1,4 +1,4 @@
-"""First-pass ("silver") drafts for human review (SPEC_04 §1, arch §7).
+"""First-pass ("silver") drafts for human review (IMPL-04 §1, arch §7).
 
 Nobody hand-types JSON from scratch. A corrected draft is faster and more
 consistent than a blank form, and the draft improves every cycle as the model
@@ -138,7 +138,7 @@ def assert_external_allowed(*, allow_external: bool) -> None:
             "external pre-annotation requires --allow-external. It is off by default because it "
             "sends unredacted documents outside the tenancy boundary; the self-hosted "
             f"{DEFAULT_BACKEND!r} backend needs no permission and produces rougher but usable "
-            "drafts (SPEC_04 §1)."
+            "drafts (IMPL-04 §1)."
         )
     permitted, reason = external_permission()
     if not permitted:
@@ -209,7 +209,7 @@ def pre_annotate(
     ocr_meta_key = paths.ocr_meta(doc_type, source_id, tenant_id)
     if not client.exists(ocr_meta_key):
         raise PreAnnotationError(
-            f"{source_id} has not been OCR'd, so there is nothing to draft from. Run SPEC_03 "
+            f"{source_id} has not been OCR'd, so there is nothing to draft from. Run IMPL-03 "
             "preprocessing first."
         )
     ocr_meta = client.read_json(ocr_meta_key)

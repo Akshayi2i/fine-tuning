@@ -1,6 +1,6 @@
 """Fixture contract — the fixtures must exercise what later phases will test against.
 
-Fixtures are pulled forward from SPEC_14 to Phase 1 because there is no labeled
+Fixtures are pulled forward from IMPL-14 to Phase 1 because there is no labeled
 corpus during the build: they are the *only* way to verify anything until real
 data arrives. That makes their coverage a contract, not an incidental detail — a
 fixture set that quietly stops covering confusables would let Phase 5 and Phase 7
@@ -57,7 +57,7 @@ def test_fixtures_exist():
 
 @pytest.mark.parametrize("golden", ALL_GOLDEN, ids=lambda p: p.stem)
 def test_golden_label_validates_against_its_schema(golden):
-    """SPEC_04 rejects a label that does not validate; fixtures must pass that bar."""
+    """IMPL-04 rejects a label that does not validate; fixtures must pass that bar."""
     label, meta, doc_type, acord_form = _load(golden)
     schemas.validate(label, doc_type, acord_form, meta.get("lob"))
 
@@ -84,7 +84,7 @@ def test_source_id_is_well_formed_and_matches_filename(golden):
 
 @pytest.mark.parametrize("golden", ALL_GOLDEN, ids=lambda p: p.stem)
 def test_field_provenance_never_names_a_confusable(golden):
-    """The highest-value annotation check in the system (SPEC_04).
+    """The highest-value annotation check in the system (IMPL-04).
 
     A label claiming ``insured_name`` was found under "Certificate Holder" is the
     exact mistake that teaches the model to conflate distinct parties — and it
@@ -119,7 +119,7 @@ def test_fixtures_cover_all_active_doc_types():
 
 
 def test_same_canonical_field_appears_under_two_surface_labels():
-    """Without this, ``alias_accuracy`` has nothing to slice (SPEC_08).
+    """Without this, ``alias_accuracy`` has nothing to slice (IMPL-08).
 
     One label per field would let the model memorise label strings and still
     score perfectly, which is precisely the outcome the canonical-mapping design
@@ -140,7 +140,7 @@ def test_same_canonical_field_appears_under_two_surface_labels():
 
 
 def test_a_confusable_co_occurrence_fixture_exists():
-    """Required corpus edge case (SPEC_05).
+    """Required corpus edge case (IMPL-05).
 
     Documents where a field and its confusables appear together are what teach
     the *boundary*. Without one, the corpus teaches the mapping and the model

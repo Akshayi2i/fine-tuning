@@ -22,7 +22,7 @@ Two rules this module exists to enforce:
   1. Under-coverage is a loud warning rather than a build failure: the remedy is
   collecting documents, which is a data-acquisition decision, not a build-time one.
 
-Accuracy is reported **per LoB value** and is a gating metric (SPEC_08). It is
+Accuracy is reported **per LoB value** and is a gating metric (IMPL-08). It is
 never averaged into overall field accuracy, because a rare class would then hide
 inside a healthy-looking aggregate.
 """

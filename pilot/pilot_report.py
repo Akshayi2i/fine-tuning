@@ -1,11 +1,11 @@
-"""The go/no-go summary across all three experiments (SPEC_15 §4).
+"""The go/no-go summary across all three experiments (IMPL-15 §4).
 
 Puts baseline, smoke test and pilot run side by side with their thresholds,
 actuals and pass/fail, and states which criteria failed along with the diagnosis
 path for each.
 
 **This is the gate the deferred work waits on.** The hyperparameter sweep
-(SPEC_06 ``sweep.py``, arch §11a) runs *after* this protocol passes and *before*
+(IMPL-06 ``sweep.py``, arch §11a) runs *after* this protocol passes and *before*
 production-scale training: sweeping against 25–30 documents per type measures
 noise, not signal, so running it earlier buys a confidently wrong config.
 
@@ -135,7 +135,7 @@ def decide(reports: dict[str, dict[str, Any]]) -> GoNoGo:
         completed=completed,
         rationale=(
             "All three experiments passed. Scale annotation, and run the deferred hyperparameter "
-            "sweep (SPEC_06) now — after this protocol and before production-scale training. "
+            "sweep (IMPL-06) now — after this protocol and before production-scale training. "
             "Re-baseline at real scale: these pilot thresholds are directional and must not be "
             "carried forward as production gates."
         ),

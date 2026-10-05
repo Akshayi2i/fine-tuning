@@ -1,4 +1,4 @@
-"""The 11 pipeline stages as addressable functions (SPEC_13 §8, arch §13).
+"""The 11 pipeline stages as addressable functions (IMPL-13 §8, arch §13).
 
 ``run.py`` composes these; an Airflow DAG or a GitHub Actions workflow could
 schedule the same functions unchanged. Keeping them here rather than in the CLI
@@ -119,7 +119,7 @@ class StageContext:
 
     # -- injected collaborators -------------------------------------------
     #: OCR engine for stage 2. Injected so the DAG is testable without MinerU,
-    #: and so swapping the engine (SPEC_03 keeps it swappable) touches one line.
+    #: and so swapping the engine (IMPL-03 keeps it swappable) touches one line.
     ocr_engine: Any = None
     #: Produces the candidate's scores against the frozen golden eval set. The
     #: DAG owns the *gate*, not the scoring: scoring needs a model and a GPU,
@@ -128,9 +128,9 @@ class StageContext:
     #: The production version's scores to gate against. ``None`` means this is
     #: the first version and there is nothing to regress against.
     baseline_metrics: dict[str, Any] | None = None
-    #: Per-format metrics from the SPEC_12 extraction routine over the frozen
+    #: Per-format metrics from the IMPL-12 extraction routine over the frozen
     #: golden eval set, keyed by format. Supplied, the quantize stage applies the
-    #: SPEC_10 thresholds and refuses to publish a format that fails.
+    #: IMPL-10 thresholds and refuses to publish a format that fails.
     quant_metrics: dict[str, dict[str, Any]] | None = None
     #: Per-adapter re-validation results for a Foundation major bump: every
     #: dependent adapter retrained against the new Foundation and gated. Absent
@@ -415,10 +415,10 @@ def stage_labeling(ctx: StageContext) -> StageResult:
     the source_ids that have a validated golden label, reports the rest as a
     backlog, and continues. That is the honest shape: you ingest 500 documents,
     200 are labeled, you train on 200, and the command tells you 300 are waiting
-    for a reviewer (SPEC_13 §2).
+    for a reviewer (IMPL-13 §2).
 
     It aborts only when the labeled set is empty or below
-    ``--min-labels-per-type``, which is the same day-zero floor SPEC_04 uses.
+    ``--min-labels-per-type``, which is the same day-zero floor IMPL-04 uses.
     """
     from data_pipeline.labeling.export_golden_labels import list_labeled_source_ids
 
@@ -443,13 +443,13 @@ def stage_labeling(ctx: StageContext) -> StageResult:
         raise PipelineError(
             "no validated golden labels exist, so there is nothing to train on. Labeling is human "
             "work and cannot sit inside an automated command; ingest and OCR have run, and the "
-            "documents are waiting in the review tool (SPEC_04)."
+            "documents are waiting in the review tool (IMPL-04)."
         )
     if thin:
         raise PipelineError(
             "the labeled corpus is below the day-zero floor for: " + "; ".join(thin) + ". "
             f"Training on fewer than {ctx.min_labels_per_type} documents per type produces a model "
-            "whose eval numbers are noise (SPEC_04). Lower --min-labels-per-type deliberately if "
+            "whose eval numbers are noise (IMPL-04). Lower --min-labels-per-type deliberately if "
             "you intend a smoke test rather than a real cycle."
         )
 
@@ -1204,7 +1204,7 @@ def foundation_upgrade_work_list(ctx: StageContext) -> CascadeWorkList:
 def eval_report_metrics(ctx: StageContext) -> dict[str, Any]:
     """The default metrics provider: score the frozen golden eval set.
 
-    Runs SPEC_08's ``run_eval`` — the same code the promotion gate's numbers are
+    Runs IMPL-08's ``run_eval`` — the same code the promotion gate's numbers are
     supposed to come from — after asserting the eval set does not overlap the
     corpus. If an eval report for this version already exists (a resumed run, or
     a scoring pass done separately), it is read rather than recomputed.
@@ -1395,7 +1395,7 @@ def stage_evaluation_gate(ctx: StageContext) -> StageResult:
         "improved_metrics": result.improved_metrics,
         "waived_gates": sorted(result.waived),
         "override": result.override.as_dict() if result.override else None,
-        # SPEC_09 §6: production (field match >= 0.92) or interim; None if blocked.
+        # Fideon SPEC_09 §6: production (field match >= 0.92) or interim; None if blocked.
         "tier": result.tier,
     }
     decision["scope"] = ctx.scope.name
@@ -1553,9 +1553,9 @@ def stage_quantize(ctx: StageContext) -> StageResult:
             ctx.volume.mark(directory)
     produced: dict[str, list[str]] = {ctx.scope.name: sorted(outputs)}
 
-    # The threshold gate, between quantize and push (SPEC_13 §4). It runs only
+    # The threshold gate, between quantize and push (IMPL-13 §4). It runs only
     # when the caller supplied per-format metrics: scoring each GGUF needs the
-    # SPEC_12 extraction routine on a GPU, and a gate that invented numbers to
+    # IMPL-12 extraction routine on a GPU, and a gate that invented numbers to
     # have something to judge would be worse than one that says it has none.
     validation: dict[str, Any] = {}
     if ctx.quant_metrics:
@@ -1568,7 +1568,7 @@ def stage_quantize(ctx: StageContext) -> StageResult:
         log.warning(
             "no per-format metrics supplied, so the quantization thresholds were not applied. "
             "Cycle 1 serves bf16, which IS the reference, so there is nothing to compare — but a "
-            "QUANTIZED format that reaches serving unvalidated has not passed (SPEC_10 §4)."
+            "QUANTIZED format that reaches serving unvalidated has not passed (IMPL-10 §4)."
         )
 
     return StageResult(
@@ -1864,7 +1864,7 @@ def assert_staged(ctx: StageContext) -> None:
         f"version {ctx.out_version} is not on the staging volume — expected {expected}. "
         "The volume is working storage and may have been reclaimed since finetune ran. "
         "Re-run `finetune --from-stage merge` to rebuild it, or pass --from-blob if the adapters "
-        "were pushed with `finetune --push-adapters` (SPEC_13 §4)."
+        "were pushed with `finetune --push-adapters` (IMPL-13 §4)."
     )
 
 
@@ -2097,7 +2097,7 @@ def stage_push(ctx: StageContext) -> StageResult:
     """Copy adapters, merged model and quantized models into Blob, then flip the
     manifest from ``staged`` to ``published``.
 
-    The layouts mirror each other deliberately (SPEC_13 §3), so this copies
+    The layouts mirror each other deliberately (IMPL-13 §3), so this copies
     rather than translates — a translation step is where a path convention drifts
     between the two stores and an artifact becomes unfindable.
     """
@@ -2115,7 +2115,7 @@ def stage_push(ctx: StageContext) -> StageResult:
     # active. A graduated per-type adapter (§4.2) is published by its own run,
     # not by this one.
     #
-    # Through the SPEC_02 §3 helper's path, never assembled here. The only place
+    # Through the IMPL-02 §3 helper's path, never assembled here. The only place
     # that built these inline is the place that published a Foundation against
     # paths that were never produced.
     scope = ctx.scope
@@ -2230,14 +2230,14 @@ def stage_deploy(ctx: StageContext) -> StageResult:
 
 
 def stage_feedback(ctx: StageContext) -> StageResult:
-    """Low-confidence extraction output feeds the next corpus version (SPEC_04).
+    """Low-confidence extraction output feeds the next corpus version (IMPL-04).
 
     Driven by ``extract``, not by a build: the loop closes when documents are
     actually processed, and there is nothing to feed back at build time.
     """
     return StageResult(
         "feedback_loop", "skipped",
-        "driven by `extract` plus the SPEC_04 active-learning queue, not by a build command",
+        "driven by `extract` plus the IMPL-04 active-learning queue, not by a build command",
     )
 
 

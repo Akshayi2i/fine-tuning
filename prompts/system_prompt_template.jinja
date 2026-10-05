@@ -1,7 +1,7 @@
 {#-
   System prompt template - the SINGLE source of the system message, used
-  identically at corpus-build time (SPEC_05), evaluation (SPEC_08), serving
-  (SPEC_11) and testing (SPEC_12).
+  identically at corpus-build time (IMPL-05), evaluation (IMPL-08), serving
+  (IMPL-11) and testing (IMPL-12).
 
   Training-time and inference-time prompts must render BYTE-IDENTICALLY.
   Divergence is the most common cause of post-fine-tuning degradation and it is
@@ -20,7 +20,7 @@
   test_prompt_carries_descriptions_but_no_alias_strings enforces this.
 
   Sections above the include are shared by every document type. The included
-  block is that type's own structure and failure modes (SPEC_12 section 2): a
+  block is that type's own structure and failure modes (IMPL-12 section 2): a
   Loss Run's as-of point and an ACORD's pre-printed blanks are not the same
   problem, and one type's guidance can be tuned without touching the others.
   It is included through this one template, so there is still exactly one

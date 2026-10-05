@@ -1,4 +1,4 @@
-# Layout families - which LOBs share a visual grammar (SPEC_09 2.1).
+# Layout families - which LOBs share a visual grammar (IMPL-09 2.1).
 #
 # WHY THIS EXISTS. A Workers' Comp declarations page is tabular (class codes,
 # state schedules, rate tables). A D&O policy is dense prose (manuscript wording,

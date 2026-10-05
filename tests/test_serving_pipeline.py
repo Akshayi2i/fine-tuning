@@ -1,4 +1,4 @@
-"""SPEC_10 + SPEC_11 + SPEC_12 — routing, page handling, the pipeline, and parity.
+"""IMPL-10 + IMPL-11 + IMPL-12 — routing, page handling, the pipeline, and parity.
 
 The parity test at the end is one of the four that guard silent failures: if the
 testing harness ever stops calling the serving pipeline, its numbers describe a

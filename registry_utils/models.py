@@ -165,7 +165,7 @@ class DataStats(_Base):
 
     tenant_ids: list[str] = Field(default_factory=list)
 
-    #: Recorded, not enforced, while de-identification is blocked (SPEC_05 §1).
+    #: Recorded, not enforced, while de-identification is blocked (IMPL-05 §1).
     deidentified: bool = False
     image_redaction: str = "unresolved"
 
@@ -405,7 +405,7 @@ class ReleaseBundle(_Base):
 
     release_id: str = Field(..., description="e.g. release-2026.11.1")
     status: ReleaseStatus = "candidate"
-    #: SPEC_09 §6: ``production`` when field match >= 0.92, ``interim`` when the
+    #: Fideon SPEC_09 §6: ``production`` when field match >= 0.92, ``interim`` when the
     #: release passed every floor below that (evaluation.gating.release_tier).
     #: ``None`` on bundles written before tiers existed.
     tier: Literal["production", "interim"] | None = None

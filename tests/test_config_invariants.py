@@ -1,4 +1,4 @@
-"""Cross-file config invariants (SPEC_01).
+"""Cross-file config invariants (IMPL-01).
 
 Each of these spans two files that are read by different stages. Nothing else in
 the system would notice them drifting apart, and none of them fail loudly on

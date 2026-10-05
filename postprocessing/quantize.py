@@ -1,4 +1,4 @@
-"""Serving-format quantization (arch v2.1 §13a, SPEC_10).
+"""Serving-format quantization (arch v2.1 §13a, IMPL-10).
 
 **What this produces, and for what runtime.** The serving endpoint is vLLM. So
 the formats this module produces are the ones vLLM loads natively:

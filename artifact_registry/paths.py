@@ -193,7 +193,7 @@ def processed_page(doc_type: str, source_id: str, page: int, suffix: str,
 
 def ocr_meta(doc_type: str, source_id: str, tenant_id: str | None = None) -> str:
     """Records ``mineru_version``, ``ocr_device``, resolution cap, and per-page
-    table row counts (the last feeds the row-completeness check in SPEC_09)."""
+    table row counts (the last feeds the row-completeness check in IMPL-09)."""
     return _join(processed_dir(doc_type, source_id, tenant_id), "ocr_meta.json")
 
 

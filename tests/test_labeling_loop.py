@@ -1,4 +1,4 @@
-"""SPEC_04 §1 and §6 — pre-annotation and the confidence-routed review queue.
+"""IMPL-04 §1 and §6 — pre-annotation and the confidence-routed review queue.
 
 Two guards carry this file. The **external pre-annotation refusal** is a
 compliance boundary: it must refuse, not warn, because a warning is dismissed

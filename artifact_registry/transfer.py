@@ -1,4 +1,4 @@
-"""Path-aware push/pull helpers (SPEC_02 §3).
+"""Path-aware push/pull helpers (IMPL-02 §3).
 
 ``BlobClient`` moves bytes; ``paths`` says where they go. This module is the join:
 one named function per artifact class, so **no caller ever hand-builds a Blob
@@ -189,7 +189,7 @@ def pull_calibration(version: str, doc_type: str, *, client: BlobClient) -> dict
     if not client.exists(key):
         raise TransferError(
             f"no calibration at {key}. Serving raw logprob confidence as if calibrated would make "
-            "every downstream review threshold meaningless (SPEC_09), so this raises rather than "
+            "every downstream review threshold meaningless (IMPL-09), so this raises rather than "
             "falling back."
         )
     return dict(client.read_json(key))

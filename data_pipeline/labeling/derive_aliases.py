@@ -1,4 +1,4 @@
-"""Derive the alias registry from labeled documents (SPEC_04 §3, arch §0c).
+"""Derive the alias registry from labeled documents (IMPL-04 §3, arch §0c).
 
 The registry is **built from evidence, not hand-written**. Given documents you
 have already labeled canonically, the surface label for each field is recoverable

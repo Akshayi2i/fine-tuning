@@ -1,4 +1,4 @@
-"""The operator command surface (SPEC_13 §1).
+"""The operator command surface (IMPL-13 §1).
 
 Three commands plus one umbrella::
 

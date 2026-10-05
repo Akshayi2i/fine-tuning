@@ -39,7 +39,7 @@ class RunnerConfig:
     max_loras: int = 4
     max_lora_rank: int = 64
 
-    #: The SPEC_00 target schema for structured decoding (arch v2.1 §13).
+    #: The Fideon SPEC_00 target schema for structured decoding (arch v2.1 §13).
     #: ``None`` leaves generation unconstrained, which is what the evaluation job
     #: uses for its training-health signal: whether the model learned the format
     #: on its own is a different question from whether the format is enforced.

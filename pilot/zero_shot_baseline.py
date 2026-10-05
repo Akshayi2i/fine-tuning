@@ -1,4 +1,4 @@
-"""Experiment A — the zero-shot baseline (SPEC_15 §1, arch §16a).
+"""Experiment A — the zero-shot baseline (IMPL-15 §1, arch §16a).
 
 Run the **untuned** base model over 10 real documents per type and score it with
 the same metric code the promotion gate uses. Costs no annotation beyond ground
@@ -17,7 +17,7 @@ calls the serving pipeline::
            --input pilot/baseline_docs/ --ground-truth pilot/baseline_golden/
 
 ``--model base`` and ``resolve_model_version("base")`` exist precisely so this
-experiment, day-zero pre-annotation (SPEC_04) and production all run one
+experiment, day-zero pre-annotation (IMPL-04) and production all run one
 implementation. A separate one here would measure something subtly different from
 what ships.
 
@@ -46,7 +46,7 @@ REPORTS_DIR = PILOT_ROOT / "reports"
 #: Enough documents per type to see a failure pattern rather than one bad scan.
 BASELINE_DOCS_PER_TYPE = 10
 
-#: Decision bands (SPEC_15 §1). Above the first, the base model already carries a
+#: Decision bands (IMPL-15 §1). Above the first, the base model already carries a
 #: strong prior; below the second, the problem is likely the framing rather than
 #: the absence of fine-tuning, and annotation money spent before checking that is
 #: money spent on the wrong thing.
@@ -73,7 +73,7 @@ class BaselineDecision:
 
 
 def classify_baseline(field_f1: float) -> BaselineDecision:
-    """Map a zero-shot field F1 onto the SPEC_15 decision table."""
+    """Map a zero-shot field F1 onto the IMPL-15 decision table."""
     if field_f1 > STRONG_PRIOR:
         return BaselineDecision(
             band="strong_prior",

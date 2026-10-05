@@ -11,10 +11,10 @@ ms-swift + Qwen3-VL multimodal LoRA     the Layer-3 entrypoint choice (arch §10
                                         fails, the documented fallback is TRL SFTTrainer
 flash-attn                              install pain is the usual blocker; sdpa is the
                                         fallback, at a speed cost
-interleaved image/text content          the corpus row format (SPEC_07). If a trainer or
+interleaved image/text content          the corpus row format (IMPL-07). If a trainer or
                                         server rejects it, page pairing needs the
                                         single-block fallback with inline markers
-vLLM multi-LoRA hot-swap                SPEC_11's serving design. If it fails, serve merged
+vLLM multi-LoRA hot-swap                IMPL-11's serving design. If it fails, serve merged
                                         per-type models instead
 MinerU on CUDA                          the whole data pipeline; GPU is the default mode
 llama.cpp mmproj for Qwen3-VL           whether GGUF export can produce a model that can
@@ -396,7 +396,7 @@ def check_vllm_multi_lora(r: Result) -> None:
     r.detail = (
         f"vLLM {vllm.__version__} exposes enable_lora/max_loras — confirm hot-swap on a real "
         "adapter before relying on it" if r.ok
-        else f"vLLM {vllm.__version__} lacks multi-LoRA args; serve merged per-type models (SPEC_11)"
+        else f"vLLM {vllm.__version__} lacks multi-LoRA args; serve merged per-type models (IMPL-11)"
     )
 
 
@@ -636,7 +636,7 @@ def check_sequence_parallel(r: Result) -> None:
 
 
 def check_structured_outputs(r: Result) -> None:
-    """vLLM structured decoding against a SPEC_00 schema (arch §13)."""
+    """vLLM structured decoding against a Fideon SPEC_00 schema (arch §13)."""
     import vllm
 
     r.data["vllm"] = vllm.__version__
@@ -652,7 +652,7 @@ def check_structured_outputs(r: Result) -> None:
     r.ok = r.data["guided_decoding_params"] or bool(r.data["sampling_fields"])
     r.detail = (
         f"structured outputs available ({r.data['sampling_fields'] or 'GuidedDecodingParams'}) — "
-        "measure schema compile time and throughput on the real SPEC_00 schemas next"
+        "measure schema compile time and throughput on the real Fideon SPEC_00 schemas next"
         if r.ok else
         "no structured-output surface found; schema validity cannot be guaranteed at decode time"
     )
@@ -803,7 +803,7 @@ def main(argv: list[str] | None = None) -> int:
         run("swift_image_budget", "that training resizes pages to the budget serving uses, and "
             "that the pre-launch length check counts image tokens right",
             check_swift_image_budget),
-        run("vllm_multi_lora", "SPEC_11 serving; merged per-type models are the fallback",
+        run("vllm_multi_lora", "IMPL-11 serving; merged per-type models are the fallback",
             check_vllm_multi_lora),
         run("llama_cpp_mmproj", "whether GGUF export can produce a model that can see",
             check_llama_cpp_mmproj),

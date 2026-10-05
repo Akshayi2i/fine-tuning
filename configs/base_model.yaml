@@ -1,5 +1,5 @@
 # Base model and quantization (arch 9, 11).
-# Read by training (SPEC_06), inference core (SPEC_07) and serving (SPEC_11).
+# Read by training (IMPL-06), inference core (IMPL-07) and serving (IMPL-11).
 
 model:
   # Pin the revision. A floating revision means two training runs can silently
@@ -25,7 +25,7 @@ model:
 # technique in the first place.
 #
 # Why bf16 rather than 4-bit NF4 (QLoRA): BOTH serving paths hold the base in
-# bf16/fp16 - the merged model (SPEC_10) and vLLM's LoRA hot-swap (SPEC_11). An
+# bf16/fp16 - the merged model (IMPL-10) and vLLM's LoRA hot-swap (IMPL-11). An
 # adapter trained against a 4-bit base learns a delta that partly compensates for
 # quantization error in weights it is then never served against. bf16 removes
 # that gap: you train on exactly the weights you serve. It also runs 20-40%

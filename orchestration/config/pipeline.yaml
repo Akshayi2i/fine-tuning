@@ -1,4 +1,4 @@
-# Orchestration configuration (SPEC_13 §9).
+# Orchestration configuration (IMPL-13 §9).
 #
 # GPU class per stage, staging volume, retry policy, notification hooks.
 # Secrets are NEVER here — they come from the environment only.
@@ -88,6 +88,6 @@ deferred:
   # the hyperparameter (arch §11a).
   sweep: false
   # The quantization gate applies whenever per-format metrics are supplied to
-  # `package`. Scoring each GGUF needs the SPEC_12 routine on a GPU, so until
-  # then the stage warns rather than inventing numbers to judge (SPEC_10 §4).
+  # `package`. Scoring each GGUF needs the IMPL-12 routine on a GPU, so until
+  # then the stage warns rather than inventing numbers to judge (IMPL-10 §4).
   quant_threshold_gate: false

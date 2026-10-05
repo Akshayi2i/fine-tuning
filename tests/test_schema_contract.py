@@ -1,4 +1,4 @@
-"""SPEC_01 acceptance criteria for the schema and prompt contracts.
+"""IMPL-01 acceptance criteria for the schema and prompt contracts.
 
 These guard failures that are otherwise silent — a schema that stops requiring
 ``line_of_business``, a field whose gloss goes missing, an alias string leaking
@@ -417,7 +417,7 @@ def test_each_canonical_line_leaves_room_for_the_document(lob):
 
 
 # --------------------------------------------------------------------------
-# Per-document-type rules (SPEC_12 §2)
+# Per-document-type rules (IMPL-12 §2)
 # --------------------------------------------------------------------------
 
 DOC_TYPE_BLOCK = "# This document type"
@@ -484,7 +484,7 @@ def test_the_type_block_is_identical_across_modalities(modality_mode):
 
 
 def test_the_stated_count_rule_survives_in_the_lossrun_block():
-    """SPEC_09's row-completeness check compares the model's row count against a
+    """IMPL-09's row-completeness check compares the model's row count against a
     count the *document* states. A model that computes that count from its own
     rows makes the cross-check compare a number to itself, and the one signal
     that can see a dropped row goes silent."""

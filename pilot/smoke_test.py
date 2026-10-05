@@ -1,4 +1,4 @@
-"""Experiment B — the 5-document smoke test (SPEC_15 §2, arch §16b).
+"""Experiment B — the 5-document smoke test (IMPL-15 §2, arch §16b).
 
 Annotate exactly 5 documents per type and train to **intentional overfit**: no
 train/val split, 5 epochs, learning rate at the top of the sweep range. The model

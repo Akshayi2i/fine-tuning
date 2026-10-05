@@ -5,13 +5,13 @@ or you systematically under-count correct extractions: the golden label says
 ``2026-04-01`` and the page says ``04/01/2026``; the label says ``12400.0`` and
 the page says ``$12,400.00``.
 
-Built in SPEC_01 rather than SPEC_08 because three consumers need it and the
-earliest is SPEC_04:
+Built in IMPL-01 rather than IMPL-08 because three consumers need it and the
+earliest is IMPL-04:
 
-* **SPEC_04** ``derive_aliases`` — anchoring a golden value to its position in the
+* **IMPL-04** ``derive_aliases`` — anchoring a golden value to its position in the
   OCR text, which is how the surface label is discovered at all.
-* **SPEC_08** the promotion gate — what counts as a correct field.
-* **SPEC_12** the testing harness — must agree with the gate, or "correct" means
+* **IMPL-08** the promotion gate — what counts as a correct field.
+* **IMPL-12** the testing harness — must agree with the gate, or "correct" means
   two different things in test and in promotion.
 
 Pure and dependency-free by design.

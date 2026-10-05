@@ -1,4 +1,4 @@
-"""Compile documents into chat-format JSONL training rows (SPEC_05, arch §6, §7).
+"""Compile documents into chat-format JSONL training rows (IMPL-05, arch §6, §7).
 
 Split first, expand second, inside whichever split the document was already
 assigned to:
@@ -222,7 +222,7 @@ def expand_document(
             lob=document.lob,
             tenant_id=document.tenant_id,
             split=split,
-            # Recorded, not enforced: de-identification is blocked (SPEC_05 §1).
+            # Recorded, not enforced: de-identification is blocked (IMPL-05 §1).
             deidentified=False,
         )
         row["mode_index"] = mode_index

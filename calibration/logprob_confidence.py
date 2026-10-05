@@ -83,7 +83,7 @@ def field_confidences(
 
     Unmapped fields are **included and flagged**, never dropped. A field with no
     confidence must not be indistinguishable from a confident one — that is
-    exactly backwards for a signal whose job is flagging risk (SPEC_07).
+    exactly backwards for a signal whose job is flagging risk (IMPL-07).
     """
     out: dict[str, FieldConfidence] = {}
     for path, span in spans.items():

@@ -194,7 +194,7 @@ def ingest_pdf(
         "size_bytes": pdf_path.stat().st_size,
         **inspected,
         # Populated by the de-identification step if and when it is unblocked
-        # (SPEC_05 §1). Recorded as unknown rather than omitted, so nothing
+        # (IMPL-05 §1). Recorded as unknown rather than omitted, so nothing
         # downstream can mistake absence for "no PII".
         "pii_flags": {"status": "not_assessed"},
         "retention_class": "standard",

@@ -1,4 +1,4 @@
-"""SPEC_07 — the shared inference primitive.
+"""IMPL-07 — the shared inference primitive.
 
 This is the file that guards **test == prod at the primitive level**. If
 ``build_messages`` produces different output in evaluation, serving, and testing,
@@ -172,7 +172,7 @@ def test_scalar_null_and_list_row_fields_all_map():
 
 def test_row_count_supports_the_completeness_signal():
     """A missing row emits no tokens, so counting generated rows is the only way
-    to compare against the document's own count (SPEC_09)."""
+    to compare against the document's own count (IMPL-09)."""
     text = '{"claims":[{"n":"a"},{"n":"b"},{"n":"c"}]}'
     tokens, logprobs = _tokenize(text)
     spans = span_map.map_field_spans(text, tokens, logprobs)
@@ -299,7 +299,7 @@ def test_backend_without_logprobs_is_refused(client):
 # --------------------------------------------------------------------------
 
 def test_inference_core_does_not_import_higher_layers():
-    """SPEC_07 sits *below* calibration, serving, evaluation and testing.
+    """IMPL-07 sits *below* calibration, serving, evaluation and testing.
 
     They import it; it must never import them, or the cycle it exists to break
     reappears.

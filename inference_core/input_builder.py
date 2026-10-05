@@ -1,7 +1,7 @@
 """Message assembly — the single place prompt, images, and OCR come together.
 
-Corpus build (SPEC_05), evaluation (SPEC_08), serving (SPEC_11) and testing
-(SPEC_12) all call :func:`build_messages`. There is deliberately no second path,
+Corpus build (IMPL-05), evaluation (IMPL-08), serving (IMPL-11) and testing
+(IMPL-12) all call :func:`build_messages`. There is deliberately no second path,
 because four contexts assembling their own inputs is how "test == prod" quietly
 stops being true.
 

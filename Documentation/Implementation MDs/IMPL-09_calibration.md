@@ -1,0 +1,127 @@
+# SPEC 09 — Confidence Calibration
+
+> Read `IMPL-00_MASTER_CONTEXT.md` first. Dependencies: IMPL-01, IMPL-02, IMPL-07, IMPL-08. Uses the inference core (IMPL-07) for logprobs/spans and the evaluation normalizer (IMPL-08) for the correctness signal. No forward dependency on serving/testing.
+>
+> **Architecture refs:** `finetuning-architecture-v2.1.docx` §5 (**confidence flow, calibration, list-field second signal**), §0b (LoB carries confidence too), §15 (ECE as a gating metric).
+
+## Goal
+
+Turn raw token logprobs into trustworthy per-field confidence via post-hoc calibration, plus the list-field completeness signal that logprobs are structurally blind to.
+
+## The end-to-end flow being implemented (arch §5)
+
+```
+Generation ──> token logprobs ──> map to field spans ──> aggregate per field
+                                                              │
+                                                        raw confidence
+                                                              │
+                                              post-hoc calibration transform
+                                              (temperature / isotonic, per type)
+                                                              │
+                                                     calibrated confidence
+                                                       │              │
+                                              scalar fields      list fields
+                                                       │              │
+                                              threshold check   + row-completeness
+                                                       │              │
+                                                       └──> review routing <──┘
+```
+
+**Why calibration is not optional:** fine-tuned generative models — especially after LoRA fine-tuning on a narrow task — become **overconfident**. Correct and incorrect outputs carry similarly high token probabilities, because the model has learned to be fluent in the target format even when it is wrong about the content. Raw logprobs alone are not a usable confidence signal.
+
+**Why not a separate verifier model:** another model to train, version, evaluate, and keep in sync with every Foundation/adapter version, plus doubled inference latency. It stays a documented escalation path **if** calibrated logprobs prove insufficient in evaluation (IMPL-08 ECE) — start with the cheap, well-understood approach.
+
+## Deliverables
+
+### 1. `calibration/logprob_confidence.py`
+- Consumes field spans + logprobs from IMPL-07 `span_map` and aggregates to a raw per-field confidence.
+- **Superseded as the confidence itself (arch v2.1 §5.1).** The minimum token probability is length-biased — the minimum of *n* draws falls as *n* grows, so a long correct policy number scores below a short wrong year. It is now **one feature among several** handed to a per-field-type calibrator; see *Current implementation* below.
+- Handles nested fields and list fields (per-value confidence within each row).
+- **`line_of_business` gets confidence like any other field** (arch §0b) and is emitted in the same `{value, confidence}` shape.
+- Costs nothing extra at training or inference time — the logprobs are already there.
+
+### 2. `calibration/fit_calibration.py`
+- On a **held-out labeled validation set — never training data** — compare raw confidence against actual field-level correctness (exact / normalized match via `common.normalize` from IMPL-08) and fit a transform:
+  - **`temperature` scaling** (default: simple, one parameter, works well here)
+  - **`isotonic` regression** (more flexible; handles non-monotonic miscalibration)
+- Fit **per doc_type**, optionally per field-type. Fit for a specific model version — calibration is not transferable across versions.
+- Persist to `calibration/calibration_store/{version}/{doc_type}.json` and push to Blob (IMPL-02). This is a small lookup/transform applied at serving time **after** the model call, before the JSON is returned.
+- Report the ECE before and after fitting, so a fit that fails to improve calibration is visible rather than assumed.
+
+### 3. `calibration/apply_calibration.py`
+- Load the fitted transform for a model version + doc_type; map raw → calibrated confidence at inference time. Used by serving (IMPL-11) and testing (IMPL-12).
+- **Fails loudly when no calibration exists for a version/doc_type** rather than silently passing raw (overconfident) values through as if calibrated. A missing calibration is an operational error, not a fallback.
+- Applies the review threshold (default 0.7, tuned — arch §5) and emits `review_flags` for sub-threshold fields, which is the practical payoff of doing calibration properly.
+
+### 4. `calibration/list_completeness.py`
+The second confidence signal that per-token logprobs structurally cannot provide (arch §5).
+
+**The failure mode:** if the model extracts 6 of 8 claims, the 2 missing claims have **no generated tokens**, so there is no low probability to flag. Per-field confidence on the 6 extracted rows can all be high while the extraction is silently incomplete. This is a recall failure, and token confidence is blind to it.
+
+Implement **two independent cross-checks**, either of which flags the list:
+1. **Document-stated count** — a `total claims: N` style field extracted from the document.
+2. **Structure-derived count** — the number of table rows MinerU detected on the relevant pages (recorded in `ocr_meta.json` by IMPL-03).
+
+When the model's row count disagrees with either, **flag the whole list for review regardless of per-value confidence**.
+
+**The flag format is a contract, so it is a constant.** Flags are `f"{field}{ROW_MISMATCH_SUFFIX}"` — `"claims:row_count_mismatch"` — and `is_row_completeness_flag()` is the only supported way to recognise one. Both are exported from this module and imported by `data_pipeline.labeling.active_learning`, which has to recognise them to honour the "row completeness outranks every confidence score" rule. The consumer previously matched hand-written prefixes (`list:`, `rows:`, `completeness:`) that this module has never emitted, so the override was dead code and an incomplete Loss Run with high per-value confidence was routed to a spot check.
+
+**A stated count is read however the model spelled it.** `8`, `8.0` and `"8"` are the same assertion; accepting only `int` turned the whole stated-count cross-check off whenever the model emitted a JSON string.
+
+**A flagged list is never fully confident.** `row_completeness_confidence` is scored against whichever signal disagrees *most*, not the first one available — preferring the stated count meant a list flagged solely by the structural check (document says 6, model returns 6, OCR saw 9) shipped confidence `1.0` on a list this function had just flagged. Optionally calibrate a separate `row_completeness_confidence` against ground-truth row counts on the validation set.
+
+This matters most for **Loss Runs**, where a missed claim row is both easy to make and expensive to miss.
+
+## Constraints
+- Calibration fit ONLY on held-out data — assert the validation `source_id`s are disjoint from training.
+- Params versioned per model version + doc_type; never reused across versions.
+- Correctness signal reuses IMPL-08 `common.normalize` — the same definition of "correct" as the promotion gate.
+- Raw confidence is never returned to callers as if it were calibrated.
+- No PII in logs (confidence records reference field paths, not field values).
+
+## Acceptance checklist
+- [ ] Raw per-field confidence extracted from a sample generation + logprobs (via IMPL-07 spans), including a `claims[i].amount` row field and `line_of_business`.
+- [ ] Aggregation strategy is configurable and the choice is recorded.
+- [ ] Temperature and isotonic both reduce ECE on a synthetic miscalibrated set; before/after ECE is reported.
+- [ ] Fitted params persist/reload and apply deterministically.
+- [ ] `apply_calibration` **raises** when no calibration exists for a version/doc_type.
+- [ ] `list_completeness` flags a list when extracted rows < the document-stated count, and separately when < the MinerU-detected row count.
+- [ ] A flagged list is routed to review even when every per-value confidence is high.
+- [ ] Calibrated confidence is available with **no ground truth** — the inference-time case that makes production review routing possible.
+- [ ] Fitting on data overlapping the training split fails the assertion.
+
+---
+
+## Current implementation (2026-09-27)
+
+This spec's §1–§3 describe v1's single-number calibration. What runs now (arch v2.1 §5):
+
+1. **Features per field** (`calibration/features.py::build_document_features`): min / mean / first-token
+   logprob, token count, **OCR agreement**, **rule checks**, null flag, cross-mode agreement, field type.
+   - *OCR agreement* compares the page text against the value **as printed** (a canonical envelope's
+     `raw`), not the normalised `parsed` — a date rewritten to `MM/DD/YYYY` is not on the page, so every
+     reformatted value scored 0.
+   - *Page text* has ONE definition for fitting and serving (`shown_ocr_text`): the OCR text of the pages
+     the model was shown, page markers and the blank-page placeholder removed, `None` for `image_only`.
+     Fitting used to join every user text block (markers only, for image-only rows) while serving passed
+     a joined `ocr_text` that is `None` for any multi-page request.
+   - *Rule checks* read siblings beside the field (`policy.effective_date` vs `policy.expiration_date`),
+     so they fire on canonical policies; *field type* recognises an address by any path segment
+     (`carrier.address.city`).
+   - Features are built on the **value view** of the extraction (envelopes collapsed), keyed like serving.
+2. **Per-field-type calibrators** (`calibration/feature_calibrator.py`): logistic regression per field type
+   over those features, fitted on the **calibration half** of validation.
+3. **Risk-controlled thresholds** (`calibration/thresholds.py`): per field type, chosen on the **threshold
+   half** to meet the error target; a type with no calibrator, or no threshold meeting the target, routes
+   to review rather than carrying an unmeasured number.
+4. **Per serving format**: each format gets its own calibrators from its own generations (quantization
+   moves the logprob distribution), stored at `releases/{tenant}/{release}/calibration/{format}/`.
+5. **Loss Run reconciliation** (`calibration/reconciliation.py`) per policy period, alongside row
+   completeness.
+
+The calibration samples come from `evaluation/validation_generation.py` on the merged model in each format,
+with the engine released between formats. A resumed `package` finds the calibrators in Blob.
+
+**Thresholds** load back for serving (`ThresholdSet.from_dict`). An explicit target table that leaves a
+field type out now means *no promise* — every field of that type is reviewed — instead of silently falling
+back to the default target.

@@ -1,6 +1,6 @@
 """Applying a fitted calibration at inference time (arch §5).
 
-Used by serving (SPEC_11) and the testing harness (SPEC_12). The important
+Used by serving (IMPL-11) and the testing harness (IMPL-12). The important
 property is what it does when calibration is **missing**: it raises.
 
 Silently returning raw confidence would hand the caller numbers that look

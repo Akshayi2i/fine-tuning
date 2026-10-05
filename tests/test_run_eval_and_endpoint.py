@@ -1,4 +1,4 @@
-"""SPEC_08 §3 and SPEC_11 §1 — the eval driver and the serving endpoint.
+"""IMPL-08 §3 and IMPL-11 §1 — the eval driver and the serving endpoint.
 
 The two assertions here guard failures that leave no trace anywhere else.
 

@@ -1,4 +1,4 @@
-"""SPEC_08 + SPEC_09 — metrics, the promotion gate, and confidence calibration.
+"""IMPL-08 + IMPL-09 — metrics, the promotion gate, and confidence calibration.
 
 Two guards here matter more than the rest: the gate must block on **any single**
 regression with no override, and calibration must **raise** rather than pass raw

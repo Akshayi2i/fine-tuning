@@ -1,4 +1,4 @@
-"""Production and interim releases (SPEC_09 §6; evaluation.gating.release_tier).
+"""Production and interim releases (Fideon SPEC_09 §6; evaluation.gating.release_tier).
 
 Every existing floor stays. A release that passes them is PRODUCTION at field
 match >= 0.92 and INTERIM below that; one under the 0.85 floor is blocked.

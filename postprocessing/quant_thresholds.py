@@ -1,4 +1,4 @@
-"""Acceptable degradation per serving format (arch v2.1 §13b, SPEC_10 §3).
+"""Acceptable degradation per serving format (arch v2.1 §13b, IMPL-10 §3).
 
 "Re-validate before promotion" needs numbers attached, or it degrades into a
 judgement call taken under release pressure. These are those numbers.

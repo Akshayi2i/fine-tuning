@@ -1,4 +1,4 @@
-"""SPEC_05 — splitting, modality expansion, corruption, and the corpus manifest.
+"""IMPL-05 — splitting, modality expansion, corruption, and the corpus manifest.
 
 The split-leakage test here is one of the four that guard silent failures: if
 expansion moved before the split, every eval number in the project would be
@@ -436,7 +436,7 @@ def test_manifest_records_every_pin_and_measurement():
     assert manifest["lob_coverage_target"] == 0.20
     assert "alias_coverage" in manifest
 
-    # De-identification is blocked — recorded honestly, not omitted (SPEC_05 §1).
+    # De-identification is blocked — recorded honestly, not omitted (IMPL-05 §1).
     assert manifest["deidentified"] is False
     assert manifest["image_redaction"] == "unresolved"
     assert isinstance(report.warnings, list)
@@ -484,7 +484,7 @@ def test_page_corruption_is_seeded_and_reproducible():
 
 
 def test_the_details_name_the_page_the_noise_landed_on():
-    """SPEC_08's ocr_arbitration_accuracy slices on these; a detail that does not
+    """IMPL-08's ocr_arbitration_accuracy slices on these; a detail that does not
     say where the change happened cannot be matched to a field."""
     from data_pipeline.dataset_builder.noisy_ocr_augment import corrupt_ocr_pages
 

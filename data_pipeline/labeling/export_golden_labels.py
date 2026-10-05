@@ -1,4 +1,4 @@
-"""Writing verified golden labels, with validation and provenance (SPEC_04).
+"""Writing verified golden labels, with validation and provenance (IMPL-04).
 
 A golden label is the training target. Everything the model learns about field
 semantics comes from these, so admission is gated: a label that validates against
@@ -219,7 +219,7 @@ def export_golden_label(
         "accepted_without_review": accepted_without_review,
         # The observed surface label per canonical field. Golden keys are always
         # canonical; this records what the document actually said, which is what
-        # lets SPEC_08 slice accuracy per surface variant (arch §0c).
+        # lets IMPL-08 slice accuracy per surface variant (arch §0c).
         "field_provenance": field_provenance or {},
     }
     client.write_json(paths.label_metadata(doc_type, source_id, tenant_id), metadata)
@@ -245,7 +245,7 @@ def list_labeled_source_ids(
     """Every source_id with a verified golden label.
 
     This is what ``finetune`` builds the corpus from — and the complement of it
-    is the unlabeled backlog the command reports (SPEC_13 §2).
+    is the unlabeled backlog the command reports (IMPL-13 §2).
     """
     prefix = f"golden-labels/{paths._tenant(tenant_id)}/{doc_type}/"
     return sorted(

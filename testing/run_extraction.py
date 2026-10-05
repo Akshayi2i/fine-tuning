@@ -1,4 +1,4 @@
-"""The extraction/testing harness (SPEC_12, arch §17).
+"""The extraction/testing harness (IMPL-12, arch §17).
 
 Runs any model version over real PDFs and produces JSON, per-field confidence,
 and quality metrics — organised by model version so results are never ambiguous
@@ -11,8 +11,8 @@ two extraction paths and make every number this harness produces a description o
 a system that is not the one in production.
 
 ``--model`` accepts ``base`` as a first-class value: the untuned model with no
-adapter. That is the same path used by the pilot's zero-shot baseline (SPEC_15)
-and day-zero pre-annotation (SPEC_04), so all three share one implementation.
+adapter. That is the same path used by the pilot's zero-shot baseline (IMPL-15)
+and day-zero pre-annotation (IMPL-04), so all three share one implementation.
 """
 
 from __future__ import annotations
@@ -42,7 +42,7 @@ class HarnessError(RuntimeError):
 class RunSummary:
     """Batch aggregates — the file compared across model versions.
 
-    This is the testing-time mirror of the SPEC_08 promotion gate: it answers
+    This is the testing-time mirror of the IMPL-08 promotion gate: it answers
     "did v3 beat v2?" using the same metrics the gate reads.
     """
 
@@ -89,7 +89,7 @@ def score_against_ground_truth(
     result: ExtractionResult, golden: dict[str, Any], *, lob: Any = None,
     acord_form: str | None = None,
 ) -> dict[str, Any]:
-    """Per-document metrics, using the SPEC_08 modules.
+    """Per-document metrics, using the IMPL-08 modules.
 
     The same metric code the promotion gate uses, so "correct" means the same
     thing here as it does there.

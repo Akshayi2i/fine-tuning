@@ -1,4 +1,4 @@
-"""SPEC_06 — masking, the ViT gate, early stopping, and training configuration.
+"""IMPL-06 — masking, the ViT gate, early stopping, and training configuration.
 
 The masking tests here are the highest-value in the suite. Broken masking trains
 the model to reproduce its own prompt, converges to a normal-looking loss curve,

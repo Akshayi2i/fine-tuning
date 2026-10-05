@@ -1,4 +1,4 @@
-"""Quantized-format validation against the fp16 reference (SPEC_10 §4).
+"""Quantized-format validation against the fp16 reference (IMPL-10 §4).
 
 Every quantized format **intended for serving** passes this before promotion.
 There is no override flag, for the same reason the promotion gate has none: an
@@ -6,7 +6,7 @@ override exists to be used on the afternoon someone is in a hurry, which is
 exactly the afternoon it should not be.
 
 The scoring itself is not reimplemented here. Each format runs through the
-SPEC_12 extraction routine against the frozen golden eval set — the same code
+IMPL-12 extraction routine against the frozen golden eval set — the same code
 path production uses — and this module compares the resulting metrics to fp16's.
 A second scoring implementation would mean the numbers this gate reads describe a
 system that is not the one being served.
@@ -109,7 +109,7 @@ class ValidationReport:
         return bool(self.results) and not self.blocked_formats
 
     def manifest_entry(self) -> dict[str, Any]:
-        """``quant_threshold_results`` for the RunManifest (SPEC_10 §4)."""
+        """``quant_threshold_results`` for the RunManifest (IMPL-10 §4)."""
         return {
             "reference_format": REFERENCE_FORMAT,
             "reference_metrics": self.reference_metrics,
@@ -250,7 +250,7 @@ def validate_quant(
     """Judge every produced format, and refuse the ones over threshold.
 
     Args:
-        metrics_by_format: format -> metrics from the SPEC_12 extraction routine
+        metrics_by_format: format -> metrics from the IMPL-12 extraction routine
             over the frozen golden eval set. Must include ``bf16``.
         serving_formats: the formats actually intended for serving. A format
             produced but not served still gets a result, because knowing which
@@ -288,7 +288,7 @@ def validate_quant(
 def assert_servable(report: ValidationReport, serving_formats: list[str]) -> None:
     """Refuse to promote a format that did not pass.
 
-    Called by ``package`` between quantize and push (SPEC_13 §4). No override
+    Called by ``package`` between quantize and push (IMPL-13 §4). No override
     flag, deliberately — every other guarantee in the pipeline becomes advisory
     the moment one exists.
     """
@@ -305,8 +305,8 @@ def assert_servable(report: ValidationReport, serving_formats: list[str]) -> Non
         raise QuantValidationError(
             f"{unmeasured} are intended for serving but were never measured — no metrics were "
             f"supplied for them, so `validate_quant` produced no verdict. A format nobody scored "
-            "has not passed; score it against the frozen golden eval set (SPEC_12) and re-run, or "
-            "drop it from --formats. There is no override (SPEC_10)."
+            "has not passed; score it against the frozen golden eval set (IMPL-12) and re-run, or "
+            "drop it from --formats. There is no override (IMPL-10)."
         )
 
     blocked = [f for f in wanted if f in report.blocked_formats]
@@ -314,5 +314,5 @@ def assert_servable(report: ValidationReport, serving_formats: list[str]) -> Non
         raise QuantValidationError(
             f"{blocked} did not pass quantization validation and will not be promoted:\n"
             + report.report()
-            + "\nServe a format that passed, or re-quantize — there is no override (SPEC_10)."
+            + "\nServe a format that passed, or re-quantize — there is no override (IMPL-10)."
         )

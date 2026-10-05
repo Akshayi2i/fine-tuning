@@ -43,7 +43,7 @@ SHARED_SEQUENCE_CONFIG = CONFIG_DIR / "shared" / "sequence.yaml"
 #: one coverage and served as another.
 SCOPES_CONFIG = CONFIG_DIR / "scopes.yaml"
 
-#: WHICH LOBs share a visual grammar (SPEC_09 §2.1). One table, two readers:
+#: WHICH LOBs share a visual grammar (Fideon SPEC_09 §2.1). One table, two readers:
 #: training uses it to decide which documents a family's adapter trains on, and
 #: the schema registry uses it to decide which canonical schemas to register.
 #: Two copies of this mapping would eventually disagree, and the symptom would be

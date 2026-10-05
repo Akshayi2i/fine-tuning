@@ -1,4 +1,4 @@
-"""The bounded 3-phase hyperparameter sweep (SPEC_06 §6, arch §11a).
+"""The bounded 3-phase hyperparameter sweep (IMPL-06 §6, arch §11a).
 
 Bounded is the whole design. An unbounded search over learning rate × epochs ×
 rank is 27 runs before it has told you anything; this is ~9–12, ordered so each
@@ -22,7 +22,7 @@ runs are first-class registry entries, not untracked side experiments: a config
 promoted to production has to be traceable to the run that justified it, and
 "we tried a few and this looked best" is not traceable.
 
-**When to run it.** After the SPEC_15 pilot passes, before the first production
+**When to run it.** After the IMPL-15 pilot passes, before the first production
 run. Sweeping against 25–30 documents per type measures noise: the test split is
 3–4 documents, and the accuracy difference between 1e-4 and 2e-4 is smaller than
 the variance from which documents landed in it. :func:`assert_enough_data` makes
@@ -161,7 +161,7 @@ def assert_enough_data(documents_per_type: dict[str, int]) -> None:
             f"refusing to sweep: {thin} document(s) per type, below the {MIN_DOCUMENTS_PER_TYPE} "
             "needed for a validation score to separate hyperparameters from split variance. At "
             "pilot volume the test split is 3-4 documents and the difference between 1e-4 and "
-            "2e-4 is smaller than the noise (arch §8, §11a). Run the SPEC_15 pilot first; the "
+            "2e-4 is smaller than the noise (arch §8, §11a). Run the IMPL-15 pilot first; the "
             "sweep belongs before the first *production* run, not before the pilot."
         )
 
@@ -230,7 +230,7 @@ def run_phase(
 
     ``train`` is injected — a stub in tests, the real launcher on a pod. The
     sweep's own logic (ordering, budgets, winner selection, manifests) is
-    therefore verifiable without a GPU, which is what the SPEC_06 acceptance
+    therefore verifiable without a GPU, which is what the IMPL-06 acceptance
     criterion asks for.
     """
     config = load_phase(phase, config_dir)
@@ -244,7 +244,7 @@ def run_phase(
         if trained.manifest is not None and not trained.manifest.is_sweep_run:
             raise SweepError(
                 f"{candidate.run_id} produced a manifest with is_sweep_run=False. Sweep runs are "
-                "first-class registry entries (SPEC_02); an untagged one would swamp default "
+                "first-class registry entries (IMPL-02); an untagged one would swamp default "
                 "listings and be indistinguishable from a production run."
             )
         result.results.append(trained)

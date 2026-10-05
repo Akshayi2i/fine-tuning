@@ -326,7 +326,7 @@ def evaluate_gate(
 
 
 def evaluate_from_report(report: dict[str, Any], **overrides: Any) -> GateDecision:
-    """Run the gate against an ``EvalReport.as_dict()`` payload (SPEC_08).
+    """Run the gate against an ``EvalReport.as_dict()`` payload (IMPL-08).
 
     The keys are read from the report's real shape. Reading invented ones
     (``eval_metrics`` / ``subset_counts`` / ``error_records``) returned None

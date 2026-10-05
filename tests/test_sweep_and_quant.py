@@ -1,4 +1,4 @@
-"""SPEC_06 §6 and SPEC_10 §3–4 — the sweep protocol and quantization thresholds.
+"""IMPL-06 §6 and IMPL-10 §3–4 — the sweep protocol and quantization thresholds.
 
 Both were deferred for a reason that still holds about *when* to run them. Both
 have acceptance criteria that need no GPU, which is what these cover: the sweep

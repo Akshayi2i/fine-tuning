@@ -1,7 +1,7 @@
 """Prompt rendering — the single renderer used by every stage.
 
-Corpus build (SPEC_05), evaluation (SPEC_08), serving (SPEC_11) and testing
-(SPEC_12) all render prompts through :func:`render_system_prompt`. There is
+Corpus build (IMPL-05), evaluation (IMPL-08), serving (IMPL-11) and testing
+(IMPL-12) all render prompts through :func:`render_system_prompt`. There is
 deliberately no second path.
 
 Why that matters: the system prompt is the conditioning input on every training

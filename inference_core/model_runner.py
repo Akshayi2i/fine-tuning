@@ -1,7 +1,7 @@
 """Loading a model version and generating from it — the shared primitive.
 
-Evaluation (SPEC_08), calibration (SPEC_09), serving (SPEC_11) and testing
-(SPEC_12) all run the model through here. Building it once, below all four, is
+Evaluation (IMPL-08), calibration (IMPL-09), serving (IMPL-11) and testing
+(IMPL-12) all run the model through here. Building it once, below all four, is
 what breaks the dependency cycle they would otherwise form, and what makes
 "test == prod" a property of the code rather than a discipline.
 
@@ -295,7 +295,7 @@ class VLLMBackend(ModelBackend):
             raise ModelRunnerError(
                 f"{self.resolved.get('tag')} resolves to no servable weights "
                 f"({dict(self.resolved)}). vLLM serves a merged model or the base; a bare adapter "
-                "stack has to be merged first (SPEC_10)."
+                "stack has to be merged first (IMPL-10)."
             )
 
         from common.config import pixel_budget
@@ -365,7 +365,7 @@ class VLLMBackend(ModelBackend):
             except ImportError:  # pragma: no cover - older vLLM
                 log.warning(
                     "this vLLM build exposes no GuidedDecodingParams, so schema validity is "
-                    "NOT guaranteed at decode time and the SPEC_07 audit gate is the only "
+                    "NOT guaranteed at decode time and the IMPL-07 audit gate is the only "
                     "thing catching an invalid extraction (arch v2.1 §13)."
                 )
         return SamplingParams(**{k: v for k, v in sampling.items() if v is not None})
@@ -529,7 +529,7 @@ class HFBackend(ModelBackend):
             raise ModelRunnerError(
                 f"this backend was loaded with adapter {self.resolved.get('type_adapter')!r} and "
                 f"was asked to generate with {adapter!r}. Transformers binds adapters at load "
-                "time; per-request hot-swap is the vLLM path (SPEC_11). Load a runner per adapter, "
+                "time; per-request hot-swap is the vLLM path (IMPL-11). Load a runner per adapter, "
                 "or serve through vLLM."
             )
 
@@ -644,8 +644,8 @@ class LoadedModel:
     def is_base(self) -> bool:
         """Whether this is the untuned base with no adapter.
 
-        The shared path for the pilot's zero-shot baseline (SPEC_15), day-zero
-        pre-annotation (SPEC_04), and ``extract --model base`` (SPEC_13).
+        The shared path for the pilot's zero-shot baseline (IMPL-15), day-zero
+        pre-annotation (IMPL-04), and ``extract --model base`` (IMPL-13).
         """
         return self.resolved.get("kind") == "base"
 

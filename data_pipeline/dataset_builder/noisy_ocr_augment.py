@@ -11,7 +11,7 @@ OCR it will actually receive, and would still be fooled by a plausible
 `0`-for-`O` substitution in production.
 
 Every corruption is seeded and recorded, so ``ocr_arbitration_accuracy``
-(SPEC_08) can score specifically on documents where the OCR and the image
+(IMPL-08) can score specifically on documents where the OCR and the image
 genuinely disagree, rather than on the whole corpus.
 """
 
@@ -61,7 +61,7 @@ def _corrupt_characters(text: str, rng: random.Random, rate: float = 0.02) -> tu
     # Spans, not bare strings. `str.replace(token, ..., 1)` rewrote the first
     # occurrence of that substring anywhere — including inside a longer token, so
     # corrupting "ABC12" could damage "ABC1234" instead and the recorded detail
-    # then named a change that happened somewhere else. SPEC_08's
+    # then named a change that happened somewhere else. IMPL-08's
     # ocr_arbitration_accuracy reads those details to decide which field
     # genuinely disagreed.
     spans = [(m.start(), m.end(), m.group()) for m in re.finditer(r"[A-Za-z0-9]{3,}", text)]

@@ -3,7 +3,7 @@
 > **Update 2026-09-27:** v2.1 now carries a *Revision v2.2 — Implementation Update* section (canonical LOB
 > output with `MM/DD/YYYY` dates, policy windows for 200+ page documents, the frozen golden eval set, the
 > per-line split, the pinned dependency stack, GPU-only model compute, tmux-detached pod jobs); the
-> module-level detail is in `Implementation MDs/SPEC_00_MASTER_CONTEXT.md` §13.
+> module-level detail is in `Implementation MDs/Fideon SPEC_00_MASTER_CONTEXT.md` §13.
 >
 > **This document is historical.** The current architecture is
 > **`finetuning-architecture-v2.1.docx`**, and the codebase implements that one.
@@ -53,7 +53,7 @@
 
 ## Insurance Document Extraction (ACORD, Policy, Loss Run)
 
-> **Revision — synced to the implementation spec set (SPEC_00 … SPEC_15).**
+> **Revision — synced to the implementation spec set (IMPL-00 … IMPL-15).**
 > This document and the specs in `Documentation/Implementation MDs/` are now in agreement. Changes carried in from implementation:
 >
 > | Change | Where |
@@ -70,26 +70,26 @@
 
 ## 0. Pipeline Integration and Schema Contract
 
-This architecture specifies the **L3 VLM layer** of the Fideon document extraction pipeline. L0 → L1 → L2 → L3 routing is defined in SPEC_01. This section states the contractual obligations between the VLM and the rest of the pipeline — everything downstream in this document assumes these contracts hold.
+This architecture specifies the **L3 VLM layer** of the Fideon document extraction pipeline. L0 → L1 → L2 → L3 routing is defined in Fideon SPEC_01. This section states the contractual obligations between the VLM and the rest of the pipeline — everything downstream in this document assumes these contracts hold.
 
-### 0a. Canonical Output Schema (SPEC_00)
+### 0a. Canonical Output Schema (Fideon SPEC_00)
 
-The training target JSON is **not an internal format** — it is the canonical schema defined in SPEC_00 (`fideon/schemas/`). The schema registry in §7 is the SPEC_00 Pydantic model serialised to JSON Schema. **Any SPEC_00 schema change requires a corpus rebuild and a new training cycle.** The golden label JSON for every training example is validated against the SPEC_00 JSON Schema before being admitted to the corpus.
+The training target JSON is **not an internal format** — it is the canonical schema defined in Fideon SPEC_00 (`fideon/schemas/`). The schema registry in §7 is the Fideon SPEC_00 Pydantic model serialised to JSON Schema. **Any Fideon SPEC_00 schema change requires a corpus rebuild and a new training cycle.** The golden label JSON for every training example is validated against the Fideon SPEC_00 JSON Schema before being admitted to the corpus.
 
-The target JSON for each document type maps directly to its SPEC_00 Pydantic model:
+The target JSON for each document type maps directly to its Fideon SPEC_00 Pydantic model:
 
-| Document type   | SPEC_00 Pydantic model |
+| Document type   | Fideon SPEC_00 Pydantic model |
 |-----------------|------------------------|
 | `loss_run`      | `LossRunDocument`      |
 | `policy_check`  | `PolicyCheckDocument`  |
 | `quote_gen`     | `QuoteGenDocument`     |
 | `acord_mapping` | `ACORDMappingDocument` |
 
-All field names, data types, nesting structure, and null representation must match SPEC_00 exactly. The audit gate (SPEC_07 Stage 3) validates every VLM output against the SPEC_00 schema on every inference call — so a schema drift between the corpus and SPEC_00 surfaces as a production validation failure, not as a silent quality regression.
+All field names, data types, nesting structure, and null representation must match Fideon SPEC_00 exactly. The audit gate (Fideon SPEC_07 Stage 3) validates every VLM output against the Fideon SPEC_00 schema on every inference call — so a schema drift between the corpus and Fideon SPEC_00 surfaces as a production validation failure, not as a silent quality regression.
 
-**Two vocabularies, one mapping table.** This document uses the SPEC_00 canonical model names above, while §7, §17, §18, and §19 use short `doc_type` tags. These are the same things. The implementation resolves them in exactly one place (`common/constants.py`):
+**Two vocabularies, one mapping table.** This document uses the Fideon SPEC_00 canonical model names above, while §7, §17, §18, and §19 use short `doc_type` tags. These are the same things. The implementation resolves them in exactly one place (`common/constants.py`):
 
-| `doc_type` (corpus, adapters, paths, CLI) | SPEC_00 canonical key | SPEC_00 model | Status |
+| `doc_type` (corpus, adapters, paths, CLI) | Fideon SPEC_00 canonical key | Fideon SPEC_00 model | Status |
 |---|---|---|---|
 | `lossrun` | `loss_run` | `LossRunDocument` | active |
 | `policy` | `policy_check` | `PolicyCheckDocument` | active |
@@ -102,7 +102,7 @@ All field names, data types, nesting structure, and null representation must mat
 
 L1 (carrier registry) and L2 (structural inference) both attempt LoB detection before the document reaches L3. When L3 is invoked — because L1/L2 missed, or because the document is scanned — **the VLM is expected to detect and output** `line_of_business` **as part of its extraction.**
 
-Valid values follow the LOB enum in SPEC_00: `workers_comp`, `general_liability`, `commercial_auto`, `property`, `umbrella`. The field is output as `null` when LoB cannot be determined from the document.
+Valid values follow the LOB enum in Fideon SPEC_00: `workers_comp`, `general_liability`, `commercial_auto`, `property`, `umbrella`. The field is output as `null` when LoB cannot be determined from the document.
 
     {
       "line_of_business": {"value": "workers_comp", "confidence": 0.92},
@@ -121,7 +121,7 @@ The same real-world field appears under many surface labels. The party purchasin
 2. **Inference output is canonical.** The extraction returns `insured_name` regardless of the document's phrasing.
 3. **The VLM performs the mapping.** This is core Foundation-LoRA behavior (§4) — recognising that *Applicant* here denotes the same field as *Named Insured* there.
 
-This is not really a design choice: the SPEC_00 contract and the §0a audit gate require canonical keys downstream. Every alternative needs a mapping layer somewhere, and the model is the only component that can handle phrasings nobody anticipated — and the only one that works in **image-only mode**, where there is no OCR text for a rule to read.
+This is not really a design choice: the Fideon SPEC_00 contract and the §0a audit gate require canonical keys downstream. Every alternative needs a mapping layer somewhere, and the model is the only component that can handle phrasings nobody anticipated — and the only one that works in **image-only mode**, where there is no OCR text for a rule to read.
 
 **Three mechanisms, all required:**
 
@@ -178,9 +178,9 @@ The table above records *decisions*; this one records the resulting **committed 
 | Quantization               | GGUF, user-selectable format (`fp16`, `bf16`, `q8_0`, `q6_k`, `q5_k_m`, `q4_k_m`)                                                                                                                                                                       |
 | Artifact storage           | Azure Blob Storage for all weights, corpora, and source documents                                                                                                                                                                                       |
 | Compute                    | RunPod — ephemeral training pods plus a persistent Serverless vLLM inference endpoint                                                                                                                                                                   |
-| Line of Business detection | VLM outputs `line_of_business` per the SPEC_00 LOB enum when L1/L2 fail to detect it. Values: `workers_comp`, `general_liability`, `commercial_auto`, `property`, `umbrella`; `null` when undetermined. Corpus coverage target ≥20% per LoB value (§0b) |
-| Schema contract            | Target JSON is the SPEC_00 canonical schema; audit gate SPEC_07 Stage 3 validates every inference call (§0a)                                                                                                                                            |
-| Tenant isolation           | Corpus partitioned by `tenant_id` per SPEC_12; Foundation trained only on Presidio de-identified data per SPEC_11 (§8b)                                                                                                                                 |
+| Line of Business detection | VLM outputs `line_of_business` per the Fideon SPEC_00 LOB enum when L1/L2 fail to detect it. Values: `workers_comp`, `general_liability`, `commercial_auto`, `property`, `umbrella`; `null` when undetermined. Corpus coverage target ≥20% per LoB value (§0b) |
+| Schema contract            | Target JSON is the Fideon SPEC_00 canonical schema; audit gate Fideon SPEC_07 Stage 3 validates every inference call (§0a)                                                                                                                                            |
+| Tenant isolation           | Corpus partitioned by `tenant_id` per Fideon SPEC_12; Foundation trained only on Presidio de-identified data per Fideon SPEC_11 (§8b)                                                                                                                                 |
 
 Active document types are ACORD, Policy, and Loss Run, each with a distinct target JSON schema. Two inference modes are supported by a single model: **OCR-plus-image**, which supplies MinerU OCR text alongside the page image, and **image-only**, which supplies the page image without OCR.
 
@@ -597,7 +597,7 @@ This matters because the model is fine-tuned partly on *how MinerU formats its o
 
 ### 8b. Multi-Tenant Corpus Isolation
 
-Raw documents contain insurance PII. Corpus partitioning follows the tenant isolation model defined in **SPEC_12 (Multi-Tenant Deployment)**:
+Raw documents contain insurance PII. Corpus partitioning follows the tenant isolation model defined in **Fideon SPEC_12 (Multi-Tenant Deployment)**:
 
 - Corpus paths are prefixed by broker `tenant_id`:
 
@@ -611,7 +611,7 @@ Raw documents contain insurance PII. Corpus partitioning follows the tenant isol
 
 > ### De-identification — BLOCKED, not skipped
 >
-> The original requirement here was that the shared Foundation LoRA train only on Presidio de-identified data (SPEC_11). **Do not implement it as specified.** It de-identifies **text** but says nothing about the **page images** the vision encoder reads, and that combination corrupts the training signal:
+> The original requirement here was that the shared Foundation LoRA train only on Presidio de-identified data (Fideon SPEC_11). **Do not implement it as specified.** It de-identifies **text** but says nothing about the **page images** the vision encoder reads, and that combination corrupts the training signal:
 >
 > | Regime | Share of Foundation corpus | What the model is taught |
 > |---|---|---|
@@ -637,7 +637,7 @@ This task is behavior/format adaptation (schema discipline, OCR-vs-image arbitra
 
 **The default is LoRA on a bf16 base.** `configs/base_model.yaml` sets `quantization.load_in_4bit: false`.
 
-1. **Train/serve alignment — the decisive reason.** *Both* serving paths hold the base in bf16/fp16: the merged model (§13 step 7, SPEC_10) and vLLM's LoRA hot-swap (§11, SPEC_11). An adapter trained against a 4-bit base learns a delta that partly compensates for quantization error in weights it is then **never served against**. Training in bf16 removes that gap: the adapter is applied to exactly the weights it saw. This compounds — every per-type adapter stacks on a Foundation that would otherwise carry it.
+1. **Train/serve alignment — the decisive reason.** *Both* serving paths hold the base in bf16/fp16: the merged model (§13 step 7, IMPL-10) and vLLM's LoRA hot-swap (§11, IMPL-11). An adapter trained against a 4-bit base learns a delta that partly compensates for quantization error in weights it is then **never served against**. Training in bf16 removes that gap: the adapter is applied to exactly the weights it saw. This compounds — every per-type adapter stacks on a Foundation that would otherwise carry it.
 2. **ZeRO-3 becomes a usable escape hatch.** Under LoRA, ZeRO-2 shards ~1.5 GB of adapter optimizer state and is close to a no-op; ZeRO-3 shards the ~16 GB base, which is where the saving actually is. Two GPUs put ~8 GB of base on each — better headroom than holding the whole base in 4-bit on one card. bitsandbytes 4-bit params do not partition cleanly under stage 3, which is precisely what made this escape hatch awkward under QLoRA.
 3. **Faster steps.** NF4 weights dequantize on every matmul; expect 20–40% slower steps under QLoRA. (The old §9 claim of "much faster iteration" was true against *full fine-tuning*, and backwards against LoRA.)
 4. **One fewer approximation in the optimizer.** At rank 64 only ~150–200M params train, so fp32 AdamW state costs ~1.4 GB against ~0.35 GB for 8-bit. Affordable — so the optimizer is `adamw_torch`, not `paged_adamw_8bit`.
@@ -1164,7 +1164,7 @@ Before committing to full corpus annotation, three sequential experiments de-ris
 
 ### 16a. Zero-Shot Baseline (Week 1 — no annotation cost)
 
-Run the **base** `Qwen3-VL-8B-Instruct`, untuned, against **10 de-identified real documents per document type**, using the §7 prompt template with the SPEC_00 schema injected. Compute field-level F1 manually against ground-truth annotations.
+Run the **base** `Qwen3-VL-8B-Instruct`, untuned, against **10 de-identified real documents per document type**, using the §7 prompt template with the Fideon SPEC_00 schema injected. Compute field-level F1 manually against ground-truth annotations.
 
 This tells you how much the base model extracts for free, and — more usefully — *where* it fails: schema adherence, list-row recall, LoB detection, or OCR arbitration. Outcome thresholds:
 
@@ -1538,13 +1538,13 @@ This is the **codebase** structure (git repo) — separate from the Azure Blob a
 - [ ] Split at source-document level before modality expansion (no leakage); ratio scaled to data volume (~70/18/12 pilot → 80/10/10 at scale)
 - [ ] **Every band's ratio triple sums to exactly 1.0**, asserted in code. The splitter assigns by hash threshold — train below `train`, val below `train + val`, test above — so a triple summing to 1.05 silently gives the test split 10% while the corpus manifest records 15%, and nothing else notices.
 - [ ] Golden JSON via bootstrap pre-annotation + human review; provenance stored per label; switch pre-annotation to own model once v1 exists
-- [ ] Target JSON is the SPEC_00 canonical schema; golden labels validated against it before corpus admission; schema change ⇒ corpus rebuild + new training cycle (§0a)
-- [ ] `line_of_business` output by the VLM per the SPEC_00 LOB enum, present in every golden JSON (null when undetermined), ≥20% corpus coverage per LoB value, gated as its own metric (§0b)
+- [ ] Target JSON is the Fideon SPEC_00 canonical schema; golden labels validated against it before corpus admission; schema change ⇒ corpus rebuild + new training cycle (§0a)
+- [ ] `line_of_business` output by the VLM per the Fideon SPEC_00 LOB enum, present in every golden JSON (null when undetermined), ≥20% corpus coverage per LoB value, gated as its own metric (§0b)
 - [ ] Day-zero bootstrap defined: base model classifies + pre-annotates with 100% human review until 25 labeled examples/type exist (§4c)
 - [ ] System prompt template versioned with the schema registry; training and inference prompts identical (§7)
 - [ ] MinerU version pinned per corpus version; upgrade ⇒ reprocess + corpus increment; version mismatch treated as a regression trigger (§8a)
 - [ ] **OCR runs on GPU only — no CPU path, no fallback.** MinerU's CPU path uses lighter model variants and emits different markdown from the same PDF, so a corpus spanning both devices is built from two distributions. With no GPU visible the stage fails rather than falling back, because a fallback would finish the job and report success while writing the wrong distribution.
-- [ ] Tenancy per SPEC_12: `tenant_id` path prefix reserved, **no cross-tenant mixing in a corpus file** (the live rule); single-tenant build, per-tenant adapter lineages not built (§8b)
+- [ ] Tenancy per Fideon SPEC_12: `tenant_id` path prefix reserved, **no cross-tenant mixing in a corpus file** (the live rule); single-tenant build, per-tenant adapter lineages not built (§8b)
 - [ ] **De-identification BLOCKED** — text-only Presidio corrupts the training signal; resolve image redaction or de-identify nothing before implementing (§8b)
 - [ ] LoRA target modules specified and justified per module (§9a); ViT escalation uses LoRA, never full fine-tuning (§3)
 - [ ] Hyperparameter sweep specified as a bounded 3-phase protocol (LR → epochs → rank), ~9-12 runs, each producing a run manifest — **execution deferred until after the pilot** (§11a)
@@ -1625,7 +1625,7 @@ Plain-language definitions for every named technology in this document. Each ent
 |-------------------------------------|----------------------------------------------------------------------------------------------------------------|-------------------------------------------------------------------------------------------------------------------|
 | **JSONL**                           | JSON Lines — a text file with one complete JSON object per line.                                               | The standard training-data format; lets the trainer stream examples without loading the whole corpus into memory. |
 | **JSON Schema**                     | A formal, machine-checkable description of a JSON document’s required fields, types, and structure.            | Every model output is validated against it — the structural half of the quality gate (§0a).                       |
-| **Pydantic**                        | A Python library that defines data models as classes and validates data against them; it can emit JSON Schema. | SPEC_00 is written as Pydantic models, and the schema registry is those models serialised (§0a).                  |
+| **Pydantic**                        | A Python library that defines data models as classes and validates data against them; it can emit JSON Schema. | Fideon SPEC_00 is written as Pydantic models, and the schema registry is those models serialised (§0a).                  |
 | **Golden labels / golden eval set** | Human-verified correct outputs. The eval set is frozen so scores stay comparable across model versions.        | The ground truth for training targets and the promotion gate (§15).                                               |
 | **Silver / pre-annotation**         | Machine-generated draft labels, corrected by a human before use.                                               | Faster and more consistent than labeling from blank, and the reason labeling cost falls each cycle (§7).          |
 | **Inter-annotator agreement**       | How often two independent human labelers agree on the same document.                                           | Sets a realistic ceiling on model scores — some of the residual error is human disagreement, not model failure.   |
@@ -1633,7 +1633,7 @@ Plain-language definitions for every named technology in this document. Each ent
 | **Azure Blob Storage**              | Microsoft’s object store for large files.                                                                      | Holds every artifact: raw PDFs, corpora, adapters, merged and quantized models, registries, eval reports.         |
 | **RunPod**                          | A GPU rental provider offering both ephemeral pods and serverless endpoints.                                   | Ephemeral pods for training (pay only while training), a persistent serverless endpoint for inference (§14).      |
 | **MLflow / Weights & Biases**       | Experiment-tracking platforms that log every run’s config, metrics, and artifacts with a queryable UI.         | Backs the training run registry, alongside the durable manifest in Blob (§12).                                    |
-| **Presidio**                        | Microsoft’s open-source PII detection and de-identification toolkit.                                           | Removes PII before data enters Foundation training, per SPEC_11 (§8b).                                            |
+| **Presidio**                        | Microsoft’s open-source PII detection and de-identification toolkit.                                           | Removes PII before data enters Foundation training, per Fideon SPEC_11 (§8b).                                            |
 | **PII**                             | Personally Identifiable Information — names, SSNs/TINs, addresses, financial details.                          | Present throughout insurance documents; drives the access-control, tenancy, and pre-annotation rules (§8b, §18a). |
 | **Label Studio / Argilla**          | Open-source annotation tools with side-by-side document and label review.                                      | Candidate UIs for the human review step in golden-label creation (§7).                                            |
 | **Idempotent**                      | An operation that produces the same result whether run once or many times.                                     | Why a failed pipeline stage can simply be re-run without corrupting state (§13).                                  |

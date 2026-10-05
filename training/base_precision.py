@@ -2,7 +2,7 @@
 
 **The default is plain LoRA on a bf16 base, not QLoRA** (arch §9). The reason is
 train/serve alignment: *both* serving paths hold the base in bf16/fp16 — the
-merged model (SPEC_10) and vLLM's LoRA hot-swap (SPEC_11). An adapter trained
+merged model (IMPL-10) and vLLM's LoRA hot-swap (IMPL-11). An adapter trained
 against a 4-bit base learns a delta that partly compensates for quantization
 error in weights it is then never served against. Training in bf16 removes that
 gap entirely: you train on exactly the weights you serve.

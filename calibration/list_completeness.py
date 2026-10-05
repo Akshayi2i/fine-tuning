@@ -256,7 +256,7 @@ def check_document(
     for name, value in list_fields.items():
         signals[name] = check_completeness(
             name, len(value),
-            # The stated count names one list (SPEC_09 stated_count_field), so it
+            # The stated count names one list (IMPL-09 stated_count_field), so it
             # applies only to that one.
             # `_as_count`, not isinstance(int): the model emits JSON, and a
             # stated count arriving as the string "8" silently disabled the

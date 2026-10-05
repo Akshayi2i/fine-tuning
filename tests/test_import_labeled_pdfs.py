@@ -1,4 +1,4 @@
-"""Importing PDFs that already carry their golden label (SPEC_03 §1, SPEC_04).
+"""Importing PDFs that already carry their golden label (IMPL-03 §1, IMPL-04).
 
 The delivery shape in use: one directory per document holding the source PDF and
 its canonical JSON. MinerU is **not** run here — it runs on the GPU pod as

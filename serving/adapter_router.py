@@ -54,7 +54,7 @@ class Route:
     classification: Classification | None = None
 
     #: The §4a low-confidence path: extract for BOTH candidate types, validate
-    #: each against its own SPEC_00 schema, and send both plus the classification
+    #: each against its own Fideon SPEC_00 schema, and send both plus the classification
     #: scores to human routing review. Empty on the normal path.
     #:
     #: v1 fell back to one guessed schema with a flag. That is worse than it

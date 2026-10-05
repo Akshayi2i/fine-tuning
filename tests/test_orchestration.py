@@ -1,4 +1,4 @@
-"""SPEC_13 + SPEC_14 — the command surface, the DAG, and the pod contract.
+"""IMPL-13 + IMPL-14 — the command surface, the DAG, and the pod contract.
 
 Four things here guard failures nothing else would notice:
 
@@ -162,7 +162,7 @@ def test_all_is_finetune_then_package():
 
 def test_all_never_includes_extraction():
     """Producing a model and using one are different concerns. Folding extraction
-    into the build would make every build wait on a test run (SPEC_13 §1)."""
+    into the build would make every build wait on a test run (IMPL-13 §1)."""
     names = [s.name for s in stages_for("all")]
     assert "feedback_loop" not in names
     assert not any(s.command == "extract" for s in stages_for("all"))
@@ -285,7 +285,7 @@ def test_the_dataset_build_assigns_families_before_splitting(client, controller)
 
 def test_finetune_writes_a_blob_manifest_while_weights_stay_staged(client, controller):
     """The volume is working storage with no durability guarantee. Without this
-    rule a reclaimed volume means a training run that left no trace (SPEC_13 §3)."""
+    rule a reclaimed volume means a training run that left no trace (IMPL-13 §3)."""
     seed_corpus(client)
     ctx = make_context(client, controller)
     run_stages(ctx, stages_for("finetune"), command="finetune")
@@ -301,7 +301,7 @@ def test_finetune_writes_a_blob_manifest_while_weights_stay_staged(client, contr
 
 def test_finetune_reports_the_unlabeled_backlog(client, controller):
     """You ingest 500, 200 are labeled, you train on 200 — and the command says
-    300 are waiting for a reviewer (SPEC_13 §2)."""
+    300 are waiting for a reviewer (IMPL-13 §2)."""
     seed_corpus(client)
     client.write_json(paths.ocr_meta("policy", "policy_0099"),
                       {"source_id": "policy_0099", "page_count": 1})
@@ -714,7 +714,7 @@ def test_package_fails_loudly_with_remediation_when_nothing_is_staged(client, co
 
 def test_push_adapters_leaves_only_the_merged_model_staged(client, controller):
     """Recommended when commands 1 and 2 may be separated by more than a day —
-    the adapters are tens of MB, the merged model is ~16 GB (SPEC_13 §3)."""
+    the adapters are tens of MB, the merged model is ~16 GB (IMPL-13 §3)."""
     seed_corpus(client)
     ctx = make_context(client, controller, push_adapters=True)
     run_stages(ctx, stages_for("finetune"), command="finetune")
@@ -871,7 +871,7 @@ def test_all_accepts_the_union_of_both_flag_sets():
 
 def test_extract_takes_base_as_a_first_class_model():
     """`base` is the pilot's zero-shot baseline and the day-zero pre-annotation
-    path, not a curiosity (SPEC_13 §5)."""
+    path, not a curiosity (IMPL-13 §5)."""
     args = cli.build_parser().parse_args(["extract", "--model", "base", "--source-ids", "policy_0001"])
     assert args.model == "base" and args.command == "extract"
 

@@ -65,7 +65,7 @@ def test_every_gating_metric_is_one_the_scorer_actually_produces():
     report = build_report("v1", _scored_documents(), corpus_version="v1", classifier_scored=True)
     emitted = set(report.gate_metrics())
 
-    # The classifier is scored by SPEC_11, which eval does not run.
+    # The classifier is scored by IMPL-11, which eval does not run.
     # Conditional metrics only exist when the eval set holds the relevant
     # documents — a Loss Run for reconciliation, a routed Policy for page
     # selection. Their absence is "not applicable", not "not measured", and the

@@ -273,7 +273,7 @@ def build_manifest(
         "confusable_example_count": confusable_total,
         "edge_case_counts": edge_case_counts or {},
 
-        # ---- de-identification: BLOCKED (SPEC_05 §1) ----
+        # ---- de-identification: BLOCKED (IMPL-05 §1) ----
         # Recorded honestly rather than omitted. Text-only de-identification
         # would corrupt the training signal, so nothing has been de-identified
         # and the limitation travels with the corpus.

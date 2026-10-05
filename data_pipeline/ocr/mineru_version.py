@@ -133,7 +133,7 @@ def resolve_device(requested: Device | None = None, *, strict: bool = True) -> D
             "CPU fallback would finish the job and write markdown from a different distribution "
             "than the corpus was built on, with no error anywhere and no way to detect it later. "
             "Run this stage on a GPU pod — an L4/A10/L40S is sufficient, MinerU does not need the "
-            "A100 (SPEC_13 §7)."
+            "A100 (IMPL-13 §7)."
         )
     log.debug("MinerU on %s", name)
     return "cuda"
@@ -158,8 +158,8 @@ def assert_version_matches(
 ) -> None:
     """Assert the running OCR environment matches what a corpus pinned.
 
-    Called by the dataset builder (SPEC_05), the serving pipeline (SPEC_11) and
-    the testing harness (SPEC_12). A mismatch is a **regression trigger**, not a
+    Called by the dataset builder (IMPL-05), the serving pipeline (IMPL-11) and
+    the testing harness (IMPL-12). A mismatch is a **regression trigger**, not a
     warning to be dismissed — the remediation is stated in the message rather
     than left for the reader to work out.
 

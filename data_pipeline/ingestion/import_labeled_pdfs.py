@@ -1,4 +1,4 @@
-"""Import PDFs that already have golden labels (SPEC_03 §1, SPEC_04, arch §8a).
+"""Import PDFs that already have golden labels (IMPL-03 §1, IMPL-04, arch §8a).
 
 The delivery shape this exists for: a directory per document holding the source
 **PDF**, its canonical **golden JSON**, and optional metadata. Both halves of a

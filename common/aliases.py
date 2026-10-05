@@ -11,10 +11,10 @@
 
 The registry has exactly three legitimate consumers:
 
-* **SPEC_04** — annotator guidance, and rejecting a label whose ``field_provenance``
+* **IMPL-04** — annotator guidance, and rejecting a label whose ``field_provenance``
   names a registered confusable.
-* **SPEC_05** — ``alias_coverage`` counting in the corpus manifest.
-* **SPEC_08** — per-alias evaluation slicing and confusable misattribution.
+* **IMPL-05** — ``alias_coverage`` counting in the corpus manifest.
+* **IMPL-08** — per-alias evaluation slicing and confusable misattribution.
 
 It is **never rendered into the prompt**. Alias lists give the model a lexical
 prior that makes confusable errors worse — tell it ``insured_name`` may appear as
@@ -61,7 +61,7 @@ def load_registry(doc_type: str) -> dict[str, FieldAliases]:
     """Load and validate one document type's registry.
 
     An empty registry is legitimate — it means nothing has been derived yet
-    (SPEC_04 ``derive_aliases`` builds it from labeled documents). A *missing*
+    (IMPL-04 ``derive_aliases`` builds it from labeled documents). A *missing*
     file is also legitimate for the same reason, so it returns empty rather than
     raising: the registry is diagnostics infrastructure, and its absence must not
     block a corpus build.
@@ -122,7 +122,7 @@ def canonical_for(doc_type: str, surface_label: str) -> str | None:
 def is_confusable(doc_type: str, field: str, surface_label: str) -> bool:
     """Whether a label is a registered confusable for a field.
 
-    SPEC_04 uses this to reject a golden label claiming ``insured_name`` was
+    IMPL-04 uses this to reject a golden label claiming ``insured_name`` was
     found under "Certificate Holder" — the highest-value annotation check there
     is, because that mistake teaches the model to conflate distinct parties.
     """

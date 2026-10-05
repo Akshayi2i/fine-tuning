@@ -1,4 +1,4 @@
-"""Confidence-routed review queue (SPEC_04 §6, arch §7 step 6, §13 stage 11).
+"""Confidence-routed review queue (IMPL-04 §6, arch §7 step 6, §13 stage 11).
 
 Once a model version exists, calibrated confidence decides how much human
 attention a document gets: high-confidence extractions get a light spot-check,
@@ -14,7 +14,7 @@ carries the specific fields.
 **Row-completeness overrides confidence entirely.** A Loss Run whose row count
 disagrees with the document goes to full review even when every extracted value
 scored 0.99 — because the missing rows have no confidence score at all. Their
-absence is invisible to a logprob, which is exactly why SPEC_09 computes a
+absence is invisible to a logprob, which is exactly why IMPL-09 computes a
 separate signal for it.
 
 **Disabled while the review requirement is "full".** Before 25 labels per type

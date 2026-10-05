@@ -1,4 +1,4 @@
-"""SPEC_03 — ingestion, MinerU version/device pinning, and OCR output.
+"""IMPL-03 — ingestion, MinerU version/device pinning, and OCR output.
 
 Runs against :class:`InMemoryBackend` and a stub OCR engine, so no Azure, no
 MinerU install, and no CUDA are needed. The stub implements the same

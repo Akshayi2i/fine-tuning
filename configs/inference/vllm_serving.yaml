@@ -1,4 +1,4 @@
-# Serving and inference config (SPEC_07, SPEC_11).
+# Serving and inference config (IMPL-07, IMPL-11).
 # Read by the inference core, the serving endpoint, and the testing harness -
 # so all three generate identically. That is what makes test == prod true.
 
@@ -42,7 +42,7 @@ generation:
   # refuses the combination rather than trusting this comment.
   logprobs_mode: "raw_logprobs"
 
-  # Structured decoding against the SPEC_00 target schema (arch v2.1 13).
+  # Structured decoding against the Fideon SPEC_00 target schema (arch v2.1 13).
   # Guarantees structural validity and stops an enum field - doc type, ACORD
   # form, line of business - taking a value outside its enum, because those
   # tokens are masked at decode time rather than rejected afterwards.

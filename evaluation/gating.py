@@ -530,7 +530,7 @@ def promotion_gate(
     return result
 
 
-#: SPEC_09 §6: a release is PRODUCTION only when its field match reaches this.
+#: Fideon SPEC_09 §6: a release is PRODUCTION only when its field match reaches this.
 #: One that clears every floor (0.85 and the rest) but not this is promoted as
 #: INTERIM - usable, and labelled as not yet at the production bar.
 PRODUCTION_FIELD_MATCH = 0.92
@@ -644,7 +644,7 @@ def _require_cross_type_evidence(
 
 
 def apply_to_manifest(result: GateResult, manifest: Any, *, gated_against: str | None = None) -> Any:
-    """Record the gate decision on the candidate's run manifest (SPEC_02).
+    """Record the gate decision on the candidate's run manifest (IMPL-02).
 
     The decision travels with the artifact, so "was this promoted, and against
     what" is answerable later without reconstructing it.

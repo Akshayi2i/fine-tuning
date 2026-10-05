@@ -1,4 +1,4 @@
-"""SPEC_04 §4 — the review interface.
+"""IMPL-04 §4 — the review interface.
 
 The load-bearing property is consistency between reviewers. Deciding which
 canonical field a value belongs to *is* the decision the model has to learn, so

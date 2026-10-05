@@ -1,7 +1,7 @@
-"""Generate ``testing/prompts/*.prompt.txt`` from ``common.prompts`` (SPEC_12 §2).
+"""Generate ``testing/prompts/*.prompt.txt`` from ``common.prompts`` (IMPL-12 §2).
 
 One file per active doc type, carrying the role framing, the injected JSON schema
-pulled from the SPEC_01 registry, the extraction rules, and the modality-mode
+pulled from the IMPL-01 registry, the extraction rules, and the modality-mode
 line. Separate files because each type has a different schema and different field
 semantics — a Loss Run's valuation date is not an ACORD's policy effective date —
 so one type's prompt can be tuned without risk to the others.

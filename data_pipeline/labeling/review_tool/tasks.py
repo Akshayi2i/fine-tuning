@@ -1,4 +1,4 @@
-"""Task export and annotation import (SPEC_04 §4).
+"""Task export and annotation import (IMPL-04 §4).
 
 The round trip: a document becomes a review task, a reviewer corrects it, and the
 completed annotation becomes a golden label plus its ``field_provenance``.

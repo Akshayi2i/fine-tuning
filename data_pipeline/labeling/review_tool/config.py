@@ -1,4 +1,4 @@
-"""Labeling configuration, generated from the schema (SPEC_04 §4).
+"""Labeling configuration, generated from the schema (IMPL-04 §4).
 
 **Derived, never hand-written.** A hand-maintained reviewer form drifts from the
 schema the moment a field is added, and the drift is silent in the worst
@@ -110,7 +110,7 @@ def review_fields_for(doc_type: str, acord_form: str | None = None) -> list[Revi
             # define three ways — and the model has no definition for it either.
             log.warning(
                 "field %r in %s has no description, so the reviewer form shows no definition for "
-                "it and the prompt carries none either (SPEC_01 requires one on every field).",
+                "it and the prompt carries none either (IMPL-01 requires one on every field).",
                 name, doc_type,
             )
 

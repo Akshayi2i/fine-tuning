@@ -1,4 +1,4 @@
-"""The pilot validation protocol (SPEC_15, arch §16).
+"""The pilot validation protocol (IMPL-15, arch §16).
 
 Three experiments in strictly increasing order of investment, each answering a
 different question and each cheap relative to the next:

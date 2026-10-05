@@ -1,4 +1,4 @@
-"""Loader for ``orchestration/config/pipeline.yaml`` (SPEC_13 §9).
+"""Loader for ``orchestration/config/pipeline.yaml`` (IMPL-13 §9).
 
 A config file nothing reads is worse than no config file: it documents a policy
 the system does not follow. Everything in ``pipeline.yaml`` is loaded here and

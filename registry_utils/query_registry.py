@@ -179,7 +179,7 @@ def resolve_model_version(
     """Resolve an operator tag to concrete artifact paths.
 
     ``base`` is a first-class tag, not a curiosity: it is the zero-shot baseline
-    of the pilot protocol (SPEC_15), the day-zero pre-annotation path (SPEC_04),
+    of the pilot protocol (IMPL-15), the day-zero pre-annotation path (IMPL-04),
     and ``extract --model base``. Supporting it here means those three share one
     implementation rather than drifting apart.
 

@@ -1,4 +1,4 @@
-"""SPEC_04 — golden-label admission, the day-zero rule, and alias derivation."""
+"""IMPL-04 — golden-label admission, the day-zero rule, and alias derivation."""
 
 from __future__ import annotations
 
@@ -272,7 +272,7 @@ def test_agreement_uses_normalized_comparison():
 
 
 # --------------------------------------------------------------------------
-# Alias derivation (SPEC_04 §3) — the headline capability
+# Alias derivation (IMPL-04 §3) — the headline capability
 # --------------------------------------------------------------------------
 
 def test_one_canonical_field_derives_its_several_surface_labels():

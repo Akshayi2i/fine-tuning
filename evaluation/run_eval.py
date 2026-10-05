@@ -1,6 +1,6 @@
-"""The evaluation driver (SPEC_08 §3, arch §8, §15).
+"""The evaluation driver (IMPL-08 §3, arch §8, §15).
 
-Runs a model version over the **frozen golden eval set** through the SPEC_07
+Runs a model version over the **frozen golden eval set** through the IMPL-07
 inference core, computes every metric, and writes
 ``eval-reports/v{n}/{doc_type}/report.json`` plus a top-level summary — broken
 down per doc type *and* per modality mode.
@@ -18,7 +18,7 @@ and every number in the registry becomes a measurement of memorisation, with no
 symptom anywhere — the loss curve looks fine and the gate passes.
 
 Per-document **error records** are kept, not just aggregates, because
-``vit_gate`` (SPEC_06) needs the perception-vs-reasoning split and failure-mode
+``vit_gate`` (IMPL-06) needs the perception-vs-reasoning split and failure-mode
 analysis needs real material.
 """
 
@@ -38,7 +38,7 @@ from common.constants import ACTIVE_DOC_TYPES
 
 log = logging.getLogger(__name__)
 
-#: Eval subsets scored separately from the full set (SPEC_08 §3).
+#: Eval subsets scored separately from the full set (IMPL-08 §3).
 EVAL_SUBSETS: tuple[str, ...] = ("image_only", "scanned", "noisy_ocr", "long_policy")
 
 
@@ -158,7 +158,7 @@ class EvalReport:
     corpus_version: str = ""
     subsets: list[SubsetReport] = field(default_factory=list)
     generated_at: str = field(default_factory=lambda: datetime.now(UTC).isoformat())
-    #: Filled in on a later pass: classifier accuracy needs the SPEC_11
+    #: Filled in on a later pass: classifier accuracy needs the IMPL-11
     #: classifier, and eval must stay runnable before serving is built.
     classifier_scored: bool = False
 
@@ -621,7 +621,7 @@ def render(report: EvalReport) -> str:
             + (f"field={accuracy:.3f}" if isinstance(accuracy, float) else "field=n/a")
         )
     if not report.classifier_scored:
-        lines.append("  doc_type_classifier_accuracy: not scored this pass (SPEC_11 classifier)")
+        lines.append("  doc_type_classifier_accuracy: not scored this pass (IMPL-11 classifier)")
     return "\n".join(lines)
 
 
@@ -647,7 +647,7 @@ def main(argv: Iterable[str] | None = None) -> int:  # pragma: no cover - thin C
     # below meaningless, so it is not worth computing them first.
     assert_eval_set_disjoint(client, args.corpus_version, args.tenant)
 
-    # Through serving.pipeline, never a bespoke inference path (SPEC_08): the
+    # Through serving.pipeline, never a bespoke inference path (IMPL-08): the
     # report measures what production serves.
     from common.scopes import default_scope, get_scope
     from evaluation.golden_eval import dumps, evaluate_version

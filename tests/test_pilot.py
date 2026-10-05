@@ -1,4 +1,4 @@
-"""SPEC_15 — the pilot validation protocol.
+"""IMPL-15 — the pilot validation protocol.
 
 The decision logic is what these tests cover, because it is the part that runs
 without a GPU and the part that costs money when it is wrong: a baseline band
@@ -466,7 +466,7 @@ def test_a_pilot_run_without_a_manifest_is_refused():
 
 
 def test_the_pilot_package_is_not_imported_by_the_product():
-    """SPEC_15 is executed, not imported — nothing else may depend on it."""
+    """IMPL-15 is executed, not imported — nothing else may depend on it."""
     import ast
     from pathlib import Path
 
@@ -486,7 +486,7 @@ def test_the_pilot_package_is_not_imported_by_the_product():
                     else []
                 )
                 assert not any(n == "pilot" or n.startswith("pilot.") for n in names), (
-                    f"{path.relative_to(root)} imports the pilot package — SPEC_15 is a runbook "
+                    f"{path.relative_to(root)} imports the pilot package — IMPL-15 is a runbook "
                     "that calls the libraries, never a library the product depends on"
                 )
 

@@ -48,7 +48,7 @@ class PageOutput:
     page_number: int          # 1-based; ordering is positionally meaningful
     markdown: str
     image_bytes: bytes
-    table_row_count: int = 0  # feeds the row-completeness signal (SPEC_09)
+    table_row_count: int = 0  # feeds the row-completeness signal (IMPL-09)
     ocr_failed: bool = False
     #: The page has no text layer (a scan). A document with any such page is
     #: OCR'd whole and recorded as ``is_scanned``.
@@ -215,7 +215,7 @@ def pages_from_content_list(blocks: Iterable[dict[str, Any]], page_count: int) -
 def count_table_rows(markdown: str) -> int:
     """Count table body rows — markdown pipe tables and MinerU's HTML tables.
 
-    Consumed by the list-completeness cross-check (SPEC_09): if the model extracts
+    Consumed by the list-completeness cross-check (IMPL-09): if the model extracts
     six claims from a page MinerU saw eight rows on, that is a recall failure the
     per-field confidence cannot see, because the missing rows generate no tokens.
 

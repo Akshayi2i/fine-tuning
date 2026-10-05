@@ -1,7 +1,7 @@
 """Map generated JSON fields back to the tokens that produced them (arch §5).
 
 Confidence starts here. The model returns text plus a logprob per token; this
-module says *which tokens produced which field*, so calibration (SPEC_09) can
+module says *which tokens produced which field*, so calibration (IMPL-09) can
 turn that into a per-field confidence. It contains no calibration logic itself —
 it is pure, deterministic, and testable without a GPU.
 
@@ -16,7 +16,7 @@ callers are expected to check it.
 **List rows are addressed individually** — ``claims[0].amount``, not ``claims``.
 Per-value confidence within a row is meaningful; an aggregate over a whole table
 is not. (Row *completeness* is a separate signal, because a missing row produces
-no tokens at all — see SPEC_09.)
+no tokens at all — see IMPL-09.)
 """
 
 from __future__ import annotations
@@ -57,7 +57,7 @@ class FieldSpan:
 # The stdlib parser discards positions, so a small scanner records where each
 # leaf value sits. The model is prompted to emit strict JSON with no fences, so
 # this only needs to handle well-formed input — anything else is a schema-validity
-# failure that SPEC_08 catches separately.
+# failure that IMPL-08 catches separately.
 
 _WS = " \t\n\r"
 
@@ -292,7 +292,7 @@ def unmapped_fields(spans: dict[str, FieldSpan]) -> list[tuple[str, str]]:
 def list_field_paths(spans: dict[str, FieldSpan]) -> dict[str, list[str]]:
     """Group list-row paths by their array, e.g. ``claims`` -> row field paths.
 
-    Used by the row-completeness signal (SPEC_09), which needs to know how many
+    Used by the row-completeness signal (IMPL-09), which needs to know how many
     rows were generated — the count logprobs cannot reveal, because a *missing*
     row emits no tokens at all.
     """

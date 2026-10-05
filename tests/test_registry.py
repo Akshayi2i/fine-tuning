@@ -1,4 +1,4 @@
-"""SPEC_02 — Blob layout, access rules, and the run registry.
+"""IMPL-02 — Blob layout, access rules, and the run registry.
 
 Runs entirely against :class:`InMemoryBackend`: no Azure account, no network, no
 GPU. The in-memory backend enforces the same write-once and container-isolation
@@ -237,7 +237,7 @@ def test_adapters_depending_on_returns_the_revalidation_work_list(client):
 
 def test_resolve_base_returns_the_pinned_model_with_no_adapter(client):
     """`base` is the shared path for the pilot baseline, day-zero pre-annotation,
-    and `extract --model base` (SPEC_13)."""
+    and `extract --model base` (IMPL-13)."""
     resolved = Q.resolve_model_version("base", client)
     assert resolved["kind"] == "base"
     assert resolved["foundation_adapter"] is None

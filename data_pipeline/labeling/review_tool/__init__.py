@@ -1,4 +1,4 @@
-"""The human review interface (SPEC_04 §4).
+"""The human review interface (IMPL-04 §4).
 
 Generates the labeling configuration for an external tool (Label Studio's XML
 config is the reference target; Argilla consumes the same field list), and

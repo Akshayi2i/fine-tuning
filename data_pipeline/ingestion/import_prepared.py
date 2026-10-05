@@ -1,4 +1,4 @@
-"""Import documents that arrive already prepared (SPEC_03, SPEC_04, arch §8a).
+"""Import documents that arrive already prepared (IMPL-03, IMPL-04, arch §8a).
 
 The normal intake is a PDF: ingestion stores it, OCR renders pages and produces
 MinerU markdown, and labeling writes the golden JSON. This importer is for the
@@ -238,7 +238,7 @@ def import_document(
         "preprocessing_date": datetime.now(UTC).isoformat(),
         "resolution_cap_px": doc.metadata.get("resolution_cap_px"),
         "source_checksum": _checksum(doc),
-        # Imported markdown carries no per-page table counts, so the SPEC_09
+        # Imported markdown carries no per-page table counts, so the IMPL-09
         # row-completeness cross-check has nothing to compare against for these
         # documents. Empty rather than zero: zero would read as "no rows found".
         "table_row_counts": {},

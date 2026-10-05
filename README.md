@@ -15,8 +15,8 @@ in `schemas/` are those canonical models serialised to JSON Schema.
 | Where | What |
 |---|---|
 | `Documentation/finetuning-architecture-v2.1.docx` | The design and its rationale - the *why* (v2.1, with the v2.2 implementation update). v1 is kept for history only |
-| `Documentation/Implementation MDs/SPEC_00` .. `SPEC_15` | Module specs and acceptance criteria - the *how*; SPEC_00 §13 indexes what the code does now |
-| `Documentation/Implementation MDs/SPEC_ALL_COMBINED.md` | All specs in one file |
+| `Documentation/Implementation MDs/IMPL-00` .. `IMPL-15` | Module specs and acceptance criteria - the *how*; IMPL-00 §13 indexes what the code does now |
+| `Documentation/Implementation MDs/IMPL_ALL_COMBINED.md` | All specs in one file |
 
 The two are in sync. **If they disagree, that is a bug in one of them** - fix the
 disagreement rather than picking a winner.
@@ -29,7 +29,7 @@ disagreement rather than picking a winner.
 The second is why a rule-based label mapper cannot serve this system: on a
 scanned page there is no text for a rule to read.
 
-## Operator commands (SPEC_13)
+## Operator commands (IMPL-13)
 
 ```bash
 # 1  ingest -> OCR -> corpus -> train -> select checkpoint -> merge  (staged on the pod)
@@ -52,7 +52,7 @@ python -m orchestration.run all --input ./intake --out-version v2 --release-id r
 python -m orchestration.run freeze-eval-set --corpus v1
 ```
 
-## Pilot protocol (SPEC_15)
+## Pilot protocol (IMPL-15)
 
 Three experiments in increasing order of investment, run **before** committing to
 full annotation. Each one attributes the next one's failures, so a missing
@@ -66,7 +66,7 @@ python -m orchestration.run extract --model base --tenant pilot --source-ids ...
 python -m pilot.pilot_report --write
 ```
 
-The deferred hyperparameter sweep (SPEC_06) runs **after** this passes and
+The deferred hyperparameter sweep (IMPL-06) runs **after** this passes and
 **before** production-scale training: sweeping against 25-30 documents per type
 measures noise.
 
@@ -342,7 +342,7 @@ Azure account.
 | 7 | Evaluation + calibration | done |
 | 8 | Merge/quantize, serving, testing harness | done |
 | 9 | Orchestration + CI | done |
-| 10 | Pilot validation protocol (SPEC_15) | done; **runs when the corpus arrives** |
+| 10 | Pilot validation protocol (IMPL-15) | done; **runs when the corpus arrives** |
 
 **Phases 1-10 prove the plumbing. They do not prove the model works.** No
 accuracy claim is possible until the pilot runs on a real corpus - and a green
@@ -387,7 +387,7 @@ process, which is why CI covers this much without a pod.
 
 ## Open items
 
-- **Presidio de-identification is BLOCKED** (SPEC_05 section 1). Text-only
+- **Presidio de-identification is BLOCKED** (IMPL-05 section 1). Text-only
   de-identification corrupts the training signal - resolve before production.
 - **Field glosses need SME review.** They are prompt text; changing one after the
   first corpus build forces a rebuild and retrain.

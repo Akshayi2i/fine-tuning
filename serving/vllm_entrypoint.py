@@ -1,10 +1,10 @@
-"""The RunPod Serverless handler (SPEC_11 §1, arch §14).
+"""The RunPod Serverless handler (IMPL-11 §1, arch §14).
 
 A persistent endpoint, unlike the ephemeral training pods: it is updated to a
 promoted version and rolled back, not launched and destroyed.
 
 Everything here is a thin shell around :func:`serving.pipeline.extract` and the
-SPEC_07 inference core, so a served response is byte-for-byte what eval and the
+IMPL-07 inference core, so a served response is byte-for-byte what eval and the
 testing harness produce for the same input. Generation logic in this file would
 be a second implementation, and the numbers in the registry would then describe
 the wrong one.
@@ -170,14 +170,14 @@ def assert_calibration_present(calibration: Any, model_version: str, doc_type: s
         if not calibration:
             raise ServingError(
                 f"no calibration parameters loaded for {model_version}. Fit them against the "
-                "frozen golden eval set and push them before serving (SPEC_09)."
+                "frozen golden eval set and push them before serving (IMPL-09)."
             )
         return
     if calibration is None:
         raise ServingError(
             f"no calibration parameters for {model_version}/{doc_type}. Raw logprob confidence is "
             "systematically overconfident, so serving it would route the wrong documents to "
-            "review (SPEC_09)."
+            "review (IMPL-09)."
         )
 
 
@@ -370,7 +370,7 @@ def cold_start(
         raise ColdStartError(
             f"no model was supplied and the vLLM backend is not wired yet. Resolve it with "
             f"inference_core.model_runner.load_model({model_version!r}, client) once the Phase 0 "
-            "spike confirms vLLM multi-LoRA hot-swap for Qwen3-VL; if it does not hold, SPEC_11 "
+            "spike confirms vLLM multi-LoRA hot-swap for Qwen3-VL; if it does not hold, IMPL-11 "
             "falls back to serving merged per-type models and only this function changes."
         )
 

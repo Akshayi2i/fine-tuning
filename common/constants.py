@@ -42,7 +42,7 @@ class CanonicalModel(NamedTuple):
     active: bool
 
 
-#: The mapping table from master §1.2. The architecture uses SPEC_00's canonical
+#: The mapping table from master §1.2. The architecture uses Fideon SPEC_00's canonical
 #: names; corpus paths, adapters, and CLIs use the short tags. These are the same
 #: things, resolved here and nowhere else.
 #:

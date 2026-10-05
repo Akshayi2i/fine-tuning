@@ -1,4 +1,4 @@
-"""RunPod control — ephemeral training pods and the persistent serving endpoint (SPEC_13 §7).
+"""RunPod control — ephemeral training pods and the persistent serving endpoint (IMPL-13 §7).
 
 Two lifetimes, deliberately different (arch §14):
 
@@ -86,7 +86,7 @@ class StagingVolume:
     **Not a registry.** It is working storage with no durability guarantee: it can
     be reclaimed, and nothing about it is an artifact of record. That is exactly
     why ``finetune`` always writes its run manifest to Blob even while the weights
-    stay here (SPEC_13 §3).
+    stay here (IMPL-13 §3).
 
     The in-memory default is what lets the whole DAG run in CI with no pod. On a
     real pod, pass a backend that writes to the mount.
@@ -310,7 +310,7 @@ class RunPodController:
                 f"refusing to launch pod {spec.name!r} for stage {spec.stage!r} with no staging "
                 "volume attached. Without it the pod writes to pod-local disk, terminates, and "
                 "the work is gone — silently, because every write succeeded. Set RUNPOD_VOLUME_ID "
-                f"(created in Phase 0) or pass volume_id explicitly (SPEC_13 §3); running in "
+                f"(created in Phase 0) or pass volume_id explicitly (IMPL-13 §3); running in "
                 f"this process, the staging mount {spec.volume_mount} must exist."
             )
 
@@ -378,7 +378,7 @@ class RunPodController:
 
         ``finetune`` runs OCR, dataset build and training back to back, all
         GPU-bound. Three launches would mean three cold starts and two Blob round
-        trips of the same corpus (SPEC_13 §7).
+        trips of the same corpus (IMPL-13 §7).
         """
         with self.pod(self.spec_for(stage, gpu_class=gpu_class)) as handle:
             yield handle
@@ -402,7 +402,7 @@ class RunPodController:
         self._endpoint_versions.append(model_version)
         raise NotImplementedError(
             "wire the RunPod Serverless vLLM endpoint update here once the Phase 0 spike "
-            "confirms multi-LoRA hot-swap for Qwen3-VL. If it does not hold, SPEC_11 falls back "
+            "confirms multi-LoRA hot-swap for Qwen3-VL. If it does not hold, IMPL-11 falls back "
             "to serving merged per-type models and this call deploys one of those instead."
         )
 

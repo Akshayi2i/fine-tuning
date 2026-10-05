@@ -1,4 +1,4 @@
-"""Fold the unified adapter into the base (arch v2.1 §13 step 7, SPEC_10).
+"""Fold the unified adapter into the base (arch v2.1 §13 step 7, IMPL-10).
 
 PEFT's ``merge_and_unload()`` produces one standalone bf16 model. It is what the
 first serving cycle ships, and it is also what FP8 quantizes *from* (§13a), so

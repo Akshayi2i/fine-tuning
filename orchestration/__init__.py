@@ -1,4 +1,4 @@
-"""Orchestration — the operator command surface (SPEC_13).
+"""Orchestration — the operator command surface (IMPL-13).
 
 Three commands plus one umbrella, so a cycle is run by a person who knows the
 version tag and nothing else about paths, pods, or stage wiring:

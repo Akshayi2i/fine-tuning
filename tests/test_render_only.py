@@ -1,4 +1,4 @@
-"""SPEC_03 — the ``image_only`` rendering path.
+"""IMPL-03 — the ``image_only`` rendering path.
 
 ``image_only`` is 30% of the Foundation corpus and a real production mode, so
 these pages have to be as traceable as OCR'd ones: same resolution cap, same
