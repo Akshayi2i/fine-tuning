@@ -68,7 +68,7 @@ scopes:
             policy_declarations, policy_schedule, policy_endorsements]
     training_config: unified
     long_doc_types: [policy]
-    not_applicable_metrics: [lossrun_totals_reconciliation_rate]
+    not_applicable_metrics: [lossrun_totals_reconciliation_rate, table_f1]
 
   # Declared now so the shape is settled before it is needed. Loss Runs carry no
   # routed page selection, so page_selection_recall has no producer.
@@ -100,4 +100,4 @@ scopes:
     # amendment items 6 and 7).
     training_config: personal_lines
     long_doc_types: [policy]
-    not_applicable_metrics: [lossrun_totals_reconciliation_rate]
+    not_applicable_metrics: [lossrun_totals_reconciliation_rate, table_f1]

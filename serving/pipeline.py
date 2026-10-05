@@ -110,6 +110,9 @@ class ExtractionResult:
     route_info: dict[str, Any] = field(default_factory=dict)
     latency_ms: float | None = None
     validation_errors: list[str] = field(default_factory=list)
+    #: A Loss Run's claims against its printed totals (calibration.reconciliation);
+    #: None for every other type.
+    reconciliation: dict[str, Any] | None = None
 
     @property
     def needs_review(self) -> bool:
@@ -133,6 +136,8 @@ class ExtractionResult:
             "pages_used": self.pages_used,
             "review_flags": sorted(self.review_flags),
             "route": self.route_info,
+            # Loss Runs only, so every other type's output is unchanged.
+            **({"reconciliation": self.reconciliation} if self.reconciliation is not None else {}),
         }
 
 
@@ -452,6 +457,106 @@ def _extract_policy_windows(
     return merged.extraction, merged.spans, round(wall_ms, 1), sorted(routed), flags
 
 
+#: Review flags a Loss Run's merge and reconciliation leave on the document.
+LOSSRUN_TOTALS_MISMATCH_FLAG = "claims:totals_mismatch"
+LOSSRUN_MERGE_CONFLICT_FLAG = "claims:merge_conflict"
+
+
+def lossrun_windows(request: ExtractionRequest) -> list[list[int]]:
+    """A Loss Run's page windows, sized from its row density as the corpus plans them.
+
+    One window when the whole document fits the rows task's output budget; a
+    caller reads it in one call then, as before.
+    """
+    from common.config import answer_cap
+    from data_pipeline.dataset_builder.expand_tasks import plan_windows
+    from data_pipeline.ocr.run_mineru import count_table_rows
+
+    pages = sorted(request.page_texts) or list(range(1, len(request.image_paths) + 1))
+    # MinerU writes tables as HTML, which count_table_rows counts as well as
+    # pipe tables. No text (image only): every page counts as sparse.
+    densities = [count_table_rows(request.page_texts.get(page) or "") for page in pages]
+    windows = plan_windows(densities, output_budget=answer_cap("lossrun_rows", "lossrun"))
+    return [[pages[index - 1] for index in window] for window in windows]
+
+
+def _extract_lossrun_windows(
+    request: ExtractionRequest,
+    model: LoadedModel,
+    route_: Route,
+    windows: list[list[int]],
+) -> tuple[dict[str, Any], dict[str, Any], float | None, list[int], list[str], dict[str, Any]]:
+    """Read a Loss Run longer than one window window by window, then merge.
+
+    Each window is asked for the whole Loss Run schema over its pages, the
+    prompt the model is trained on; the windows overlap so a row cut by a page
+    break is seen whole by one of them. Their claims are merged by
+    :func:`serving.lossrun_merge.merge_extracted_windows` and reconciled against
+    the printed totals (Fideon SPEC_09 handoff item 8, arch v2.1 §7b). A window
+    that fails is split and retried over fewer pages, and one that fails alone
+    is flagged, as for a policy.
+
+    Returns ``(extraction, spans, latency_ms, pages_used, flags, reconciliation)``.
+    """
+    from common.config import answer_cap
+    from serving.lossrun_merge import merge_extracted_windows
+
+    image_only = request.modality_mode == "image_only"
+    total = len(request.page_texts) or len(request.image_paths)
+    cap = answer_cap("extract", "lossrun")
+    pending = [list(pages) for pages in windows]
+    read: list[tuple[list[int], dict[str, Any], dict[str, Any]]] = []
+    failed: list[str] = []
+    first_cause: str | None = None
+    wall_ms = 0.0
+    while pending:
+        requests = [
+            (*_build_request(
+                model, route_, [_image_for(request, page) for page in pages],
+                None if image_only else [request.page_texts.get(page) or _EMPTY_PAGE for page in pages],
+                request.modality_mode, page_numbers=pages, total_pages=total,
+            ), cap)
+            for pages in pending
+        ]
+        started = time.perf_counter()
+        results = generate_batch(model, requests, adapter=route_.adapter)
+        wall_ms += (time.perf_counter() - started) * 1000
+        retry: list[list[int]] = []
+        for pages, result in zip(pending, results, strict=True):
+            try:
+                if isinstance(result, Exception):
+                    raise PipelineError(str(result))
+                extraction, spans = _parse_generation(result, route_, refuse_truncated=True)
+            except PipelineError as exc:
+                first_cause = first_cause or str(exc)
+                if len(pages) > 1:
+                    retry += [pages[:len(pages) // 2], pages[len(pages) // 2:]]
+                else:
+                    failed.append(f"claims:p{pages[0]}")
+                continue
+            read.append((pages, extraction, spans))
+        pending = retry
+
+    if not read:
+        raise PipelineError(
+            f"no window of Loss Run {request.source_id} could be read ({len(failed)} failed). "
+            f"The first failure: {first_cause}"
+        )
+    read.sort(key=lambda item: item[0][0])
+    extraction, spans, merged, reconciliation = merge_extracted_windows(
+        [(extraction, spans) for _pages, extraction, spans in read])
+    flags = [f"{WINDOW_FAILED_FLAG}:{entry}" for entry in failed]
+    if merged.flagged:
+        flags.append(LOSSRUN_MERGE_CONFLICT_FLAG)
+    log.info(
+        "%s: Loss Run read in %d window(s); %d duplicate row(s) collapsed, %d conflict(s), "
+        "reconciliation %s", request.source_id, len(read), merged.duplicates_collapsed,
+        len(merged.conflicts), reconciliation.status,
+    )
+    pages_used = sorted({page for pages, _e, _s in read for page in pages})
+    return extraction, spans, round(wall_ms, 1), pages_used, flags, reconciliation.as_dict()
+
+
 def _calibration_for(
     calibration: CalibrationParams | Mapping[str, CalibrationParams],
     doc_type: str | None,
@@ -670,6 +775,8 @@ def extract(
     )
     latency: float | None = None
     merge_flags: list[str] = []
+    reconciliation: dict[str, Any] | None = None
+    windows = lossrun_windows(request) if route_.schema_doc_type == "lossrun" else []
 
     if canonical and route_.schema_doc_type == "policy":
         # Every canonical policy is read as windows — section group x page
@@ -680,6 +787,11 @@ def extract(
         extraction, all_spans, latency, pages_used, merge_flags = _extract_policy_windows(
             request, model, route_, lob, page_threshold=page_threshold,
         )
+    elif len(windows) > 1:
+        # A Loss Run longer than one window: read by window, merged and
+        # reconciled. One that fits a window is read in one call below.
+        extraction, all_spans, latency, pages_used, merge_flags, reconciliation = (
+            _extract_lossrun_windows(request, model, route_, windows))
     elif page_plan and page_plan.routed:
         # The selected pages go in **one** call, not one call per page. Sending
         # them separately asked the model to produce a whole-document JSON from a
@@ -717,6 +829,17 @@ def extract(
             page_numbers=pages_used if request.page_texts else None,
             lob=lob,
         )
+
+    if route_.schema_doc_type == "lossrun":
+        if reconciliation is None:
+            from serving.lossrun_merge import reconcile_extraction
+
+            reconciliation = reconcile_extraction(extraction).as_dict()
+        # A mismatch is a claims list that does not add up to what the document
+        # prints. Unverifiable (nothing printed to check against) is reported,
+        # not flagged: the Loss Run schema carries no printed totals yet.
+        if reconciliation.get("status") == "mismatch":
+            merge_flags.append(LOSSRUN_TOTALS_MISMATCH_FLAG)
 
     # Calibration, completeness and the per-field output all read VALUES. For a
     # canonical document that is each envelope's `parsed`; a flat document is
@@ -865,6 +988,7 @@ def extract(
         },
         latency_ms=latency,
         validation_errors=validation_errors,
+        reconciliation=reconciliation,
     )
 
     log.info(

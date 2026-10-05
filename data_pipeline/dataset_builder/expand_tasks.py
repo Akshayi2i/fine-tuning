@@ -148,6 +148,10 @@ def plan_windows(
         window = list(range(page + 1, min(page + size, total_pages) + 1))
         if window:
             windows.append(window)
+        if window and window[-1] == total_pages:
+            # The last page is read: a further window would hold only pages
+            # this one already has (the overlap), and read its rows again.
+            break
 
         step = max(1, size - overlap) if size > 1 else 1
         page += step

@@ -196,6 +196,7 @@ def structural_not_applicable(scope: Scope) -> frozenset[str]:
         # Reconciliation reads a Loss Run's printed totals. No Loss Run, no
         # totals — that is a statement about the eval set, not a pass.
         absent.add("lossrun_totals_reconciliation_rate")
+        absent.add("table_f1")
 
     if Task.PAGE_SELECT not in trained:
         absent.add("page_selection_recall")

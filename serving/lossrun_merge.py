@@ -227,3 +227,68 @@ def merge_and_reconcile(
         totals_output,
     )
     return merged, report
+
+
+_EMPTY = (None, "", [], {})
+
+
+def merge_extracted_windows(
+    windows: Sequence[tuple[dict[str, Any], dict[str, Any]]],
+) -> tuple[dict[str, Any], dict[str, Any], MergeReport, Any]:
+    """Whole-schema extractions of a Loss Run's page windows, as one document.
+
+    ``windows`` are ``(extraction, spans)`` in page order, spans keyed by
+    values-view path (``claims[3].paid``). Returns the merged extraction, its
+    spans re-keyed to it, the merge report and the reconciliation report.
+
+    A header field keeps the first window's value that read one: the header is
+    printed at the top, and a later window without it reads null. The claims of
+    every window are merged by :func:`merge_and_reconcile`. Each merged value
+    keeps the span of the window row it came from, so its confidence describes
+    the tokens that produced it.
+    """
+    extraction: dict[str, Any] = {}
+    spans: dict[str, Any] = {}
+    for window, window_spans in windows:
+        for key, value in window.items():
+            if key == "claims":
+                continue
+            if extraction.get(key) in _EMPTY and value not in _EMPTY:
+                extraction[key] = value
+                spans.update({path: span for path, span in window_spans.items()
+                              if path == key or path.startswith((f"{key}.", f"{key}["))})
+            else:
+                extraction.setdefault(key, value)
+
+    claims = [list(window.get("claims") or []) for window, _ in windows]
+    merged, reconciliation = merge_and_reconcile(claims)
+    extraction["claims"] = merged.rows
+    for index, row in enumerate(merged.rows):
+        key = _claim_key(row)
+        for name, value in row.items():
+            span = _source_span(windows, claims, key, row, name, value)
+            if span is not None:
+                spans[f"claims[{index}].{name}"] = span
+    return extraction, spans, merged, reconciliation
+
+
+def _source_span(windows, claims, key, row, name, value):
+    """The span of the first window row that is this claim and holds this value."""
+    for (_window, window_spans), rows in zip(windows, claims, strict=True):
+        for position, candidate in enumerate(rows):
+            if not isinstance(candidate, dict) or candidate.get(name) != value:
+                continue
+            same = candidate == row if key is None else _claim_key(candidate) == key
+            if same:
+                return window_spans.get(f"claims[{position}].{name}")
+    return None
+
+
+def reconcile_extraction(extraction: dict[str, Any]) -> Any:
+    """The reconciliation report of a Loss Run read in one call."""
+    from calibration.reconciliation import reconcile
+
+    rows = [r for r in extraction.get("claims") or [] if isinstance(r, dict)]
+    claim_rows = [r for r in rows if str(r.get("row_type") or "claim").casefold() not in ("subtotal", "total")]
+    subtotals = [r for r in rows if str(r.get("row_type") or "").casefold() == "subtotal"]
+    return reconcile(claim_rows, subtotals, None)

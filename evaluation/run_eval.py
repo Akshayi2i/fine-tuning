@@ -257,6 +257,16 @@ def subset_of(document: dict[str, Any]) -> list[str]:
     return subsets
 
 
+def _table_f1(
+    scored: Sequence[tuple[dict[str, Any], dict[str, Any], dict[str, Any]]],
+) -> float | None:
+    """The claims table F1 over the Loss Runs scored; ``None`` with none."""
+    from evaluation.metrics.lossrun_table import lossrun_pairs, table_f1
+
+    pairs = lossrun_pairs(scored)
+    return table_f1(pairs).f1 if pairs else None
+
+
 def _reconciliation_rate(
     scored: Sequence[tuple[dict[str, Any], dict[str, Any], dict[str, Any]]],
 ) -> float | None:
@@ -519,6 +529,9 @@ def score_subset(
         # only one doc type can produce still reaches the gate, weighted by that
         # type's documents rather than diluted by the others.
         "lossrun_totals_reconciliation_rate": _reconciliation_rate(scored),
+        # Loss Runs only: claims matched by claim number with total incurred
+        # within a cent (evaluation.metrics.lossrun_table).
+        "table_f1": _table_f1(scored),
     }
     report.metrics = {k: v for k, v in report.metrics.items() if v is not None}
     return report

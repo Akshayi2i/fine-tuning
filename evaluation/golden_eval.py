@@ -207,6 +207,9 @@ def evaluate(
             metadata["field_confidence"] = {
                 path: body["confidence"] for path, body in result.fields.items()
             }
+            if result.reconciliation is not None:
+                # The serving path's own report: the gate reads what production did.
+                metadata["reconciliation"] = result.reconciliation
             triples.append((doc.golden, result.extraction, metadata))
     return triples
 

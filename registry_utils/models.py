@@ -213,6 +213,11 @@ class EvalMetrics(_Base):
     #: structural check (arch §0c).
     confusable_misattribution_rate: float | None = None
 
+    #: Loss Runs only: claims table F1 and the share of verifiable Loss Runs
+    #: whose claims reconciled with their printed totals.
+    table_f1: float | None = None
+    lossrun_totals_reconciliation_rate: float | None = None
+
     latency_ms_per_doc: float | None = None
 
 
