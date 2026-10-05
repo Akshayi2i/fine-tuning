@@ -170,6 +170,17 @@ class DataStats(_Base):
     #: (Fideon SPEC_09 amendment items 4 and 5).
     split_policy: dict[str, Any] = Field(default_factory=dict)
 
+    #: The input-mode mix the corpus was drawn against (``modality_mix`` is
+    #: what it came to).
+    modality_mix_target: dict[str, float] = Field(default_factory=dict)
+
+    #: The scope's configured synthetic_fraction and scanned_share, and per line
+    #: what its train documents came to (Fideon SPEC_09 amendment items 6, 7).
+    data_mix: dict[str, Any] = Field(default_factory=dict)
+
+    #: split -> line -> documents, real, synthetic and rows, for a scoped run.
+    examples_by_line: dict[str, dict[str, dict[str, int]]] = Field(default_factory=dict)
+
     #: Recorded, not enforced, while de-identification is blocked (IMPL-05 §1).
     deidentified: bool = False
     image_redaction: str = "unresolved"
@@ -240,6 +251,9 @@ class Promotion(_Base):
     failed_gates: list[str] = Field(default_factory=list)
     promoted_by: str | None = None
     promoted_at: datetime | None = None
+    #: Fideon SPEC_09 §6: production (field match >= 0.92) or interim; None if
+    #: not gated or blocked.
+    tier: Literal["production", "interim"] | None = None
 
 
 class RunManifest(_Base):

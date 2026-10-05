@@ -778,6 +778,12 @@ def train(
     # split out of the union, so the selected checkpoint was chosen on documents
     # the model had memorised — and the promotion gate read that number.
     scope = scope or default_scope()
+    from training.data_mix import DataMixError, assert_corpus_mix
+
+    try:
+        assert_corpus_mix(scope, corpus_manifest)
+    except DataMixError as exc:
+        raise TrainingError(str(exc)) from exc
     # The corpus is built once for every type; a narrower scope reads a filtered
     # VIEW of it rather than a corpus of its own, so the split and the group
     # assignment are shared and the two runs stay comparable.
@@ -799,7 +805,12 @@ def train(
         # The caller counts the whole corpus. A scoped run trains on its view,
         # and its manifest has to say so: a lossrun run recording every policy
         # row as its training data describes a run that did not happen.
-        update |= {"val_examples": view.val_rows, "test_examples": view.test_rows}
+        update |= {"val_examples": view.val_rows, "test_examples": view.test_rows,
+                   # The shares configured and reached, per line, for the
+                   # manifest and the model card.
+                   "data_mix": {"settings": view.mix_settings, "lines": view.data_mix,
+                                "rested_documents": view.rested_documents},
+                   "examples_by_line": view.examples_by_line}
     data_stats = data_stats.model_copy(update=update)
 
     # A version already trained or promoted is never overwritten — not by a

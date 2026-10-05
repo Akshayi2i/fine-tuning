@@ -424,6 +424,14 @@ def run_manifest(
     )
 
 
+def model_card(
+    run_id: str, run_type: str, doc_type: str | None = None, *, scope: str | None = None
+) -> str:
+    """``model_card.md`` beside the run's ``run_manifest.json`` (Fideon SPEC_09 amendment item 7)."""
+    manifest = run_manifest(run_id, run_type, doc_type, scope=scope)
+    return manifest[: -len("run_manifest.json")] + "model_card.md"
+
+
 def registry_index() -> str:
     """Flat table of every run — status and key metrics at a glance, without
     opening individual manifests."""

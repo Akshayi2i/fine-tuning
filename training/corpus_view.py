@@ -14,6 +14,11 @@ unified scope reads the corpus files directly, so nothing is copied for it.
 Filtering rather than re-splitting also keeps the epoch structure: every epoch
 file holds each of the scope's train documents exactly once, in that epoch's
 sampled modality regime, which is what makes "3 epochs" mean three passes.
+
+A scope's configured shares are applied here too: per line, its synthetic
+fraction and scanned share decide which synthetic documents train, the same
+ones in every epoch (:mod:`training.data_mix`, Fideon SPEC_09 amendment items 6
+and 7). Every real document trains.
 """
 
 from __future__ import annotations
@@ -49,6 +54,14 @@ class CorpusView:
     dropped_rows: int = 0
     #: Line of business -> times its rows appear in each epoch file (line_balance).
     line_repeats: dict[str, int] = field(default_factory=dict)
+    #: The scope's configured shares, and per line what its train documents
+    #: came to (training.data_mix). Train documents the shares left out.
+    mix_settings: dict = field(default_factory=dict)
+    data_mix: dict[str, dict] = field(default_factory=dict)
+    rested_documents: int = 0
+    #: split -> line -> documents, real, synthetic and rows (train: one epoch,
+    #: after the shares, before line balance repeats anything).
+    examples_by_line: dict[str, dict[str, dict[str, int]]] = field(default_factory=dict)
 
     @property
     def train_rows(self) -> int:
@@ -118,6 +131,32 @@ def line_repeats(rows: list[dict], *, min_documents: int, max_repeat: int) -> di
     }
 
 
+def _rows_of(body: str) -> list[dict]:
+    return [json.loads(line) for line in body.splitlines() if line.strip()]
+
+
+def _keep(body: str, keep: set[str]) -> tuple[str, int]:
+    """``body`` with only the rows of the documents in ``keep``."""
+    out = [line for line in body.splitlines()
+           if line.strip() and str(json.loads(line).get("source_id")) in keep]
+    return "\n".join(out) + ("\n" if out else ""), len(out)
+
+
+def examples_by_line(rows: list[dict]) -> dict[str, dict[str, int]]:
+    """Per line: documents, how many real and synthetic, and rows."""
+    documents: dict[str, dict[str, bool]] = {}
+    row_counts: dict[str, int] = {}
+    for row in rows:
+        line = _line_of(row)
+        documents.setdefault(line, {})[str(row.get("source_id"))] = bool(row.get("synthetic"))
+        row_counts[line] = row_counts.get(line, 0) + 1
+    return {
+        line: {"documents": len(ids), "real": sum(1 for s in ids.values() if not s),
+               "synthetic": sum(1 for s in ids.values() if s), "rows": row_counts[line]}
+        for line, ids in sorted(documents.items())
+    }
+
+
 def _balance(body: str, repeats: dict[str, int]) -> tuple[str, int]:
     """``body`` with each row written as many times as its line's repeat count."""
     out: list[str] = []
@@ -147,6 +186,13 @@ def materialize(
             for epoch in range(1, EPOCH_FILES + 1)
         ]
         view.val_path = paths.corpus_eval_split(corpus_version, "val", tenant_id)
+        from training.data_mix import mix_settings
+
+        if mix_settings(scope).steers:
+            log.warning(
+                "data_mix is configured but is not applied to the unified scope: its epoch "
+                "files are the corpus's own. Run a scoped run to sample to the shares."
+            )
         if _balance_settings(scope)["max_repeat"] > 1:
             # Said, not silent: the corpus files are used as they are, so the
             # small lines are NOT repeated here. Balance needs a scoped run.
@@ -166,14 +212,31 @@ def materialize(
             )
         body, kept, dropped = _filter(client.read_text(source), scope)
         if epoch == 1:
-            # One set of repeat counts for every epoch, from the documents of
-            # the first: every epoch file holds every training document once.
+            # One choice of documents and one set of repeat counts for every
+            # epoch, from the documents of the first: every epoch file holds
+            # every training document once.
+            from common.config import training_config
+            from training.data_mix import mix_settings, select_documents
+
+            settings = mix_settings(scope)
+            seed = int(training_config(scope.training_config).get("seed", 42))
+            keep, mix = select_documents(_rows_of(body), settings, seed=seed, line_of=_line_of)
+            view.mix_settings = settings.as_dict()
+            view.data_mix = {line: m.as_dict() for line, m in mix.items()}
+            kept_rows = [row for row in _rows_of(body) if str(row.get("source_id")) in keep]
+            view.rested_documents = len({str(r.get("source_id")) for r in _rows_of(body)}) - len(keep)
+            if settings.steers:
+                log.info("data mix: %s", {line: (m.real, m.synthetic_kept, m.synthetic_available)
+                                          for line, m in mix.items()})
+            view.examples_by_line["train"] = examples_by_line(kept_rows)
             balance = _balance_settings(scope)
-            view.line_repeats = line_repeats(
-                [json.loads(line) for line in body.splitlines() if line.strip()], **balance)
+            view.line_repeats = line_repeats(kept_rows, **balance)
+            for line, record in view.data_mix.items():
+                record["repeats"] = view.line_repeats.get(line, 1)
             boosted = {line: n for line, n in view.line_repeats.items() if n > 1}
             if boosted:
                 log.info("line balance: repeating %s in every epoch file", boosted)
+        body, kept = _keep(body, keep)
         body, kept = _balance(body, view.line_repeats)
         target = paths.corpus_scope_epoch_file(corpus_version, epoch, scope.name, tenant_id)
         client.write_text(target, body)
@@ -195,10 +258,12 @@ def materialize(
     view.val_path = paths.corpus_scope_eval_split(corpus_version, "val", scope.name, tenant_id)
     client.write_text(view.val_path, body)
     view.val_rows = kept
+    view.examples_by_line["val"] = examples_by_line(_rows_of(body))
 
     test = paths.corpus_eval_split(corpus_version, "test", tenant_id)
     if client.exists(test):
-        _body, view.test_rows, _ = _filter(client.read_text(test), scope)
+        test_body, view.test_rows, _ = _filter(client.read_text(test), scope)
+        view.examples_by_line["test"] = examples_by_line(_rows_of(test_body))
 
     if not view.val_rows:
         # Not fatal here — it is the checkpoint selector and the gate that need

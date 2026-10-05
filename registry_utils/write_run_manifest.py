@@ -87,6 +87,15 @@ def write_manifest(
     except BlobError as exc:
         raise RegistryError(f"failed writing manifest for {manifest.run_id}: {exc}") from exc
 
+    # Rewritten with the manifest, so the card always says what it says. A card
+    # that fails to write is a missing document, not a failed run.
+    from registry_utils.model_card import write_model_card
+
+    try:
+        write_model_card(manifest, client)
+    except Exception as exc:  # noqa: BLE001 - the manifest above is the record
+        log.warning("model card for %s not written: %s", manifest.run_id, exc)
+
     if update_index:
         update_registry_index(manifest, client)
     return key

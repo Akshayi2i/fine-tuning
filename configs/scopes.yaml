@@ -96,6 +96,8 @@ scopes:
     # classify stays, as in every scope: a personal-lines release must still
     # recognise a non-policy document and refuse it.
     tasks: [classify, extract, policy_declarations, policy_schedule, policy_endorsements]
-    training_config: unified
+    # unified.yaml plus this adapter's per-line data mix (Fideon SPEC_09
+    # amendment items 6 and 7).
+    training_config: personal_lines
     long_doc_types: [policy]
     not_applicable_metrics: [lossrun_totals_reconciliation_rate]

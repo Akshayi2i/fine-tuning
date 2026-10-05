@@ -643,13 +643,26 @@ def _require_cross_type_evidence(
             )
 
 
-def apply_to_manifest(result: GateResult, manifest: Any, *, gated_against: str | None = None) -> Any:
+def apply_to_manifest(result: GateResult, manifest: Any, *, gated_against: str | None = None,
+                      metrics: dict[str, Any] | None = None) -> Any:
     """Record the gate decision on the candidate's run manifest (IMPL-02).
 
     The decision travels with the artifact, so "was this promoted, and against
-    what" is answerable later without reconstructing it.
+    what" is answerable later without reconstructing it. With ``metrics``, the
+    scores gated are recorded too (the registry index and the model card read
+    them).
     """
     manifest.promotion.beat_previous_on_all_gates = result.passed and not result.waived
+    manifest.promotion.tier = result.tier
+    if metrics is not None:
+        from registry_utils.models import EvalMetrics
+
+        known = EvalMetrics.model_fields
+        manifest.eval_metrics = EvalMetrics(**{
+            name: value for name, value in metrics.items()
+            if name in known and (value is None or isinstance(value, (int, float, dict)))
+            and not isinstance(value, bool)
+        })
     manifest.promotion.failed_gates = list(result.failed_gates) + [
         f"{g} (WAIVED)" for g in result.waived
     ]

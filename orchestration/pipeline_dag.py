@@ -838,10 +838,24 @@ def plan_corpus(ctx: StageContext) -> CorpusPlan:
     from data_pipeline.dataset_builder.split_groups import cap_twins
 
     documents = cap_twins(documents, assignment, seed=ctx.seed)
-    modes = sample_modes(train_source_ids(documents, assignment), seed=ctx.seed)
-    assert_mix_is_close(modes)
+    # The global input-mode mix unless the scope's config sets its own
+    # (training.data_mix); recorded on the corpus manifest, so a run whose
+    # scope wants another mix is refused rather than mislabelled.
+    mix = modality_mix_of(ctx)
+    modes = sample_modes(train_source_ids(documents, assignment), seed=ctx.seed, mix=mix)
+    assert_mix_is_close(modes, mix=mix)
     built = build_corpus(documents, assignment, seed=ctx.seed, mode_assignment=modes)
     return CorpusPlan(documents, by_type, assignment, built, frozen, delivered, modes)
+
+
+def modality_mix_of(ctx: StageContext) -> dict[str, float]:
+    """The input-mode mix this build draws: the scope's, else the global default."""
+    from training.data_mix import DataMixError, configured_modality_mix
+
+    try:
+        return configured_modality_mix(ctx.scope)
+    except DataMixError as exc:
+        raise PipelineError(str(exc)) from exc
 
 
 def stage_dataset_build(ctx: StageContext) -> StageResult:
@@ -915,6 +929,7 @@ def stage_dataset_build(ctx: StageContext) -> StageResult:
         doc_types=sorted(by_type),
         seed=ctx.seed,
         git_commit=ctx.git_commit or "unknown",
+        modality_mix_target=modality_mix_of(ctx),
     )
     ctx.client.write_json(paths.corpus_manifest(ctx.corpus, ctx.tenant_id), manifest)
 
@@ -991,6 +1006,7 @@ def stage_training(ctx: StageContext) -> StageResult:
         val_examples=count_examples(counts.get("val")),
         test_examples=count_examples(counts.get("test")),
         modality_mix=corpus_manifest.get("modality_mix", {}),
+        modality_mix_target=corpus_manifest.get("modality_mix_target") or {},
         lob_coverage=corpus_manifest.get("lob_coverage", {}),
         alias_coverage=corpus_manifest.get("alias_coverage", {}),
         confusable_example_count=corpus_manifest.get("confusable_example_count", 0),
@@ -1440,7 +1456,7 @@ def stage_evaluation_gate(ctx: StageContext) -> StageResult:
         paths.staging_eval_report(ctx.out_version, scope=ctx.scope.name), json.dumps(candidate)
     )
 
-    apply_to_manifest(result, foundation)
+    apply_to_manifest(result, foundation, metrics=candidate)
     from registry_utils.write_run_manifest import write_manifest
 
     write_manifest(foundation, ctx.client)

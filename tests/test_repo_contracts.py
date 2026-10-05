@@ -204,8 +204,16 @@ def test_there_is_exactly_one_launch_path_training_config():
     request, so a Foundation and a per-type adapter could never both be active
     (arch v2.1 §4.1)."""
     configs = {p.stem for p in (ROOT / "configs" / "training").glob("*.yaml")}
-    assert configs <= {"unified", "per_type_adapter", "sweep"}, (
-        f"unexpected training configs: {sorted(configs - {'unified', 'per_type_adapter', 'sweep'})}"
+    # An adapter's config (Fideon SPEC_09 amendment item 7: per-adapter data
+    # mix) is no second launch path: it extends unified and may name only its
+    # data, so it cannot drift from it on anything that trains.
+    adapters = {name for name in configs
+                if load_yaml(ROOT / "configs" / "training" / f"{name}.yaml").get("extends") == "unified"}
+    for name in adapters:
+        own = set(load_yaml(ROOT / "configs" / "training" / f"{name}.yaml")) - {"extends"}
+        assert own <= {"data_mix", "modality_mix"}, f"{name}.yaml overrides {sorted(own)} of unified"
+    assert configs - adapters <= {"unified", "per_type_adapter", "sweep"}, (
+        f"unexpected training configs: {sorted(configs - adapters - {'unified', 'per_type_adapter', 'sweep'})}"
     )
     assert "unified" in configs
 

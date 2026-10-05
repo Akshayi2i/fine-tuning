@@ -15,6 +15,7 @@ invariants that span *two* files and would otherwise be maintained by hand:
 
 from __future__ import annotations
 
+import copy
 import os
 from functools import cache, lru_cache
 from pathlib import Path
@@ -121,8 +122,33 @@ def serving_config() -> dict[str, Any]:
 
 @cache
 def training_config(name: str) -> dict[str, Any]:
-    """Load ``configs/training/{name}.yaml``. ``unified`` is the only one until a type graduates (§4.2)."""
-    return load_yaml(CONFIG_DIR / "training" / f"{name}.yaml")
+    """Load ``configs/training/{name}.yaml``.
+
+    A config may start ``extends: <other>``: it is then the other config with
+    its own keys laid over it, mappings merged key by key. An adapter's config
+    names only what it changes (its data mix, say), so the two cannot drift
+    apart on everything else.
+    """
+    return _training_config(name, ())
+
+
+def _training_config(name: str, chain: tuple[str, ...]) -> dict[str, Any]:
+    if name in chain:
+        raise ConfigError(f"training configs extend each other in a loop: {' -> '.join((*chain, name))}")
+    data = load_yaml(CONFIG_DIR / "training" / f"{name}.yaml")
+    parent = data.pop("extends", None)
+    if not parent:
+        return data
+    return _merged(copy.deepcopy(_training_config(str(parent), (*chain, name))), data)
+
+
+def _merged(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
+    for key, value in override.items():
+        if isinstance(value, dict) and isinstance(base.get(key), dict):
+            base[key] = _merged(base[key], value)
+        else:
+            base[key] = value
+    return base
 
 
 # --------------------------------------------------------------------------

@@ -66,8 +66,9 @@ class ValidationGeneration:
             # it was asked for, not the whole schema it is a part of.
             "sections": self.row.get("sections"),
             "modality_mode": self.row.get("modality_mode", "ocr_plus_image"),
-            # Not on the row. Unknown is recorded as not scanned, which only
-            # affects which eval subset a document is also counted in.
+            # On every row of a corpus built since the data mix needed it; a
+            # row of an older corpus counts as not scanned, which only affects
+            # which eval subset a document is also counted in.
             "is_scanned": bool(self.row.get("is_scanned", False)),
             "page_count": images or 1,
             # The text the prompt carried (None for image-only), so the report

@@ -21,7 +21,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from common import aliases as alias_registry
-from common.constants import LOB_COVERAGE_TARGET, MODALITY_MODES
+from common.constants import LOB_COVERAGE_TARGET, MODALITY_MIX, MODALITY_MODES
 from common.lob import compute_coverage
 from common.prompts import PROMPT_TEMPLATE_VERSION
 from common.schemas import schema_version
@@ -187,6 +187,7 @@ def build_manifest(
     git_commit: str = "unknown",
     edge_case_counts: dict[str, int] | None = None,
     lob_by_source: dict[str, Any] | None = None,
+    modality_mix_target: dict[str, float] | None = None,
 ) -> tuple[dict[str, Any], CoverageReport]:
     """Assemble the manifest and run every coverage check."""
     report = CoverageReport()
@@ -258,6 +259,9 @@ def build_manifest(
             for mode in MODALITY_MODES
         },
         "modality_mix_basis": "train rows",
+        # The mix the modes were drawn against: the global default or the
+        # building scope's own (training.data_mix.assert_corpus_mix reads it).
+        "modality_mix_target": dict(modality_mix_target or MODALITY_MIX),
         "source_ids_by_split": {
             split: sorted({row["source_id"] for row in rows})
             for split, rows in sorted(rows_by_split.items())
