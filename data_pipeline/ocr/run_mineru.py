@@ -62,7 +62,8 @@ class OcrEngine(Protocol):
     the whole pipeline is verifiable without MinerU installed.
     """
 
-    def process(self, pdf_bytes: bytes, *, device: Device, max_long_side_px: int) -> list[PageOutput]:
+    def process(self, pdf_bytes: bytes, *, device: Device, max_long_side_px: int,
+                modality: str | None = None, force_ocr: bool | None = None) -> list[PageOutput]:
         ...
 
 
@@ -87,7 +88,11 @@ class MinerUEngine:
     def __init__(self, device: Device = "cuda") -> None:
         self.device = device
 
-    def process(self, pdf_bytes: bytes, *, device: Device, max_long_side_px: int) -> list[PageOutput]:
+    def process(self, pdf_bytes: bytes, *, device: Device, max_long_side_px: int,
+                modality: str | None = None, force_ocr: bool | None = None) -> list[PageOutput]:
+        """``modality`` and ``force_ocr`` come from the caller in serving (Fideon
+        SPEC_05 §4) and are trusted as given; the offline tools pass neither, and
+        the document is inspected instead (:mod:`data_pipeline.ocr.modality`)."""
         if device != "cuda":
             raise OcrError(f"MinerU runs on the GPU only; device {device!r} is refused")
         from common.gpu import GPUError, require_cuda
@@ -112,6 +117,13 @@ class MinerUEngine:
                 "download its model weights (MinerU's download_models_hf.py)."
             ) from exc
 
+        from data_pipeline.ocr.modality import ModalityError, reads_by_ocr
+
+        try:
+            ocr = reads_by_ocr(pdf_bytes, modality=modality, force_ocr=force_ocr)
+        except ModalityError as exc:
+            raise OcrError(str(exc)) from exc
+
         images = render_pdf_pages(pdf_bytes, max_long_side_px)
         text_layer = text_layer_pages(pdf_bytes)
         import json
@@ -123,9 +135,12 @@ class MinerUEngine:
             # Text mode reads only a text layer. A MIXED document — typed
             # declarations, scanned endorsements — classified as text left its
             # scanned pages unread and unflagged, trained as blank. So any page
-            # without a text layer sends the whole document through OCR.
-            scanned = (dataset.classify() == SupportedPdfParseMethod.OCR
-                       or not all(text_layer))
+            # without a text layer sends the whole document through OCR, and so
+            # does a native one whose figures are drawn (reads_by_ocr). Offline,
+            # MinerU's own classification is heard too; a caller's modality is not
+            # second-guessed.
+            scanned = ocr or (modality is None
+                              and dataset.classify() == SupportedPdfParseMethod.OCR)
             if scanned:
                 piped = dataset.apply(doc_analyze, ocr=True).pipe_ocr_mode(writer)
             else:
