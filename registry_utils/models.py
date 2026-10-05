@@ -405,6 +405,10 @@ class ReleaseBundle(_Base):
 
     release_id: str = Field(..., description="e.g. release-2026.11.1")
     status: ReleaseStatus = "candidate"
+    #: SPEC_09 §6: ``production`` when field match >= 0.92, ``interim`` when the
+    #: release passed every floor below that (evaluation.gating.release_tier).
+    #: ``None`` on bundles written before tiers existed.
+    tier: Literal["production", "interim"] | None = None
     tenant_scope: str
 
     #: The training scope behind this release (``common.scopes``). Defaulted so

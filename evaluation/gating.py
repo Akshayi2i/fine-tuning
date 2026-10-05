@@ -347,6 +347,9 @@ class GateResult:
     """The gate's decision, and everything behind it."""
 
     passed: bool
+    #: ``production`` or ``interim`` for a release that passed (release_tier);
+    #: ``None`` for one that did not.
+    tier: str | None = None
     verdicts: list[MetricVerdict] = field(default_factory=list)
     failed_gates: list[str] = field(default_factory=list)
     blocking_reasons: list[str] = field(default_factory=list)
@@ -522,8 +525,28 @@ def promotion_gate(
             )
 
     result.passed = not result.blocking_reasons
+    result.tier = release_tier(candidate_metrics) if result.passed else None
     log.info("%s", result.report())
     return result
+
+
+#: SPEC_09 §6: a release is PRODUCTION only when its field match reaches this.
+#: One that clears every floor (0.85 and the rest) but not this is promoted as
+#: INTERIM - usable, and labelled as not yet at the production bar.
+PRODUCTION_FIELD_MATCH = 0.92
+
+
+def release_tier(metrics: dict[str, Any]) -> str:
+    """``production`` or ``interim`` for a release that passed the gate.
+
+    Field match is ``field_normalized_match``, the metric the 0.85 floor is on.
+    A release carries one adapter, so its metric is that adapter's. A missing
+    value is interim: production has to be shown, not assumed.
+    """
+    value = metrics.get("field_normalized_match")
+    if isinstance(value, (int, float)) and not isinstance(value, bool) and value >= PRODUCTION_FIELD_MATCH:
+        return "production"
+    return "interim"
 
 
 def _block(result: GateResult, gate: str, reason: str) -> None:

@@ -1395,6 +1395,8 @@ def stage_evaluation_gate(ctx: StageContext) -> StageResult:
         "improved_metrics": result.improved_metrics,
         "waived_gates": sorted(result.waived),
         "override": result.override.as_dict() if result.override else None,
+        # SPEC_09 §6: production (field match >= 0.92) or interim; None if blocked.
+        "tier": result.tier,
     }
     decision["scope"] = ctx.scope.name
     decision["doc_types"] = list(ctx.scope.doc_types)
@@ -1917,6 +1919,10 @@ def build_release_bundle(ctx: StageContext) -> tuple[Any, list[str]]:
         if ctx.client.exists(paths.release_gate_decision(ctx.release_id, fmt, ctx.tenant_id))
     }
 
+    # Production or interim, as the bf16 gate decided it (gating.release_tier).
+    bf16_decision = gate_reports.get("bf16")
+    tier = ctx.client.read_json(bf16_decision).get("tier") if bf16_decision else None
+
     reasons = [
         f"{fmt} has no calibrator, so its confidence is not calibrated (arch v2.1 §5.3)"
         for fmt in formats if fmt not in calibrators
@@ -1944,6 +1950,7 @@ def build_release_bundle(ctx: StageContext) -> tuple[Any, list[str]]:
         bundle = ReleaseBundle(
             release_id=ctx.release_id,
             status="gated" if reasons else "promoted",
+            tier=tier,
             tenant_scope=paths._tenant(ctx.tenant_id),
             scope=ctx.scope.name,
             # What this release may SERVE. Serving routes each document type to
