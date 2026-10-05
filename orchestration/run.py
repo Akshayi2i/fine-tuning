@@ -179,9 +179,19 @@ def run_extract(args: argparse.Namespace) -> int:
     """
     from testing import run_extraction
 
-    argv = ["--model", args.model, "--input", str(args.input), "--mode", args.mode]
-    if args.ground_truth:
-        argv += ["--ground-truth", str(args.ground_truth)]
+    argv = ["--model", args.model, "--mode", args.mode, "--doc-type", args.doc_type]
+    if args.adapter:
+        argv += ["--adapter", args.adapter]
+    if args.label:
+        argv += ["--label", args.label]
+    if args.source_ids:
+        argv += ["--source-ids", *args.source_ids]
+    if args.split:
+        argv += ["--split", args.split]
+    if args.corpus:
+        argv += ["--corpus", args.corpus]
+    if not args.score:
+        argv += ["--no-score"]
     if args.quant_format:
         argv += ["--format", args.quant_format]
     if args.limit:
@@ -277,9 +287,19 @@ def build_parser() -> argparse.ArgumentParser:
     extract = sub.add_parser("extract", help="extract with a chosen model version")
     extract.add_argument("--model", required=True,
                          help="base | v1 | v2 ... — 'base' is the untuned model with no adapter")
-    extract.add_argument("--input", required=True, type=Path)
+    extract.add_argument("--adapter", default=None,
+                         help="LoRA adapter folder applied to the BASE model on every request, not "
+                              "merged (use with --model base)")
+    extract.add_argument("--label", default=None, help="name to file results under")
+    picked = extract.add_mutually_exclusive_group()
+    picked.add_argument("--source-ids", dest="source_ids", nargs="+", default=None,
+                        help="imported, OCR'd documents to extract")
+    picked.add_argument("--split", choices=["train", "val", "test"], default=None)
+    extract.add_argument("--corpus", default=None, help="the corpus whose split --split reads")
+    extract.add_argument("--doc-type", dest="doc_type", default="policy")
     extract.add_argument("--mode", default="ocr_plus_image", choices=["ocr_plus_image", "image_only"])
-    extract.add_argument("--ground-truth", dest="ground_truth", type=Path, default=None)
+    extract.add_argument("--no-score", dest="score", action="store_false",
+                         help="extract without comparing to the gold labels")
     extract.add_argument("--format", dest="quant_format", default=None)
     extract.add_argument("--limit", type=int, default=None)
     extract.add_argument("--tenant", default=None)

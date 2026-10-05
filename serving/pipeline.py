@@ -124,6 +124,10 @@ class ExtractionResult:
             "schema_valid": self.schema_valid,
             "overall_confidence": self.overall_confidence,
             "line_of_business": self.line_of_business,
+            # The canonical JSON itself: every key of the line's schema, values in
+            # their envelopes (raw, parsed, confidence, page_ref, flagged). The
+            # entries below are summaries of it.
+            "extraction": self.extraction,
             "fields": self.fields,
             "list_fields": self.list_fields,
             "pages_used": self.pages_used,

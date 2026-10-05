@@ -872,7 +872,7 @@ def test_all_accepts_the_union_of_both_flag_sets():
 def test_extract_takes_base_as_a_first_class_model():
     """`base` is the pilot's zero-shot baseline and the day-zero pre-annotation
     path, not a curiosity (SPEC_13 §5)."""
-    args = cli.build_parser().parse_args(["extract", "--model", "base", "--input", "docs/"])
+    args = cli.build_parser().parse_args(["extract", "--model", "base", "--source-ids", "policy_0001"])
     assert args.model == "base" and args.command == "extract"
 
 

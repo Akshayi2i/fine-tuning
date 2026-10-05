@@ -38,8 +38,12 @@ python -m orchestration.run finetune --input ./intake --corpus-version v1 --out-
 # 2  quantize -> calibrate -> GATE -> push real weights + release bundle to Azure Blob
 python -m orchestration.run package --version v2 --release-id release-2026.11.1 --formats bf16
 
-# 3  extraction, model chosen by the operator
-python -m orchestration.run extract --model base|v1|v2 --input testing/test_data/
+# 3  extraction through the serving pipeline, on documents already imported and OCR'd
+python -m orchestration.run extract --model base|v1|v2 --tenant T --source-ids policy_0001 policy_0002
+python -m orchestration.run extract --model base|v1|v2 --tenant T --split test --corpus v1
+#    base model + a LoRA adapter applied per request, NOT merged (a checkpoint or the run's adapter):
+python -m orchestration.run extract --model base --adapter /workspace/staging/.../checkpoint-280 --tenant T --split test --corpus v1
+#    JSON per document in testing/results/<model>/, metrics and summary.json in testing/metrics/<model>/
 
 # all = 1 + 2. Never includes extraction.
 python -m orchestration.run all --input ./intake --out-version v2 --release-id release-2026.11.1
@@ -56,7 +60,7 @@ experiment blocks the summary rather than passing by default.
 
 ```bash
 # A  zero-shot baseline - the untuned base model, no annotation cost
-python -m orchestration.run extract --model base        --input pilot/baseline_docs/ --ground-truth pilot/baseline_golden/
+python -m orchestration.run extract --model base --tenant pilot --source-ids ...   # imported + OCR'd first; scored against their labels
 
 # C  ... then the go/no-go across all three
 python -m pilot.pilot_report --write
@@ -372,7 +376,7 @@ the reason and what unblocks it. They are the whole of what Phase 0 gates.
 | `artifact_registry/transfer.py` (`pull_base_model` from the Hub) | not needed on the pod: the base is read from `/workspace/models` |
 | `orchestration/runpod_controller.py` (`RunPodBackend`, endpoint deploy) | `RUNPOD_API_KEY` and the network volume; until then jobs run on the pod in tmux |
 | `inference_core/model_runner.py` (vLLM and HF backends, written; merge in `training/merge.py`, written) | a GPU to run on - they refuse without CUDA |
-| `testing/run_extraction.py`, `pilot/zero_shot_baseline.py` CLIs | a live model backend, i.e. the row above it |
+| `testing/run_extraction.py` (`extract`), `pilot/zero_shot_baseline.py` CLIs | a GPU with vLLM, as above; `extract` reads documents already imported and OCR'd |
 | `training/data_collator.py` custom hook | nothing - ms-swift collates and masks; the hook exists only for a genuine override |
 | `data_pipeline/labeling/pre_annotate.py` external backend | a compliance decision **and** a zero-retention endpoint; refuses without both |
 | `evaluation/golden_eval.py`, `data_pipeline/labeling/active_learning.py` inference loops | a live model backend on the GPU; the golden eval runs through the serving pipeline |

@@ -155,11 +155,15 @@ def run_document(
         scored = score_against_ground_truth(
             result, golden, lob=request.known_lob, acord_form=request.known_acord_form)
         metrics.update(scored)
-        for path, value in metrics["fields"].items():
-            expected = golden.get(path)
-            from common.normalize import values_match
+        from common.canonical import schema_label, values_view
+        from common.normalize import values_match
+        from evaluation.metrics.field_accuracy import flatten_scalars
 
-            value["correct"] = values_match(expected, result.extraction.get(path), field_path=path)
+        expected_flat = flatten_scalars(values_view(
+            schema_label(golden, result.doc_type, request.known_acord_form, request.known_lob)))
+        got_flat = flatten_scalars(values_view(result.extraction))
+        for path, value in metrics["fields"].items():
+            value["correct"] = values_match(expected_flat.get(path), got_flat.get(path), field_path=path)
     else:
         metrics["ground_truth"] = "not supplied — confidence reported, accuracy not measurable"
 
@@ -253,31 +257,180 @@ def summarise(results: list[tuple[ExtractionResult, dict[str, Any]]], model_vers
     return summary
 
 
+#: Page images fetched for extraction, kept between runs (git-ignored).
+PAGE_CACHE = TESTING_ROOT / "ocr_cache"
+
+
+def document_request(
+    client: Any, source_id: str, *, doc_type: str = "policy", tenant_id: str | None = None,
+    mode: str = "ocr_plus_image", images_root: Path = PAGE_CACHE,
+) -> tuple[ExtractionRequest, dict[str, Any] | None]:
+    """One imported, OCR'd document as an extraction request, and its gold label.
+
+    Read from the store the pipeline itself writes - page images and MinerU text
+    under ``processed/``, the label under ``golden-labels/`` - so the document is
+    read exactly as serving reads one. The gold label is ``None`` when the
+    document has none: the extraction still runs, and is not scored.
+    """
+    from artifact_registry import paths
+    from common.lob import merge_line
+    from training.stage_data import localize_keys
+
+    meta_key = paths.ocr_meta(doc_type, source_id, tenant_id)
+    if not client.exists(meta_key):
+        raise HarnessError(f"{source_id} has not been OCR'd (no {meta_key}). Import and OCR it first.")
+    pages = int(client.read_json(meta_key).get("page_count") or 0)
+    if pages < 1:
+        raise HarnessError(f"{source_id}: its OCR record lists no pages")
+    image_keys = [paths.processed_page(doc_type, source_id, page, "png", tenant_id)
+                  for page in range(1, pages + 1)]
+    local = localize_keys(client, image_keys, images_root)
+    texts: dict[int, str] = {}
+    if mode != "image_only":
+        for page in range(1, pages + 1):
+            key = paths.processed_page(doc_type, source_id, page, "md", tenant_id)
+            texts[page] = client.read_text(key) if client.exists(key) else ""
+
+    metadata: dict[str, Any] = {}
+    label_meta_key = paths.label_metadata(doc_type, source_id, tenant_id)
+    if client.exists(label_meta_key):
+        metadata = client.read_json(label_meta_key)
+    golden_key = paths.golden_label(doc_type, source_id, tenant_id)
+    golden = client.read_json(golden_key) if client.exists(golden_key) else None
+
+    request = ExtractionRequest(
+        source_id=source_id,
+        image_paths=[local[key] for key in image_keys],
+        page_texts=texts,
+        modality_mode=mode,
+        known_doc_type=doc_type,
+        known_acord_form=metadata.get("acord_form"),
+        known_lob=merge_line(metadata.get("lob")),
+    )
+    return request, golden
+
+
+def run_batch(
+    model: Any,
+    client: Any,
+    source_ids: list[str],
+    *,
+    doc_type: str = "policy",
+    tenant_id: str | None = None,
+    mode: str = "ocr_plus_image",
+    images_root: Path = PAGE_CACHE,
+    root: Path = TESTING_ROOT,
+    score: bool = True,
+) -> RunSummary:
+    """Extract each document through the serving pipeline; write its JSON, metrics and a summary.
+
+    One document failing is recorded in the summary and the batch carries on.
+    No calibrators are loaded here, so every field comes back flagged for review:
+    this run measures extraction, not the release's review thresholds.
+    """
+    from serving.doc_type_classifier import StaticClassifier
+
+    results: list[tuple[ExtractionResult, dict[str, Any]]] = []
+    failed: list[tuple[str, str]] = []
+    for index, source_id in enumerate(source_ids, start=1):
+        try:
+            request, golden = document_request(client, source_id, doc_type=doc_type, tenant_id=tenant_id,
+                                               mode=mode, images_root=images_root)
+            calibration = CalibrationParams(method="temperature", doc_type=doc_type,
+                                            model_version=model.tag, temperature=1.0)
+            result, metrics = run_document(
+                request, model, StaticClassifier(doc_type, request.known_acord_form), calibration,
+                golden=golden if score else None, strict_schema=False,
+            )
+        except Exception as exc:  # noqa: BLE001 - one document must not end the batch
+            log.error("%s failed: %s: %s", source_id, type(exc).__name__, exc)
+            failed.append((source_id, f"{type(exc).__name__}: {exc}"[:300]))
+            continue
+        results_path, metrics_path = write_outputs(result, metrics, root=root)
+        results.append((result, metrics))
+        log.info("[%d/%d] %s -> %s%s", index, len(source_ids), source_id, results_path,
+                 f" (field match {metrics['field_normalized_match_rate']:.1%})"
+                 if "field_normalized_match_rate" in metrics else "")
+
+    summary = summarise(results, model.tag)
+    summary.failed = failed
+    summary.documents = len(results) + len(failed)
+    target = metrics_dir(model.tag, root) / "summary.json"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(json.dumps(summary.as_dict(), indent=2), encoding="utf-8")
+    log.info("summary -> %s", target)
+    return summary
+
+
+def select_source_ids(client: Any, args: argparse.Namespace) -> list[str]:
+    """The documents named on the command line: explicit ids, a corpus split, or every label."""
+    from artifact_registry import paths
+    from data_pipeline.labeling.export_golden_labels import list_labeled_source_ids
+
+    if args.source_ids:
+        ids = list(args.source_ids)
+    elif args.split:
+        manifest = client.read_json(paths.corpus_manifest(args.corpus, args.tenant))
+        by_split = manifest.get("source_ids_by_split") or {}
+        ids = sorted(by_split.get(args.split) or [])
+        if not ids:
+            raise HarnessError(f"corpus {args.corpus} lists no {args.split} documents")
+    else:
+        ids = list_labeled_source_ids(client, args.doc_type, args.tenant)
+    return ids[: args.limit] if args.limit else ids
+
+
 def main(argv: Iterable[str] | None = None) -> int:  # pragma: no cover - thin CLI
     parser = argparse.ArgumentParser(description="Extract with a chosen model version")
     parser.add_argument("--model", required=True,
-                        help="base | v1 | v2 ... — 'base' is the untuned model, no adapter")
-    parser.add_argument("--input", required=True, type=Path)
+                        help="base | v1 | v2 ... - 'base' is the untuned model, no adapter")
+    parser.add_argument("--adapter", default=None,
+                        help="a LoRA adapter folder (checkpoint-N, or the run's adapter folder; local "
+                             "or a Blob prefix) applied to the BASE model on every request, NOT merged. "
+                             "Use with --model base")
+    parser.add_argument("--label", default=None, help="name to file results under (default: from the adapter)")
+    picked = parser.add_mutually_exclusive_group()
+    picked.add_argument("--source-ids", nargs="+", default=None, help="imported, OCR'd documents to extract")
+    picked.add_argument("--split", choices=["train", "val", "test"], default=None,
+                        help="every document of this split of --corpus")
+    parser.add_argument("--corpus", default=None, help="the corpus whose split --split reads")
+    parser.add_argument("--doc-type", dest="doc_type", default="policy")
     parser.add_argument("--mode", choices=["ocr_plus_image", "image_only"], default="ocr_plus_image")
-    parser.add_argument("--ground-truth", type=Path, default=None,
-                        help="optional; confidence is emitted either way")
+    parser.add_argument("--no-score", dest="score", action="store_false",
+                        help="extract without comparing to the gold labels")
     parser.add_argument("--format", dest="quant_format", default=None)
     parser.add_argument("--limit", type=int, default=None)
     parser.add_argument("--tenant", default=None)
-    # Parsed for its validation and --help, then discarded: the CLI cannot run
-    # until a real model backend exists, and accepting bad arguments silently
-    # would be worse than the explicit exit below.
-    parser.parse_args(list(argv) if argv is not None else None)
+    args = parser.parse_args(list(argv) if argv is not None else None)
+    if args.split and not args.corpus:
+        parser.error("--split needs --corpus")
+    if args.adapter and args.model != "base":
+        parser.error("--adapter applies a LoRA to the base model: use --model base with it")
+
+    # On the pod, run detached in tmux: a closed laptop must not stop this job.
+    from orchestration.detach import detach_module_if_needed
+
+    if detach_module_if_needed("testing.run_extraction", argv, hint="extract"):
+        return 0
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
-    raise SystemExit(
-        "This CLI needs a live model backend, which is the one thing still gated on the Phase 0 "
-        "dependency spike (vLLM multi-LoRA for Qwen3-VL, and MinerU on GPU for the OCR step). "
-        "The loop itself is three calls: load_model(args.model), OCR each PDF via SPEC_03, then "
-        "run_document() per document. Everything it calls is complete and tested — and it must "
-        "keep calling serving.pipeline.extract rather than reimplementing it, or these numbers "
-        "stop describing the system that runs in production."
-    )
+    from artifact_registry.blob_client import BlobClient
+    from inference_core.model_runner import load_model, release_model
+
+    client = BlobClient()
+    source_ids = select_source_ids(client, args)
+    if not source_ids:
+        print("no documents to extract")
+        return 1
+    model = load_model(args.model, client, quant_format=args.quant_format,
+                       adapter=args.adapter, label=args.label)
+    try:
+        summary = run_batch(model, client, source_ids, doc_type=args.doc_type, tenant_id=args.tenant,
+                            mode=args.mode, score=args.score)
+    finally:
+        release_model(model)
+    print(json.dumps(summary.as_dict(), indent=2))
+    return 1 if summary.failed and len(summary.failed) == summary.documents else 0
 
 
 if __name__ == "__main__":  # pragma: no cover

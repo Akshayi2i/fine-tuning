@@ -18,6 +18,7 @@ confidence signal the whole pipeline depends on (arch §5).
 
 from __future__ import annotations
 
+import json
 import logging
 from abc import ABC, abstractmethod
 from collections.abc import Callable
@@ -634,6 +635,10 @@ class LoadedModel:
     resolved: ResolvedModel
     backend: ModelBackend
     config: RunnerConfig
+    #: A LoRA adapter applied to every request that names none of its own: the
+    #: base model plus a trained adapter, NOT merged into it (``extract
+    #: --adapter``). A request's own adapter (a per-type LoRA) still wins.
+    default_adapter: str | None = None
 
     @property
     def is_base(self) -> bool:
@@ -661,6 +666,8 @@ def load_model(
     quant_format: str | None = None,
     config: RunnerConfig | None = None,
     backend_impl: ModelBackend | None = None,
+    adapter: str | None = None,
+    label: str | None = None,
 ) -> LoadedModel:
     """Resolve a version tag and prepare it for generation.
 
@@ -670,9 +677,27 @@ def load_model(
     Args:
         backend_impl: inject a backend directly, for tests. Production callers
             leave this unset and get the configured backend.
+        adapter: a LoRA adapter directory (a training checkpoint, or the run's
+            adapter folder) - local, or a Blob prefix copied down once - applied
+            to the BASE model on every request, without merging. Only with
+            ``tag="base"``. The engine then loads the base weights with LoRA on.
+        label: the version name results are filed under; defaults to the base
+            plus the adapter's folder names.
     """
     config = config or load_runner_config(backend)
+    if adapter is not None and tag != "base":
+        raise ModelRunnerError(
+            f"--adapter applies a LoRA to the BASE model, but --model is {tag!r}. Use --model base "
+            "with --adapter for base + adapter, or --model vN alone for that version's merged weights."
+        )
     resolved = resolve_model_version(tag, client, doc_type=doc_type, quant_format=quant_format)
+    default_adapter = None
+    if adapter is not None:
+        default_adapter = prepare_adapter(adapter, client, config)
+        resolved = type(resolved)(resolved)
+        resolved["kind"] = "base_plus_adapter"
+        resolved["foundation_adapter"] = default_adapter
+        tag = label or adapter_label(default_adapter)
 
     if backend_impl is not None:
         impl = backend_impl
@@ -692,10 +717,63 @@ def load_model(
         )
 
     log.info(
-        "loaded %s (kind=%s, backend=%s, staged=%s)",
+        "loaded %s (kind=%s, backend=%s, staged=%s%s)",
         tag, resolved.get("kind"), config.backend, resolved.get("from_staging"),
+        f", adapter {default_adapter} applied to every request, not merged" if default_adapter else "",
     )
-    return LoadedModel(tag=tag, resolved=resolved, backend=impl, config=config)
+    return LoadedModel(tag=tag, resolved=resolved, backend=impl, config=config,
+                       default_adapter=default_adapter)
+
+
+#: Where an adapter named by a Blob prefix is copied, once per prefix.
+ADAPTER_CACHE = Path("/workspace/adapters") if Path("/workspace").is_dir() else Path.home() / ".cache" / "fideon-adapters"
+
+
+def prepare_adapter(adapter: str, client: BlobClient, config: RunnerConfig) -> str:
+    """A local LoRA adapter directory the engine can load, checked.
+
+    ``adapter`` is a local directory or a Blob prefix (copied to
+    :data:`ADAPTER_CACHE`). Refused when it holds no ``adapter_config.json``,
+    when its rank is above the engine's ``max_lora_rank``, or when the engine
+    is configured without LoRA - each would otherwise fail at engine start or,
+    worse, run the bare base and report it as the adapter.
+    """
+    import re
+
+    local = Path(adapter)
+    if not local.is_dir():
+        target = ADAPTER_CACHE / re.sub(r"[^A-Za-z0-9._-]+", "_", adapter.strip("/"))
+        if not (target / "adapter_config.json").is_file():
+            copied = client.download_dir(adapter, target)
+            log.info("copied adapter %s (%d file(s)) to %s", adapter, copied, target)
+        local = target
+    config_file = local / "adapter_config.json"
+    if not config_file.is_file():
+        raise ModelRunnerError(
+            f"{adapter} holds no adapter_config.json, so it is not a LoRA adapter. Point --adapter at "
+            "a checkpoint folder (.../checkpoint-N) or the run's adapter folder."
+        )
+    rank = int(json.loads(config_file.read_text(encoding="utf-8")).get("r") or 0)
+    if rank > config.max_lora_rank:
+        raise ModelRunnerError(
+            f"{adapter} is a rank-{rank} adapter, above the engine's max_lora_rank "
+            f"{config.max_lora_rank} (configs/inference/vllm_serving.yaml)."
+        )
+    if not config.enable_lora:
+        raise ModelRunnerError(
+            "the engine is configured with enable_lora: false, so the adapter would be ignored "
+            "and the bare base model would answer. Set enable_lora: true to extract with --adapter."
+        )
+    return str(local.resolve())
+
+
+def adapter_label(adapter: str) -> str:
+    """``base+<run>-<checkpoint>``: where results with this adapter are filed."""
+    import re
+
+    parts = [part for part in Path(adapter).parts[-2:] if part not in ("", "/", "\\")]
+    name = re.sub(r"[^A-Za-z0-9._-]+", "-", "-".join(parts)).strip("-") or "adapter"
+    return f"base+{name}"
 
 
 def generate(
@@ -721,6 +799,7 @@ def generate(
     import time
 
     config = _request_config(model.config, json_schema, max_new_tokens)
+    adapter = adapter or model.default_adapter
     started = time.perf_counter()
     try:
         result = model.backend.generate(messages, config, adapter=adapter)
@@ -778,7 +857,7 @@ def generate_batch(
     configs = [_request_config(model.config, request[1], request[2] if len(request) > 2 else None)
                for request in requests]
     raw = model.backend.generate_batch(
-        [request[0] for request in requests], configs, adapter=adapter
+        [request[0] for request in requests], configs, adapter=adapter or model.default_adapter
     )
 
     out: list[Generation | ModelRunnerError] = []
