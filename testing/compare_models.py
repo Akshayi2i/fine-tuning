@@ -21,6 +21,12 @@ Output, one folder per document under ``--out``::
     <document>/comparison.xlsx   Summary and Fields sheets (testing.comparison)
     summary.xlsx                 one row per document, and the totals
 
+The finished folder is then uploaded to Blob under
+``exports/{tenant}/comparisons/{run}/`` (the raw container: it holds policy data),
+checked file by file, and removed from the pod (``--keep-on-pod`` keeps it). The
+command prints the azcopy line that downloads it to the laptop, by default into
+``D:\\Fine-Tuning-reports\\comparisons`` (``--download-to``).
+
 Confidence is not calibrated here (no release calibrators), so every field is
 flagged for review in both JSONs; the comparison is about the values.
 """
@@ -194,6 +200,50 @@ def compare_documents(base_model: Any, adapter_model: Any, client: Any, document
     return compared
 
 
+#: Where the download command points by default: the laptop's reports folder.
+DEFAULT_DOWNLOAD_TO = r"D:\Fine-Tuning-reports\comparisons"
+
+
+def export_run(out: Path, tenant: str, *, client: Any = None, keep_local: bool = False) -> tuple[str, int]:
+    """Upload a finished run folder to ``exports/`` in Blob, check it, and remove the pod copy.
+
+    Returns ``(blob prefix, files uploaded)``. The pod copy is removed only once
+    every file is listed under the prefix; ``keep_local`` keeps it regardless.
+    ``_inputs/`` (the PDF and gold as given, already in each document folder) is
+    not uploaded.
+    """
+    from artifact_registry import paths
+    from artifact_registry.blob_client import for_ingestion
+
+    client = client or for_ingestion()
+    prefix = paths.export_dir("comparisons", out.name, tenant)
+    files = [f for f in sorted(out.rglob("*")) if f.is_file() and "_inputs" not in f.relative_to(out).parts]
+    for file in files:
+        client.write_bytes(f"{prefix}/{file.relative_to(out).as_posix()}", file.read_bytes())
+    stored = set(client.list(prefix + "/"))
+    missing = [f for f in files if f"{prefix}/{f.relative_to(out).as_posix()}" not in stored]
+    if missing:
+        raise CompareError(f"{len(missing)} file(s) did not reach {prefix}; the pod copy is kept at {out}")
+    if not keep_local:
+        shutil.rmtree(out)
+    return prefix, len(files)
+
+
+def download_command(prefix: str, *, container: str, account: str | None,
+                     target: str = DEFAULT_DOWNLOAD_TO) -> str:
+    """The azcopy command that copies an export to the laptop (the SAS is the operator's)."""
+    host = f"https://{account or '<account>'}.blob.core.windows.net"
+    return f'azcopy copy "{host}/{container}/{prefix}?<SAS>" "{target}" --recursive'
+
+
+def _account_name() -> str | None:
+    """The storage account's name from the connection string - the name only, never the key."""
+    for part in (os.environ.get("AZURE_STORAGE_CONNECTION_STRING") or "").split(";"):
+        if part.startswith("AccountName="):
+            return part.split("=", 1)[1]
+    return None
+
+
 def _pct(value: float | None) -> str:
     return f"{value:.1%}" if value is not None else "-"
 
@@ -211,6 +261,10 @@ def main(argv: list[str] | None = None) -> int:  # pragma: no cover - thin CLI o
     parser.add_argument("--label", default=None, help="name for the adapter in the outputs")
     parser.add_argument("--mode", choices=["ocr_plus_image", "image_only"], default="ocr_plus_image")
     parser.add_argument("--doc-type", dest="doc_type", default="policy")
+    parser.add_argument("--keep-on-pod", dest="keep_on_pod", action="store_true",
+                        help="keep the output folder on the pod after it is uploaded for download")
+    parser.add_argument("--download-to", dest="download_to", default=DEFAULT_DOWNLOAD_TO,
+                        help="the laptop folder the printed download command copies into")
     args = parser.parse_args(argv)
     if args.tenant in ("", "default"):
         parser.error("compare under its own tenant, never the real data's")
@@ -242,8 +296,21 @@ def main(argv: list[str] | None = None) -> int:  # pragma: no cover - thin CLI o
                                      tenant=args.tenant, doc_type=args.doc_type, mode=args.mode)
     finally:
         release_model(adapter_model)
-    print(f"\n{len(compared)} document(s) compared -> {out}")
-    print("  per document: <name>/gold.json, base.json, adapter.json, comparison.xlsx; overview: summary.xlsx")
+    print(f"\n{len(compared)} document(s) compared.")
+    try:
+        prefix, files = export_run(out, args.tenant, keep_local=args.keep_on_pod)
+    except CompareError as exc:
+        print(f"compare: upload for download failed: {exc}")
+        return 1
+    from artifact_registry.blob_client import for_ingestion
+
+    command = download_command(prefix, container=for_ingestion().raw_container, account=_account_name(),
+                               target=args.download_to)
+    print(f"{files} file(s) uploaded to {prefix}" + ("" if args.keep_on_pod else " (pod copy removed)"))
+    print("\nOn your laptop, download them with (your SAS for the raw container, read + list):\n")
+    print(f"  {command}\n")
+    print("  per document: <name>/document.pdf, gold.json, base.json, adapter.json, comparison.xlsx;"
+          " overview: summary.xlsx")
     return 0
 
 

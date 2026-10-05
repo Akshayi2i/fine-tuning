@@ -171,3 +171,60 @@ def test_a_folder_of_document_folders_is_several_documents(tmp_path):
         (tmp_path / name / "document.pdf").write_bytes(b"%PDF")
     assert [p.name for p in resolve_inputs(tmp_path, tmp_path / "s")] == ["a", "b"]
     assert resolve_inputs(tmp_path / "a", tmp_path / "s") == [tmp_path / "a"]
+
+
+# --------------------------------------------------------------------------
+# Download to the laptop through Blob
+# --------------------------------------------------------------------------
+
+
+def _run_folder(tmp_path: Path) -> Path:
+    out = tmp_path / "compare-20261005-120000"
+    (out / "doc-1").mkdir(parents=True)
+    for name in ("gold.json", "base.json", "adapter.json", "comparison.xlsx"):
+        (out / "doc-1" / name).write_text("{}", encoding="utf-8")
+    (out / "summary.xlsx").write_text("x", encoding="utf-8")
+    (out / "_inputs" / "doc-1").mkdir(parents=True)
+    (out / "_inputs" / "doc-1" / "document.pdf").write_bytes(b"%PDF")
+    return out
+
+
+def test_a_finished_run_is_uploaded_for_download_and_removed_from_the_pod(tmp_path):
+    from testing.compare_models import export_run
+
+    raw = BlobClient(backend=InMemoryBackend(), container="main", raw_container="raw", context="ingestion")
+    out = _run_folder(tmp_path)
+    prefix, files = export_run(out, "compare", client=raw)
+    assert prefix == "exports/compare/comparisons/compare-20261005-120000" and files == 5
+    assert f"{prefix}/doc-1/comparison.xlsx" in raw.list(prefix + "/")
+    assert not any("_inputs" in key for key in raw.list(prefix + "/"))
+    assert not out.exists()
+
+
+def test_keep_on_pod_keeps_the_folder(tmp_path):
+    from testing.compare_models import export_run
+
+    raw = BlobClient(backend=InMemoryBackend(), container="main", raw_container="raw", context="ingestion")
+    out = _run_folder(tmp_path)
+    export_run(out, "compare", client=raw, keep_local=True)
+    assert (out / "summary.xlsx").is_file()
+
+
+def test_exports_live_in_the_raw_container_under_its_rules():
+    from artifact_registry.blob_client import AccessDeniedError
+
+    key = paths.export_dir("comparisons", "run-1", "compare")
+    assert paths.requires_raw_container(key) and paths.tenant_of(key) == "compare"
+    general = BlobClient(backend=InMemoryBackend(), container="main", raw_container="raw")
+    with pytest.raises(AccessDeniedError):
+        general.read_bytes(f"{key}/summary.xlsx")
+    with pytest.raises(ValueError):
+        paths.export_dir("comparisons", "../escape", "compare")
+
+
+def test_the_download_command_points_at_the_export_and_the_laptop_folder():
+    from testing.compare_models import download_command
+
+    command = download_command("exports/compare/comparisons/run-1", container="raw-docs", account="fideonstore")
+    assert command == ('azcopy copy "https://fideonstore.blob.core.windows.net/raw-docs/exports/compare/'
+                       'comparisons/run-1?<SAS>" "D:\Fine-Tuning-reports\comparisons" --recursive')

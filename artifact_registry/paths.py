@@ -47,7 +47,7 @@ AdapterKind = Literal["foundation", "doc_type"]
 #: those are still unscoped, and adding a tenant segment to only some paths
 #: beneath them would make ``tenant_of`` read a version tag as a tenant id.
 TENANT_SCOPED: Final[frozenset[str]] = frozenset(
-    {"raw-documents", "processed", "golden-labels", "corpus", "releases"}
+    {"raw-documents", "processed", "golden-labels", "corpus", "releases", "exports"}
 )
 
 #: Blob prefixes holding no tenant data. These are never prefixed — the pinned
@@ -695,6 +695,22 @@ def intake_batch_dir(batch: str) -> str:
     return _join(INTAKE_PREFIX, batch)
 
 
+#: Results made for people to download to their own machine - a comparison's
+#: PDF, gold and extracted JSONs and workbooks: ``exports/{tenant}/{kind}/{name}``.
+#: In the RAW container, under its rules: they hold the same unredacted policy
+#: data as the PDFs, and the azcopy access a laptop uploads intake/ with already
+#: reaches it, so nothing new has to be granted to download them.
+EXPORTS_PREFIX = "exports"
+
+
+def export_dir(kind: str, name: str, tenant_id: str | None = None) -> str:
+    """``exports/{tenant}/{kind}/{name}`` - one downloadable result set."""
+    for part in (kind, name):
+        if not _BATCH_RE.match(part or "") or ".." in part:
+            raise ValueError(f"export name {part!r} must be letters, digits, '.', '_' or '-'")
+    return _join(EXPORTS_PREFIX, _tenant(tenant_id), kind, name)
+
+
 def requires_raw_container(blob_path: str) -> bool:
     """Whether a path belongs in the separately-permissioned raw container.
 
@@ -708,4 +724,4 @@ def requires_raw_container(blob_path: str) -> bool:
     # intake/ is the staging area for delivered batches (PDFs and their labels,
     # uploaded with azcopy before import): the same unredacted PII, the same rules.
     return any(normalised == layer or normalised.startswith(layer + "/")
-               for layer in ("raw-documents", INTAKE_PREFIX))
+               for layer in ("raw-documents", INTAKE_PREFIX, EXPORTS_PREFIX))
