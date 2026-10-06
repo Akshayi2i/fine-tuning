@@ -123,7 +123,8 @@ def score_against_ground_truth(
 
         line = merge_line(lob)
         accuracy = score_fields(*core_for_scoring(golden, extraction, line), skip_lists=False)
-        list_reports = score_all_list_fields(without_overflow(golden), without_overflow(extraction))
+        list_reports = score_all_list_fields(
+            without_overflow(golden), without_overflow(extraction), common_model=True)
         tally = CommonModelTally()
         tally.add(golden, extraction, line)
         model_metrics = {k: v for k, v in tally.metrics().items() if v is not None}

@@ -72,7 +72,10 @@ def test_a_typo_in_the_table_is_an_error_not_a_silent_free_text(tmp_path):
 def test_the_reviewed_table_covers_every_canonical_field():
     if not features.FIELD_TYPE_TABLE.exists():
         pytest.skip("configs/field_types.yaml not reviewed yet")
-    missing = _proposer().schema_fields() - set(field_type_table())
+    # A field the common model types itself is not tabled (propose_field_types):
+    # its schema already gives it a calibrator, and a row would override that.
+    declared = set(features.common_model_field_types())
+    missing = _proposer().schema_fields() - set(field_type_table()) - declared
     assert not missing, f"fields with no reviewed type: {sorted(missing)[:20]}"
 
 
