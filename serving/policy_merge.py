@@ -42,7 +42,7 @@ the one numbering function training also uses.
 from __future__ import annotations
 
 import logging
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -246,6 +246,11 @@ def _leaf_values(node: Any) -> list[Any]:
     return [node]
 
 
+#: Common-model tables whose one row can stand on several units: a lienholder on
+#: two vehicles, a multi-car discount. Their key leaves the units out.
+_UNIT_SPANNING = ("interested_parties", "rating_modifiers")
+
+
 def _dedupe(
     rows: list[Any], path: str, section: str | None, report: MergedPolicy,
     *, lob: str | list[str] | None = None,
@@ -295,7 +300,10 @@ def _dedupe(
         # window could not name its unit - is no longer an identity on its own:
         # the same coverage code on two vehicles. Such rows join only when
         # nothing they both state differs, as rows on an inferred key do.
-        weak = bool(lob) and any(part is None for part in identity)
+        # A common-model party or modifier is keyed without the units it stands
+        # on (a window links only those it sees), so its key is as weak: the
+        # rows join, their links united, unless a value both state differs.
+        weak = bool(lob) and (any(part is None for part in identity) or section in _UNIT_SPANNING)
         position = next(
             (i for i in candidates if not ((inferred or weak) and _disagree(out[i], row, path))), None
         )
@@ -463,6 +471,10 @@ _REFERRING_TABLES = ("coverages", "deductibles", "interested_parties", "rating_m
                      "underlying_insurance")
 
 
+#: Joins one unit row into another, recording what the joined row held.
+_Join = Callable[[dict[str, Any], dict[str, Any]], None]
+
+
 def _merge_common_model(windows: list[PolicyWindow], lob: str | list[str]) -> MergedPolicy:
     from common.schema_sections import group_names, references, structural_ids
     from common.structural_ids import renumber_structural_ids
@@ -580,12 +592,24 @@ def _merge_units(table: str, rows: list[dict[str, Any]], id_field: str, lob: str
     """One row per unit; a joined row's id becomes an alias of the kept row's.
 
     Two rows are one unit when the first unit key both state agrees and no
-    value both state differs (:func:`_one_unit`). A row joins only when that
-    names one unit: a fragment matching two units known to differ (two
-    vehicles of one year, make and model) is kept apart and flagged
-    ``ambiguous_unit``. A row that joins can make its unit match rows kept
-    earlier - a VIN-only row and a number-only row meet once a row states
-    both - so the grown row takes in every such row, until none is left.
+    value both state differs (:func:`_one_unit`). The rows are joined in two
+    stages, so that page order never decides which unit a row joins:
+
+    1. **On the keys that name a unit** - a VIN, a vehicle or location number,
+       a building's place at its location - to a fixed point. A row that joins
+       can make its unit match rows kept earlier - a VIN-only row and a
+       number-only row meet once a row states both - so the grown row takes in
+       every such row, until none is left.
+    2. **Then on the keys that only describe one** - a year, make and model,
+       which two vehicles can share - with every unit of stage 1 in view
+       (:func:`_join_descriptive`). A fragment read before two 2020 Honda Civics
+       sees both of them, as one read after them does.
+
+    In either stage a row joins only when what it matches is one unit: a row
+    matching two units known to differ is kept apart and flagged
+    ``ambiguous_unit``. So ``#1 2020 Honda Civic`` joins the VIN-A vehicle
+    numbered 1 in stage 1, and is never weighed against the VIN-B Civic it
+    matches only on the model.
 
     A row stating no unit key is then placed where only one place fits
     (:func:`_join_keyless`), or joins the table's only keyed row, when there
@@ -595,24 +619,45 @@ def _merge_units(table: str, rows: list[dict[str, Any]], id_field: str, lob: str
     """
     from common.structural_ids import unit_key
 
+    # The windows each kept row holds: its own, and every one a row joined
+    # into it came from. Two rows holding one window are two rows that window
+    # wrote, whatever was joined into them since.
+    windows: dict[int, frozenset[str]] = {}
+    for row in rows:
+        window = _window_of(row, id_field)
+        windows[id(row)] = frozenset({window} if window is not None else ())
+
+    def join(kept: dict[str, Any], other: dict[str, Any]) -> None:
+        windows[id(kept)] = windows[id(kept)] | windows[id(other)]
+        _join_unit(kept, other, id_field, table, aliases, report, lob)
+
     merged: list[dict[str, Any]] = []
     for row in rows:
-        candidates = [kept for kept in merged if _one_unit(table, kept, row, lob)]
+        candidates = _unit_candidates(table, row, merged, lob, descriptive=False)
         if not candidates:
             merged.append(row)
-            continue
-        if any(not _may_be_one(table, a, b, lob)
-               for i, a in enumerate(candidates) for b in candidates[i + 1:]):
-            merged.append(row)
-            report.ambiguous_units.append(table)
+            if candidates is None:
+                report.ambiguous_units.append(table)
             continue
         # One unit, or several rows not known to differ that this row shows to
-        # be one (it states a key of each): joined, and the grown row takes in
-        # the rest.
-        _join_unit(candidates[0], row, id_field, table, aliases, report, lob)
-        _absorb(candidates[0], merged, table, id_field, lob, aliases, report)
+        # be one (it states a key of each): all joined, and the grown row takes
+        # in the rest.
+        target = candidates[0]
+        join(target, row)
+        for other in candidates[1:]:
+            join(target, other)
+        merged[:] = [kept for kept in merged if not any(kept is other for other in candidates[1:])]
+        _absorb(target, merged, table, lob, join)
+    while True:
+        before = len(merged)
+        for target in list(merged):
+            if any(kept is target for kept in merged):
+                _absorb(target, merged, table, lob, join)
+        if len(merged) == before:
+            break
 
-    merged = _join_keyless(table, merged, id_field, lob, aliases, report)
+    merged = _join_descriptive(table, merged, lob, join, report)
+    merged = _join_keyless(table, merged, id_field, lob, join, windows, report)
 
     keyed = [row for row in merged if unit_key(table, row, lob) is not None]
     if len(keyed) != 1:
@@ -622,7 +667,7 @@ def _merge_units(table: str, rows: list[dict[str, Any]], id_field: str, lob: str
     owner, out = keyed[0], []
     for row in merged:
         if row is not owner and unit_key(table, row, lob) is None and not _disagree(owner, row, table):
-            _join_unit(owner, row, id_field, table, aliases, report, lob)
+            join(owner, row)
             report.joined_unidentified.append(table)
         else:
             out.append(row)
@@ -649,20 +694,105 @@ def _may_be_one(table: str, a: dict[str, Any], b: dict[str, Any], lob: str | lis
     return same_unit(table, a, b, lob) is not False and not _disagree(a, b, table)
 
 
-def _absorb(target: dict[str, Any], merged: list[dict[str, Any]], table: str, id_field: str,
-            lob: str | list[str], aliases: dict[str, str], report: MergedPolicy) -> None:
+def _match(table: str, a: dict[str, Any], b: dict[str, Any], lob: str | list[str],
+           *, descriptive: bool) -> int | None:
+    """The rank of the unit key on which two rows are one unit (0 the
+    strongest), when that key is of the kind asked for - one that describes a
+    unit, or one that names it; ``None`` otherwise."""
+    from common.structural_ids import deciding_key, descriptive_key
+
+    if not _one_unit(table, a, b, lob):
+        return None
+    rank = deciding_key(table, a, b, lob)
+    if rank is None or descriptive_key(table, rank, lob) != descriptive:
+        return None
+    return rank
+
+
+def _unit_candidates(table: str, row: dict[str, Any], merged: list[dict[str, Any]], lob: str | list[str],
+                     *, descriptive: bool) -> list[dict[str, Any]] | None:
+    """The kept rows ``row`` is one unit with on this stage's keys, in kept
+    order; ``None`` when they are units known to differ - which one it is
+    cannot be known.
+
+    A candidate matched on a weaker key than another candidate known to differ
+    from it is dropped: the row states the stronger key's value, and the unit
+    holding that value is not the weaker match. A row stating VIN-A and number
+    1 is the VIN-A vehicle, not another vehicle numbered 1.
+    """
+    ranked = []
+    for kept in merged:
+        if kept is not row:
+            rank = _match(table, kept, row, lob, descriptive=descriptive)
+            if rank is not None:
+                ranked.append((kept, rank))
+    candidates = [kept for kept, rank in ranked
+                  if not any(stronger < rank and not _may_be_one(table, other, kept, lob)
+                             for other, stronger in ranked)]
+    if any(not _may_be_one(table, a, b, lob) for i, a in enumerate(candidates) for b in candidates[i + 1:]):
+        return None
+    return candidates
+
+
+def _absorb(target: dict[str, Any], merged: list[dict[str, Any]], table: str, lob: str | list[str],
+            join: _Join) -> None:
     """Join into ``target``, in place in ``merged``, every other kept row it is
-    now one unit with, until none is left. A row that is also one unit with a
-    third kept row is not ``target``'s to take: which it is cannot be known."""
+    now one unit with on a key that names a unit, until none is left. A row
+    that is also one unit with a third kept row is not ``target``'s to take:
+    which it is cannot be known."""
+    def one(a: dict[str, Any], b: dict[str, Any]) -> bool:
+        return _match(table, a, b, lob, descriptive=False) is not None
+
     while True:
-        other = next((row for row in merged if row is not target
-                      and _one_unit(table, target, row, lob)
-                      and not any(kept is not target and kept is not row and _one_unit(table, kept, row, lob)
+        other = next((row for row in merged if row is not target and one(target, row)
+                      and not any(kept is not target and kept is not row and one(kept, row)
                                   for kept in merged)), None)
         if other is None:
             return
-        _join_unit(target, other, id_field, table, aliases, report, lob)
+        join(target, other)
         merged[:] = [row for row in merged if row is not other]
+
+
+def _join_descriptive(table: str, merged: list[dict[str, Any]], lob: str | list[str], join: _Join,
+                      report: MergedPolicy) -> list[dict[str, Any]]:
+    """Rows that are one unit only on a key that describes it (a year, make and
+    model), joined with every unit in view.
+
+    Each row's candidates are found among all the units the first stage left,
+    before any is joined here, so the order rows were read in plays no part.
+    Two rows join when each is the other's candidate and neither matches units
+    known to differ: a 2020 Honda Civic fragment beside two 2020 Honda Civics
+    joins neither, and neither of them takes it, whichever came first.
+    """
+    candidates = {id(row): _unit_candidates(table, row, merged, lob, descriptive=True)
+                  for row in merged}
+    for row in merged:
+        if candidates[id(row)] is None:
+            report.ambiguous_units.append(table)
+
+    def joins(a: dict[str, Any], b: dict[str, Any]) -> bool:
+        return all(candidates[id(x)] is not None and any(c is y for c in candidates[id(x)])
+                   for x, y in ((a, b), (b, a)))
+
+    # The rows that join, as groups in kept order: each group is one unit.
+    groups: list[list[dict[str, Any]]] = []
+    for row in merged:
+        linked = [group for group in groups if any(joins(member, row) for member in group)]
+        for group in linked:
+            groups.remove(group)
+        groups.append([member for group in linked for member in group] + [row])
+    out = list(merged)
+    for group in groups:
+        if len(group) < 2:
+            continue
+        group.sort(key=lambda r: next(i for i, kept in enumerate(merged) if kept is r))
+        if any(not _may_be_one(table, a, b, lob) for i, a in enumerate(group) for b in group[i + 1:]):
+            report.ambiguous_units.append(table)
+            continue
+        for other in group[1:]:
+            join(group[0], other)
+        out = [row for row in out if not any(row is other for other in group[1:])]
+    return out
 
 
 def _window_of(row: dict[str, Any], id_field: str) -> str | None:
@@ -672,7 +802,8 @@ def _window_of(row: dict[str, Any], id_field: str) -> str | None:
 
 
 def _join_keyless(table: str, merged: list[dict[str, Any]], id_field: str, lob: str | list[str],
-                  aliases: dict[str, str], report: MergedPolicy) -> list[dict[str, Any]]:
+                  join_unit: _Join, windows: dict[int, frozenset[str]],
+                  report: MergedPolicy) -> list[dict[str, Any]]:
     """Rows stating no unit key, joined where only one reading fits. Flagged.
 
     * Two read in different windows with the same values are one row re-read.
@@ -684,7 +815,10 @@ def _join_keyless(table: str, merged: list[dict[str, Any]], id_field: str, lob: 
     * A row naming no such reference joins the table's only other row, when
       nothing disagrees.
 
-    Two rows from one window are never joined here: the window wrote two.
+    Two rows from one window are never joined here: the window wrote two. A
+    row's windows are every window it holds (``windows``), so a dwelling one
+    window re-read from another is still that window's when the same window's
+    second structure is placed.
     """
     from common.schema_sections import references, unit_keys
     from common.structural_ids import unit_key
@@ -693,15 +827,15 @@ def _join_keyless(table: str, merged: list[dict[str, Any]], id_field: str, lob: 
         return unit_key(table, row, lob) is None
 
     def join(kept: dict[str, Any], other: dict[str, Any]) -> None:
-        _join_unit(kept, other, id_field, table, aliases, report, lob)
+        join_unit(kept, other)
         report.joined_unidentified.append(table)
         merged[:] = [row for row in merged if row is not other]
 
     def apart(rows: list[dict[str, Any]]) -> bool:
-        """Whether each row came from a window of its own (an unknown window is
-        taken as shared)."""
-        windows = [_window_of(row, id_field) for row in rows]
-        return None not in windows and len(set(windows)) == len(windows)
+        """Whether no two rows hold a window in common (a row whose window is
+        unknown is taken as sharing one)."""
+        held = [windows.get(id(row), frozenset()) for row in rows]
+        return all(held) and len(frozenset().union(*held)) == sum(len(h) for h in held)
 
     def values(row: dict[str, Any]) -> Any:
         return values_view({k: v for k, v in row.items() if k != id_field})

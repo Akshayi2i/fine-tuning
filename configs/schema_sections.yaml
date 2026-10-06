@@ -183,10 +183,12 @@ common_model:
     lob_parts: [lob]
     coverages: [coverage_code, applies_to, part]
     deductibles: [deductible_type, applies_to_coverages, applies_to]
-    # A party or modifier is per unit, as a coverage is: the same bank holds a
-    # loan on two vehicles, one discount has a different percent per vehicle.
-    interested_parties: [role, name, applies_to]
-    rating_modifiers: [modifier_type, description, applies_to]
+    # A party or modifier can stand on several units, and a window that sees
+    # only some of them links only those: what it links is not its identity.
+    # The merge joins two such rows unless a value both state differs (one bank
+    # with two loan numbers, one discount at two percents stays two rows).
+    interested_parties: [role, name]
+    rating_modifiers: [modifier_type, description]
     underlying_insurance: [coverage_code, policy_number]
     forms_and_endorsements: [form_number, edition_date]
     additional_fields: [label, value]

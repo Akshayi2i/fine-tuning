@@ -196,15 +196,46 @@ def same_unit(table: str, a: Any, b: Any, lob: str | list[str] | None) -> bool |
     stated by both."""
     from common.schema_sections import unit_keys
 
+    decided = _decide(table, unit_keys(lob).get(table, ()), a, b)
+    return None if decided is None else decided[1] == decided[2]
+
+
+def deciding_key(table: str, a: Any, b: Any, lob: str | list[str] | None) -> int | None:
+    """The index, in the table's unit keys, of the key :func:`same_unit`
+    decides on - the first both rows state - or ``None`` when they share none.
+
+    The lower the index, the stronger the key: a VIN names one vehicle, a year,
+    make and model may name two. The merge ranks a row's candidate units by it.
+    """
+    from common.schema_sections import unit_keys
+
+    decided = _decide(table, unit_keys(lob).get(table, ()), a, b)
+    return None if decided is None else decided[0]
+
+
+def _decide(table: str, keys: tuple[Any, ...], a: Any, b: Any) -> tuple[int, tuple, tuple] | None:
+    """The first of ``keys`` both rows state: its index and each row's values."""
     if not (isinstance(a, dict) and isinstance(b, dict)):
         return None
-    for key in unit_keys(lob).get(table, ()):
+    for index, key in enumerate(keys):
         names = tuple(key) if isinstance(key, (list, tuple)) else (key,)
         left = tuple(_normalised(a.get(name), f"{table}[].{name}") for name in names)
         right = tuple(_normalised(b.get(name), f"{table}[].{name}") for name in names)
         if all(v not in (None, "") for v in left + right):
-            return left == right
+            return index, left, right
     return None
+
+
+def descriptive_key(table: str, index: int, lob: str | list[str] | None) -> bool:
+    """Whether the table's unit key at ``index`` describes a unit rather than
+    names it: several fields together, none a reference (a vehicle's year, make
+    and model; an item's category and description). Two units can share such a
+    key - two 2020 Honda Civics - where a VIN, a number or a building's place at
+    its location names one."""
+    from common.schema_sections import references, unit_keys
+
+    key = unit_keys(lob).get(table, ())[index]
+    return isinstance(key, (list, tuple)) and len(key) > 1 and not set(key) & set(references(lob))
 
 
 def resolve_references(doc: Any, lob: str | list[str] | None) -> Any:

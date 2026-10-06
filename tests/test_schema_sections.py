@@ -311,6 +311,8 @@ def test_a_common_model_group_keeps_its_task_and_page_rule():
 
 
 def test_the_common_model_keys_are_their_own():
-    # A party is per unit on a common-model line: one bank, two vehicles' loans.
-    assert array_key("interested_parties", "homeowners") == ("role", "name", "applies_to")
+    # A party can stand on several units; a window links only those it sees,
+    # so the units it names are not part of its key (the merge unites them).
+    assert array_key("interested_parties", "homeowners") == ("role", "name")
+    assert array_key("rating_modifiers", "personal_auto") == ("modifier_type", "description")
     assert array_key("interested_parties", "gl") == ("name", "party_type")
