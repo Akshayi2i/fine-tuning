@@ -157,3 +157,35 @@ def test_a_twin_whose_two_renders_are_the_same_file_is_one_scanned_document(tmp_
     assert not (out / Path(row["digital"]).stem).exists()
     meta = json.loads((out / Path(row["scanned"]).stem / "metadata.json").read_text(encoding="utf-8"))
     assert meta["render_mode"] == "scanned"
+
+
+def _originals(tmp_path: Path, gold: dict, seed: str = "seed_a") -> Path:
+    root = tmp_path / "source data"
+    _pdf(root / "pdfs" / "homeowners" / "All State" / f"{seed}.pdf",
+         "Allstate ePolicy: enrolled. Declarations page for the homeowners policy.")
+    path = root / "gold json" / "homeowners" / "All State" / f"{seed}.gold.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(gold), encoding="utf-8")
+    return root
+
+
+def test_each_seed_is_a_real_document_in_its_twins_family_and_split(tmp_path):
+    root = _delivery(tmp_path, {1: _gold()})
+    originals = _originals(tmp_path, _gold(carrier=None))
+    out = tmp_path / "bundles"
+    report = prepare_twin_bundles(root, out, originals=originals)
+    assert report.written == {("train", "synthetic"): 2, ("train", "real"): 1}
+    folder = out / "homeowners__all_state__seed_a__original"
+    meta = json.loads((folder / "metadata.json").read_text(encoding="utf-8"))
+    twin = json.loads((out / "homeowners__all_state__seed_a__twin_001" / "metadata.json").read_text("utf-8"))
+    assert meta["synthetic"] is False and meta["split"] == "train" and meta["template_id"] == twin["template_id"]
+    gold = json.loads((folder / "golden.json").read_text(encoding="utf-8"))
+    assert gold["carrier"]["name"]["raw"] == "Allstate"                   # the same corrections as its twins
+
+
+def test_a_seed_without_its_document_is_counted_not_guessed(tmp_path):
+    root = _delivery(tmp_path, {1: _gold()})
+    originals = _originals(tmp_path, _gold(), seed="another_seed")
+    report = prepare_twin_bundles(root, tmp_path / "bundles", originals=originals)
+    assert report.skipped["seed document or its gold not in the originals"] == 1
+    assert ("train", "real") not in report.written

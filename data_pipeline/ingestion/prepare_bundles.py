@@ -42,6 +42,13 @@ where the delivered one cannot be trained on as it is (:func:`corrected_gold`),
 each change listed in ``<out>/corrections.csv``; the delivery is never changed.
 A gold still outside its line's schema after that is left out, with the reason.
 ``--dry-run`` reports all of it and writes nothing.
+
+**The seeds themselves** - the real documents the twins were made from - are
+delivered apart (``--originals``, default ``data/source data``: ``pdfs/`` and
+``gold json/``, ``<line>/<carrier>/<seed>.pdf`` and ``<seed>.gold.json``). Each
+becomes a real document (``synthetic`` false) in its twins' family and split,
+read from the twins' manifest, so a seed and its twins are never on two sides;
+its gold gets the same corrections.
 """
 
 from __future__ import annotations
@@ -57,6 +64,8 @@ from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 
 DEFAULT_OUT = Path("data") / "bundles"
+#: Where a SPEC_21 delivery's seed documents are: pdfs/ and gold json/.
+DEFAULT_ORIGINALS = Path("data") / "source data"
 DEFAULT_EXCLUSIONS = Path("data") / "bundle_exclusions.csv"
 #: ``source_prefix,lob,reason``: a line the generator's folder got wrong, e.g. a
 #: carrier's classic-car policies filed under personal_auto.
@@ -236,8 +245,10 @@ def prepare_twin_bundles(
     mode: str = "link",
     exclusions: dict[str, str] | None = None,
     dry_run: bool = False,
+    originals: Path | None = None,
 ) -> PrepareReport:
-    """Bundles from a SPEC_21 delivery: two documents per twin, one corrected gold."""
+    """Bundles from a SPEC_21 delivery: two documents per twin, one corrected gold,
+    and with ``originals`` each seed as a real document of its twins' family."""
     import re
 
     manifest = delivery / TWIN_MANIFEST
@@ -319,6 +330,10 @@ def prepare_twin_bundles(
                 _place(gold_path, folder / "golden.json", mode, report)
             (folder / "metadata.json").write_text(json.dumps(metadata, indent=2), encoding="utf-8")
 
+    if originals is not None:
+        _bundle_originals(originals, rows, out, lines=lines, mode=mode, exclusions=exclusions,
+                          dry_run=dry_run, recodes=recodes, report=report, seen=seen)
+
     if not dry_run and report.correction_rows:
         out.mkdir(parents=True, exist_ok=True)
         with (out / "corrections.csv").open("w", encoding="utf-8", newline="") as fh:
@@ -335,6 +350,71 @@ def _same_file(a: Path, b: Path) -> bool:
     if a.stat().st_size != b.stat().st_size:
         return False
     return hashlib.sha256(a.read_bytes()).digest() == hashlib.sha256(b.read_bytes()).digest()
+
+
+def _bundle_originals(
+    originals: Path, rows: list[dict[str, str]], out: Path, *, lines: frozenset[str] | None, mode: str,
+    exclusions: dict[str, str] | None, dry_run: bool, recodes: dict[str, dict[str, str]],
+    report: PrepareReport, seen: dict[str, str],
+) -> None:
+    """Each seed of the twins' manifest as a real document, in its twins' family and split."""
+    pdfs = {p.stem: p for p in (originals / "pdfs").rglob("*.pdf")}
+    golds = {p.name[: -len(".gold.json")]: p for p in (originals / "gold json").rglob("*.gold.json")}
+    seeds: dict[str, dict[str, str]] = {}
+    for row in rows:
+        seed = row["seed"].strip()
+        known = seeds.setdefault(seed, row)
+        if known["split"].strip().lower() != row["split"].strip().lower():
+            raise BundleError(f"seed {seed!r} has twins in {known['split']!r} and {row['split']!r}")
+    for seed, row in sorted(seeds.items()):
+        lob = delivery_line(row["lob"])
+        if lines is not None and lob not in lines:
+            report.skipped_lines[lob] += 1
+            continue
+        pdf, gold_path = pdfs.get(seed), golds.get(seed)
+        if pdf is None or gold_path is None:
+            report.skipped["seed document or its gold not in the originals"] += 1
+            continue
+        name = f"{lob}__{row['carrier'].strip()}__{seed}__original"
+        gold, notes, problem = corrected_gold(json.loads(gold_path.read_text(encoding="utf-8")), lob,
+                                              carrier=row["carrier"], text_pdf=pdf, recodes=recodes)
+        if problem:
+            report.skipped[f"gold outside its line's schema after correction: {problem}"] += 1
+            report.correction_rows.append((name, "left out", problem))
+            continue
+        if exclusions and name in exclusions:
+            report.skipped[f"excluded: {exclusions[name]}"] += 1
+            if not dry_run and (out / name).is_dir():
+                shutil.rmtree(out / name)
+            continue
+        if name in seen:
+            raise BundleError(f"two documents are named {name!r}")
+        seen[name] = str(pdf)
+        for kind, detail in notes:
+            report.corrections[kind] += 1
+            report.correction_rows.append((name, kind, detail))
+        split = row["split"].strip().lower()
+        metadata = {
+            "lob": lob,
+            "synthetic": False,
+            "template_id": f"{lob}/{seed}",
+            "split": split,
+            "carrier": row["carrier"].strip() or None,
+            "source_system": "spec21_seed",
+            "sample": None,
+            "render_mode": None,
+        }
+        report.written[(split, "real")] += 1
+        if dry_run:
+            continue
+        folder = out / name
+        folder.mkdir(parents=True, exist_ok=True)
+        _place(pdf, folder / "document.pdf", mode, report)
+        if notes:
+            (folder / "golden.json").write_text(json.dumps(gold, indent=2, ensure_ascii=False), encoding="utf-8")
+        else:
+            _place(gold_path, folder / "golden.json", mode, report)
+        (folder / "metadata.json").write_text(json.dumps(metadata, indent=2), encoding="utf-8")
 
 
 def read_recodes(path: Path = RECODES) -> dict[str, dict[str, str]]:
@@ -518,6 +598,8 @@ def main(argv: list[str] | None = None) -> int:
                         help="source_prefix,lob,reason CSV of lines to correct")
     parser.add_argument("--dry-run", action="store_true",
                         help="SPEC_21 delivery: report the bundles and gold corrections, write nothing")
+    parser.add_argument("--originals", type=Path, default=DEFAULT_ORIGINALS,
+                        help="SPEC_21 delivery: the seed documents (pdfs/, gold json/); 'none' leaves them out")
     args = parser.parse_args(argv)
     # On the pod, run detached in tmux: a closed laptop must not stop this job.
     from orchestration.detach import detach_module_if_needed
@@ -528,8 +610,14 @@ def main(argv: list[str] | None = None) -> int:
     lines = None if args.scope == "none" else get_scope(args.scope).lines or None
     try:
         if (args.input / TWIN_MANIFEST).is_file():
+            originals = None if str(args.originals).lower() == "none" else args.originals
+            if originals is not None and not (originals / "pdfs").is_dir():
+                print(f"no seed documents at {originals} (pdfs/); pass --originals none to bundle the "
+                      "twins alone", file=sys.stderr)
+                return 1
             report = prepare_twin_bundles(args.input, args.out, lines=lines, mode=args.mode,
-                                          exclusions=read_exclusions(args.exclude), dry_run=args.dry_run)
+                                          exclusions=read_exclusions(args.exclude), dry_run=args.dry_run,
+                                          originals=originals)
         else:
             report = prepare_bundles(args.input, args.out, lines=lines, mode=args.mode,
                                      exclusions=read_exclusions(args.exclude),
