@@ -52,6 +52,7 @@ from common.schemas import (
     is_common_model,
     is_valid,
     iter_validation_errors,
+    required_fields,
     resolved_schema,
     with_page_bounds,
 )
@@ -780,6 +781,19 @@ def _feature_calibrated(
     return result
 
 
+def _with_every_key(output: dict[str, Any], route_: Route, lob: Any) -> dict[str, Any]:
+    """``output`` with every key of its schema (common.canonical.with_all_keys).
+
+    Without the client's annotation properties (``fideon:provenance``): they are
+    not the answer's keys, and filled they would be keys of nulls.
+    """
+    from common.canonical import with_all_keys
+    from common.schemas import _strip_prefixed, load_schema
+
+    return with_all_keys(output, _strip_prefixed(
+        load_schema(route_.schema_doc_type, route_.schema_acord_form, lob), ("fideon:",)))
+
+
 def _lob_output(fields: dict[str, Any]) -> dict[str, Any] | None:
     """Collapse the per-value LoB spans into one ``{value, confidence}``.
 
@@ -1098,11 +1112,29 @@ def extract(
     # --- schema validation, mirroring the audit gate ------------------------
     # Against the client's FULL schema for a canonical document, envelope and
     # all — the model form it was generated in is ours, the contract is theirs.
-    schema_valid = is_valid(output, route_.schema_doc_type, route_.schema_acord_form, lob)
+    filled = None
+    unwritten: list[str] = []
+    if common_model:
+        # A common-model line's model view is looser than the client's schema on
+        # purpose (common.model_view): a window may hold a flat deductible whose
+        # amount it cannot see, where the client's rule requires the key. The
+        # every-key fill supplies what such an answer lacks, as a null, so the
+        # served JSON is what is judged - the answer the audit gate sees. A
+        # section the model view requires that no window wrote (its declarations
+        # windows all failed) still fails: the system fields and the fill would
+        # pass it off as an empty section nobody read.
+        filled = _with_every_key(output, route_, lob)
+        unwritten = [
+            name for name in required_fields(route_.schema_doc_type, route_.schema_acord_form, lob)
+            if name not in extraction
+        ]
+    judged = output if filled is None else filled
+    schema_valid = not unwritten and is_valid(
+        judged, route_.schema_doc_type, route_.schema_acord_form, lob)
     validation_errors: list[str] = []
     if not schema_valid:
-        validation_errors = list(
-            iter_validation_errors(output, route_.schema_doc_type, route_.schema_acord_form, lob)
+        validation_errors = [f"{name}: a required section no window wrote" for name in unwritten] + list(
+            iter_validation_errors(judged, route_.schema_doc_type, route_.schema_acord_form, lob)
         )
         if strict_schema:
             raise PipelineError(
@@ -1117,15 +1149,10 @@ def extract(
         # did not extract is null, not absent, so every served JSON - from the
         # base model or a trained one - has the same keys (common.canonical.
         # with_all_keys). After validation, which judges the model's own answer
-        # (an answer missing a required section must still fail), and after
-        # confidence, so the nulls carry none of it.
-        from common.canonical import with_all_keys
-        from common.schemas import _strip_prefixed, load_schema
-
-        # Without the client's annotation properties (fideon:provenance): they
-        # are not the answer's keys, and filled they would be keys of nulls.
-        output = with_all_keys(output, _strip_prefixed(
-            load_schema(route_.schema_doc_type, route_.schema_acord_form, lob), ("fideon:",)))
+        # (an answer missing a required section must still fail; on a
+        # common-model line, the filled answer with its sections checked as
+        # written, above), and after confidence, so the nulls carry none of it.
+        output = filled if filled is not None else _with_every_key(output, route_, lob)
 
     result = ExtractionResult(
         source_id=request.source_id,

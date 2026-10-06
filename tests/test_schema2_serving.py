@@ -69,7 +69,9 @@ class _Replay(ModelBackend):
         return Generation(text=text, tokens=tokens, token_logprobs=[-0.01] * len(tokens))
 
 
-def _serve_replay(gold, pages, lob="personal_auto"):
+def _serve_replay(gold, pages, lob="personal_auto", *, strict=False, edit=None):
+    """Serve ``gold`` by replaying its training targets; ``edit`` changes the
+    answers first, ``strict`` validates as the endpoint does."""
     from data_pipeline.dataset_builder.build_jsonl import SourceDocument, expand_document
     from tests.test_serving_pipeline import CALIBRATION
 
@@ -80,6 +82,8 @@ def _serve_replay(gold, pages, lob="personal_auto"):
     rows, _ = expand_document(doc, "train", modes=("ocr_plus_image",))
     answers = {(r["messages"][0]["content"], tuple(r["window_pages"])): r["messages"][-1]["content"]
                for r in rows}
+    if edit is not None:
+        answers = {key: edit(answer) for key, answer in answers.items()}
     backend = _Replay(answers)
     client = BlobClient(backend=InMemoryBackend(), container="main", raw_container="raw")
     request = ExtractionRequest(
@@ -88,7 +92,7 @@ def _serve_replay(gold, pages, lob="personal_auto"):
         ocr_meta={"modality": "native_pdf"},
     )
     result = extract(request, load_model("base", client, backend_impl=backend),
-                     StaticClassifier("policy"), CALIBRATION, strict_schema=False)
+                     StaticClassifier("policy"), CALIBRATION, strict_schema=strict)
     return result, backend, answers
 
 
@@ -163,6 +167,51 @@ def test_a_link_its_window_could_not_see_is_lost_but_the_rows_are_not():
     assert all(not c.get("applies_to") for c in coverages)
     assert result.schema_valid
     assert list(iter_validation_errors(result.extraction, "policy", None, "personal_auto")) == []
+
+
+def _stated(raw, page):
+    return {"raw": raw, "parsed": raw, "confidence": {"score": 1.0, "source": "deterministic"},
+            "page_ref": [page], "flagged": False}
+
+
+def test_a_flat_deductible_printing_no_amount_is_served_under_strict_validation():
+    """The model view leaves a flat deductible's amount out of its rules - a
+    window can hold the row without it - where the client's rule requires the
+    key. The every-key fill supplies it as a null, so the answer judged is the
+    one served: a policy whose deductible prints its peril and no amount is
+    served, not refused for an amount nobody printed."""
+    gold = copy.deepcopy(AUTO)
+    deductible = next(c for c in gold["coverages"] if c.get("deductibles"))["deductibles"][0]
+    page = deductible["amount"]["page_ref"][0]
+    deductible["amount"] = {"raw": None, "parsed": None, "confidence": {"score": 1.0, "source": "deterministic"},
+                            "page_ref": [], "flagged": False}
+    deductible["peril"] = _stated("Collision", page)
+    assert list(iter_validation_errors(gold, "policy", None, "personal_auto")) == []
+
+    result, _backend, _answers = _serve_replay(gold, 6, strict=True)
+    assert result.schema_valid and "schema:invalid" not in result.review_flags
+    served = [d for c in result.extraction["coverages"] for d in c.get("deductibles") or []
+              if values_view(d.get("peril")) == "Collision"]
+    assert len(served) == 1 and values_view(served[0]["amount"]) is None
+    assert list(iter_validation_errors(result.extraction, "policy", None, "personal_auto")) == []
+
+
+def test_a_section_no_window_wrote_still_fails_validation():
+    """Judging the filled answer must not pass off a section nobody read: with
+    no window writing the carrier, the insured or the policy block, the fill
+    would supply all three as nulls - and the answer is invalid all the same."""
+    from serving.pipeline import PipelineError
+
+    def without_declarations(answer):
+        return json.dumps({k: v for k, v in json.loads(answer).items()
+                           if k not in ("carrier", "named_insured", "policy")})
+
+    result, _backend, _answers = _serve_replay(_compact_auto(), 3, edit=without_declarations)
+    assert not result.schema_valid and "schema:invalid" in result.review_flags
+    assert {"carrier: a required section no window wrote",
+            "policy: a required section no window wrote"} <= set(result.validation_errors)
+    with pytest.raises(PipelineError, match="a required section no window wrote"):
+        _serve_replay(_compact_auto(), 3, strict=True, edit=without_declarations)
 
 
 # --------------------------------------------------------------------------
