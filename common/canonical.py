@@ -458,8 +458,11 @@ def with_all_keys(output: dict[str, Any], schema: dict[str, Any]) -> dict[str, A
     :func:`empty_field_value`, a missing object its own full set of keys, a
     missing table ``[]``. A table's rows each get every key of a row; the NUMBER
     of rows is what the model found, and is not padded. Values present are
-    never changed. A bare (non-envelope) field is added only when the schema
-    allows it to be null, so the result stays valid.
+    never changed. So that the result stays valid, a key is left absent where
+    filling it would break the schema: a bare (non-envelope) field the schema
+    does not allow to be null, a missing table the schema requires rows in
+    (``minItems``), and a key that requires others (``dependentRequired``)
+    the fill cannot supply.
     """
     defs = schema.get("$defs") or {}
 
@@ -506,8 +509,19 @@ def with_all_keys(output: dict[str, Any], schema: dict[str, Any]) -> dict[str, A
                 if filled is not missing:
                     out[key] = filled
             out.update({k: v for k, v in value.items() if k not in out})
+            # A key that requires others (a limit's `percentage` requires its
+            # `basis_coverage_code`, a bare code the fill cannot invent) is
+            # taken out again when the fill added it and those others are not
+            # all there. A key the model wrote stays, whatever it lacks.
+            for key, needs in _dependent_required(sub).items():
+                if key in out and key not in value and not all(n in out for n in needs):
+                    del out[key]
             return out
         if sub.get("type") == "array" or "items" in sub:
+            if value is missing and (sub.get("minItems") or 0) > 0:
+                # [] would break the minimum (a form's page_range is a pair):
+                # a table that must have rows is left absent, not emptied.
+                return missing
             if value is missing or value is None:
                 return []
             if not isinstance(value, list):
@@ -519,6 +533,17 @@ def with_all_keys(output: dict[str, Any], schema: dict[str, Any]) -> dict[str, A
 
     filled = walk(output, schema, 0)
     return filled if isinstance(filled, dict) else output
+
+
+def _dependent_required(sub: dict[str, Any]) -> dict[str, list[str]]:
+    """An object schema's ``dependentRequired``, with the list form of the older
+    ``dependencies`` keyword folded in: key -> the keys it requires."""
+    out: dict[str, list[str]] = {}
+    for keyword in ("dependencies", "dependentRequired"):
+        for key, needs in (sub.get(keyword) or {}).items():
+            if isinstance(needs, list):
+                out.setdefault(key, []).extend(n for n in needs if isinstance(n, str))
+    return out
 
 
 def schema_label(

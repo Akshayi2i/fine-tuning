@@ -311,5 +311,6 @@ def test_a_common_model_group_keeps_its_task_and_page_rule():
 
 
 def test_the_common_model_keys_are_their_own():
-    assert array_key("interested_parties", "homeowners") == ("role", "name")
+    # A party is per unit on a common-model line: one bank, two vehicles' loans.
+    assert array_key("interested_parties", "homeowners") == ("role", "name", "applies_to")
     assert array_key("interested_parties", "gl") == ("name", "party_type")

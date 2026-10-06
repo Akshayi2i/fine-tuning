@@ -183,8 +183,10 @@ common_model:
     lob_parts: [lob]
     coverages: [coverage_code, applies_to, part]
     deductibles: [deductible_type, applies_to_coverages, applies_to]
-    interested_parties: [role, name]
-    rating_modifiers: [modifier_type, description]
+    # A party or modifier is per unit, as a coverage is: the same bank holds a
+    # loan on two vehicles, one discount has a different percent per vehicle.
+    interested_parties: [role, name, applies_to]
+    rating_modifiers: [modifier_type, description, applies_to]
     underlying_insurance: [coverage_code, policy_number]
     forms_and_endorsements: [form_number, edition_date]
     additional_fields: [label, value]
@@ -192,8 +194,10 @@ common_model:
   # What identifies a risk unit across windows: the FIRST of these that a row
   # states (a list inside means those fields together). Unlike array_keys, a
   # row carrying only its VIN and a fragment carrying only its vehicle number
-  # are still compared on whatever they share.
+  # are still compared on whatever they share. A part is its line: a line read
+  # by two windows (a declarations window retried in halves) is one part.
   unit_keys:
+    lob_parts: [lob]
     locations: [location_number, address]
     buildings: [[location_ref, building_number]]
     vehicles: [vin, vehicle_number, [year, make, model]]

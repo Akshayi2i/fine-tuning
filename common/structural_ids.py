@@ -104,14 +104,20 @@ def renumber_structural_ids(
     def resolve(value: Any, tables: tuple[str, ...]) -> str | None:
         if not isinstance(value, str):
             return None
-        value = extra.get(value, value)
+        mapped = extra.get(value)
+        old = value if mapped is None else mapped
         for table in tables:
-            if value in by_table.get(table, {}):
-                return by_table[table][value]
-        # An id already in the new numbering (extra_index resolved it to one).
-        for table in tables:
-            if value in by_table.get(table, {}).values():
-                return value
+            if old in by_table.get(table, {}):
+                return by_table[table][old]
+        # An id extra_index resolved to one already in the new numbering - and
+        # only such an id. A reference that names none of the document's rows is
+        # dangling even when it reads like a new id: a window holding only the
+        # label's second vehicle numbers it veh_1, and the label's veh_1 is
+        # still the first vehicle, which that window does not hold.
+        if mapped is not None:
+            for table in tables:
+                if mapped in by_table.get(table, {}).values():
+                    return mapped
         return None
 
     def walk(node: Any, path: str) -> None:
@@ -158,15 +164,27 @@ def unit_key(table: str, row: Any, lob: str | list[str] | None) -> tuple | None:
     ``None`` for a row stating none of them - a fragment the merge cannot place
     by itself.
     """
-    from common.schema_sections import unit_keys
+    return _unit_key(table, row, lob, {})
+
+
+def _unit_key(table: str, row: Any, lob: str | list[str] | None, names: dict[str, str]) -> tuple | None:
+    """:func:`unit_key`, with a part that is a reference written as the name of
+    the row it refers to, where ``names`` holds one (:func:`_unit_names`). A
+    name is already normalised, and is taken as it is. With no names this is
+    :func:`unit_key` exactly - the merge compares ids it has rewritten itself."""
+    from common.schema_sections import references, unit_keys
 
     if not isinstance(row, dict):
         return None
+    refs = references(lob) if names else {}
     for key in unit_keys(lob).get(table, ()):
-        names = tuple(key) if isinstance(key, (list, tuple)) else (key,)
-        parts = tuple(_normalised(row.get(name), f"{table}[].{name}") for name in names)
+        fields = tuple(key) if isinstance(key, (list, tuple)) else (key,)
+        parts = tuple(
+            names[row[name]] if name in refs and isinstance(row.get(name), str) and row[name] in names
+            else _normalised(row.get(name), f"{table}[].{name}")
+            for name in fields)
         if all(part not in (None, "") for part in parts):
-            return (table, names, parts)
+            return (table, fields, parts)
     return None
 
 
@@ -194,24 +212,17 @@ def resolve_references(doc: Any, lob: str | list[str] | None) -> Any:
 
     ``applies_to: ["veh_2"]`` becomes ``["vehicles:vin=1hgcm82633a004352"]``:
     the same in a gold label and in an answer however each numbered its rows.
-    A reference to no row, or to a row with no unit key, stays as it was. A
-    copy; ``doc`` is not changed.
+    A unit key that itself holds a reference is written with the name of the
+    row it refers to: a building is ``buildings:location_ref=locations:
+    location_number=2,building_number=1``, not its writer's ``loc_2``, so a
+    link to a building does not change with how either side numbered its
+    locations. A reference to no row, or to a row with no unit key, stays as it
+    was. A copy; ``doc`` is not changed.
     """
-    from common.schema_sections import references, structural_ids
+    from common.schema_sections import references
 
-    ids = structural_ids(lob)
-    names: dict[str, str] = {}
-    if isinstance(doc, dict):
-        for table, spec in ids.items():
-            for row in doc.get(table) or []:
-                if not isinstance(row, dict) or not isinstance(row.get(spec["field"]), str):
-                    continue
-                key = unit_key(table, row, lob)
-                if key is not None:
-                    _, fields, values = key
-                    names[row[spec["field"]]] = (
-                        f"{table}:" + ",".join(f"{f}={v}" for f, v in zip(fields, values, strict=True)))
     refs = references(lob)
+    names = _unit_names(doc, lob) if isinstance(doc, dict) else {}
 
     def walk(node: Any) -> Any:
         if isinstance(node, list):
@@ -230,6 +241,36 @@ def resolve_references(doc: Any, lob: str | list[str] | None) -> Any:
         return out
 
     return walk(doc)
+
+
+def _unit_names(doc: dict[str, Any], lob: str | list[str] | None) -> dict[str, str]:
+    """Each unit row's id -> its name: its table and the first unit key it
+    states (``vehicles:vin=1hgcm82633a004352``).
+
+    A key part that is a reference is named by the row it refers to, so rows
+    are named again until no name changes: a building takes its location's
+    name whatever order the tables come in, and a longer chain of such keys
+    resolves the same way. The rounds are bounded by the number of tables, so
+    ids that refer to each other in a circle cannot loop.
+    """
+    from common.schema_sections import structural_ids
+
+    ids = structural_ids(lob)
+    names: dict[str, str] = {}
+    for _ in range(len(ids) + 1):
+        before = dict(names)
+        for table, spec in ids.items():
+            for row in doc.get(table) or []:
+                if not isinstance(row, dict) or not isinstance(row.get(spec["field"]), str):
+                    continue
+                key = _unit_key(table, row, lob, names)
+                if key is not None:
+                    _, fields, values = key
+                    names[row[spec["field"]]] = (
+                        f"{table}:" + ",".join(f"{f}={v}" for f, v in zip(fields, values, strict=True)))
+        if names == before:
+            break
+    return names
 
 
 def _normalised(value: Any, path: str) -> Any:
@@ -273,12 +314,19 @@ def comparable_view(doc: Any, lob: str | list[str] | None) -> Any:
     return strip(resolved)
 
 
+#: Fields holding a row's printed name: what identifies a row that has one.
+_PRINTED_NAMES = ("coverage_name", "name")
+
+
 def reference_pairs(doc: Any, lob: str | list[str] | None) -> list[tuple[Any, ...]]:
     """Every link in ``doc`` as ``(table, row identity, field, unit key)``.
 
-    The row is identified by its table's keys other than its references (a
-    coverage by its code and printed name), the unit by its own keys - so a
-    link counts as the same in two documents whatever either numbered.
+    The row is identified by its table's keys other than its references, the
+    unit by its own keys - so a link counts as the same in two documents
+    whatever either numbered. A coverage is known by its printed name, and by
+    its code only when no name is printed: a code is chosen from a list and
+    scored on its own (``coverage_code_accuracy``), and one wrong code must not
+    also lose the links the row got right.
     """
     from common.schema_sections import array_key, references
 
@@ -295,11 +343,17 @@ def reference_pairs(doc: Any, lob: str | list[str] | None) -> list[tuple[Any, ..
     for table, rows in resolved.items():
         if not isinstance(rows, list):
             continue
-        keys = [k for k in (*array_key(table, lob), "coverage_name", "name") if k not in link_fields]
+        keys = [k for k in (*array_key(table, lob), *_PRINTED_NAMES) if k not in link_fields]
         for row in rows:
             if not isinstance(row, dict):
                 continue
-            identity = tuple(_normalised(row.get(k), f"{table}[].{k}") for k in dict.fromkeys(keys))
+            named = any(_normalised(row.get(k), f"{table}[].{k}") is not None for k in _PRINTED_NAMES)
+            # A bare code (coverage_code) is left out - as None, so every row
+            # of the table keeps one shape - when the row prints a name.
+            identity = tuple(
+                None if named and k.endswith("_code") and not isinstance(row.get(k), dict)
+                else _normalised(row.get(k), f"{table}[].{k}")
+                for k in dict.fromkeys(keys))
             for field_name in refs:
                 value = row.get(field_name)
                 for target in value if isinstance(value, list) else [value] if value else []:

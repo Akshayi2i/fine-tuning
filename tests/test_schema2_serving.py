@@ -17,6 +17,7 @@ import pytest
 
 from artifact_registry.blob_client import BlobClient, InMemoryBackend
 from common.canonical import values_view, with_system_fields, without_bare_values
+from common.schemas import iter_validation_errors
 from common.structural_ids import resolve_references
 from inference_core.model_runner import Generation, ModelBackend, load_model
 from serving.doc_type_classifier import StaticClassifier
@@ -132,6 +133,9 @@ def test_replaying_the_training_targets_serves_the_gold_back():
     result, backend, answers = _serve_replay(gold, 3)
     assert set(backend.asked) == set(answers), "serving asked for windows training never built"
     assert result.schema_valid
+    # The JSON served, every key filled, and not only the answer before the
+    # fill: what schema_valid reports must be true of what is returned.
+    assert list(iter_validation_errors(result.extraction, "policy", None, "personal_auto")) == []
     served = _no_nulls(result.extraction)
     assert _comparable(served) == _comparable(gold)
     assert [c["coverage_id"] for c in result.extraction["coverages"]] == ["cov_1", "cov_2", "cov_3", "cov_4"]
@@ -158,6 +162,7 @@ def test_a_link_its_window_could_not_see_is_lost_but_the_rows_are_not():
     assert len(coverages) == 4
     assert all(not c.get("applies_to") for c in coverages)
     assert result.schema_valid
+    assert list(iter_validation_errors(result.extraction, "policy", None, "personal_auto")) == []
 
 
 # --------------------------------------------------------------------------
