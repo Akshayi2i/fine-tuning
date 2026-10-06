@@ -39,27 +39,61 @@ def _map() -> dict[str, Any]:
     return load_yaml(CONFIG_DIR / "schema_sections.yaml")
 
 
-def group_names() -> tuple[str, ...]:
+@lru_cache(maxsize=1)
+def _common_model_profile() -> dict[str, Any]:
+    """The map a common-model line is read with (the YAML's ``common_model``).
+
+    Its groups carry only their sections; title, task and page rule are the
+    ones the same group declares for every line, so a window's task, its pages
+    and its place in the merge order mean the same thing on both kinds of line.
+    """
+    block = _map().get("common_model") or {}
+    groups: dict[str, Any] = {}
+    for name, sections in (block.get("groups") or {}).items():
+        if name not in _map()["groups"]:
+            raise SectionMapError(
+                f"the common_model profile names group {name!r}, which the map does not declare"
+            )
+        groups[name] = {**_map()["groups"][name], "sections": sections}
+    order = [name for name in _map()["groups"] if name in groups]
+    return {**block, "groups": {name: groups[name] for name in order}}
+
+
+def _profile(lob: str | list[str] | None) -> dict[str, Any]:
+    """The section map ``lob`` is read with: the common-model profile for a
+    line whose schema composes the common model, the map above otherwise."""
+    from common.schemas import is_common_model
+
+    return _common_model_profile() if is_common_model("policy", None, lob) else _map()
+
+
+def group_names(lob: str | list[str] | None = None) -> tuple[str, ...]:
     """Every declared group, in declaration order.
 
     Order is the order windows are built in, so it is also the order a merge
     sees them. ``decl`` leads: the declarations value wins a conflict, and a
-    merge that reads it first can apply that rule by construction.
+    merge that reads it first can apply that rule by construction. A
+    common-model line's groups are a subset, in the same order.
     """
-    return tuple(_map()["groups"])
+    return tuple(_profile(lob)["groups"])
 
 
 def task_for(group: str) -> str:
     return str(_declared(group)["task"])
 
 
-def _declared(group: str) -> dict[str, Any]:
+def _declared(group: str, lob: str | list[str] | None = None) -> dict[str, Any]:
     try:
-        return _map()["groups"][group]
+        return _profile(lob)["groups"][group]
     except KeyError:
         raise SectionMapError(
-            f"no section group {group!r}; declared groups: {list(group_names())}"
+            f"no section group {group!r}; declared groups: {list(group_names(lob))}"
         ) from None
+
+
+def _excluded(section: str, profile: dict[str, Any]) -> bool:
+    """Sections no group asks for: annotations and the full-text tier."""
+    return section.startswith("fideon:") or section in (profile.get("exclude") or ())
 
 
 def sections_for(group: str, lob: str | list[str] | None = None) -> tuple[str, ...]:
@@ -76,15 +110,19 @@ def sections_for(group: str, lob: str | list[str] | None = None) -> tuple[str, .
     """
     from common.schemas import load_schema
 
-    properties = list(load_schema("policy", None, lob).get("properties") or {})
-    declared = _declared(group)["sections"]
+    profile = _profile(lob)
+    properties = [
+        name for name in load_schema("policy", None, lob).get("properties") or {}
+        if not _excluded(name, profile)
+    ]
+    declared = _declared(group, lob)["sections"]
 
     if declared == REMAINDER:
         claimed = {
             name
-            for other in group_names()
-            if _declared(other)["sections"] != REMAINDER
-            for name in _declared(other)["sections"]
+            for other in group_names(lob)
+            if _declared(other, lob)["sections"] != REMAINDER
+            for name in _declared(other, lob)["sections"]
         }
         return tuple(name for name in properties if name not in claimed)
 
@@ -100,7 +138,7 @@ def groups_for(lob: str | list[str] | None = None) -> tuple[str, ...]:
     with an empty schema and ask the model for ``{}`` — a wasted call whose
     output is indistinguishable from a page holding nothing.
     """
-    return tuple(name for name in group_names() if sections_for(name, lob))
+    return tuple(name for name in group_names(lob) if sections_for(name, lob))
 
 
 def reads_declarations(group: str) -> bool:
@@ -141,7 +179,7 @@ def pages_for(
     return sorted(pages) or sorted(routed_pages)[:1]
 
 
-def array_key(section: str) -> tuple[str, ...]:
+def array_key(section: str, lob: str | list[str] | None = None) -> tuple[str, ...]:
     """The fields that identify one row of ``section``, for de-duplication.
 
     An array is asked over several page windows, so a table spanning a window
@@ -150,7 +188,23 @@ def array_key(section: str) -> tuple[str, ...]:
     match. A prefix is not stripped: ``"LOC 1"`` and ``"1"`` stay distinct,
     because stripping would also merge ``"LOC 1"`` with ``"BLDG 1"``.
     """
-    return tuple(_map().get("array_keys", {}).get(section, ()))
+    return tuple(_profile(lob).get("array_keys", {}).get(section, ()))
+
+
+def structural_ids(lob: str | list[str] | None = None) -> dict[str, dict[str, str]]:
+    """Table -> ``{field, prefix}`` of the structural id its rows carry, for a
+    common-model line; empty for a self-contained one."""
+    return dict(_profile(lob).get("ids") or {})
+
+
+def references(lob: str | list[str] | None = None) -> dict[str, tuple[str, ...]]:
+    """Reference field -> the tables whose ids it can hold (common-model lines)."""
+    return {k: tuple(v) for k, v in (_profile(lob).get("references") or {}).items()}
+
+
+def unit_keys(lob: str | list[str] | None = None) -> dict[str, tuple[Any, ...]]:
+    """Unit table -> the keys that identify a row, first stated one wins."""
+    return {k: tuple(v) for k, v in (_profile(lob).get("unit_keys") or {}).items()}
 
 
 def assert_sections_cover_the_schema(lob: str | list[str] | None = None) -> None:
@@ -165,14 +219,25 @@ def assert_sections_cover_the_schema(lob: str | list[str] | None = None) -> None
     A group naming a section the schema does not have is also refused: it means
     the client renamed something and this map still describes the old shape.
     """
-    from common.schemas import load_schema
+    from common.schemas import _common_model, is_common_model, load_schema
 
-    properties = set(load_schema("policy", None, lob).get("properties") or {})
+    profile = _profile(lob)
+    properties = {
+        name for name in load_schema("policy", None, lob).get("properties") or {}
+        if not _excluded(name, profile)
+    }
+    # A common-model line uses some of the shared blocks; a group may name the
+    # others. A name that is no block at all is still refused, as a typo would be.
+    blocks: set[str] = set()
+    if is_common_model("policy", None, lob):
+        common = _common_model()
+        blocks = set(common.get("fideon:envelope_blocks") or []) | set(
+            common.get("fideon:building_blocks") or [])
     seen: dict[str, str] = {}
-    for group in group_names():
-        declared = _declared(group)["sections"]
+    for group in group_names(lob):
+        declared = _declared(group, lob)["sections"]
         if declared != REMAINDER:
-            missing = set(declared) - properties
+            missing = set(declared) - properties - blocks
             if missing and group != "dtd":
                 raise SectionMapError(
                     f"group {group!r} names {sorted(missing)}, which {lob or 'the fallback'} does "

@@ -86,7 +86,7 @@ groups:
     # What KIND of policy document this is - declarations, renewal offer,
     # cancellation, endorsement. That is stated near the front, with the
     # declarations, which is why it shares their page rule rather than the
-    # routed set. Only ocean_marine, personal_auto and personal_umbrella carry it.
+    # routed set. Only a few self-contained lines carry it.
     sections:
       - document_type_detail
 
@@ -122,3 +122,81 @@ array_keys:
   deductibles: [applies_to, deductible_type]
   loss_history: [claim_number, loss_date]
   state_notices: [state, notice_title]
+
+# --------------------------------------------------------------------------
+# The common-model lines (SPEC_21 overlays on common_model.json)
+# --------------------------------------------------------------------------
+#
+# A line whose schema composes the common model (common.schemas.is_common_model)
+# is read with this profile instead of the map above, which stays exactly as it
+# is for the self-contained lines. Group names, tasks and page rules are the
+# ones declared above: only the sections differ, so the merge's group order and
+# every page rule apply unchanged.
+#
+# WHY THESE GROUPS. A common-model line has no line block: its blocks are shared
+# tables whose rows refer to each other by id - a coverage applies to veh_2, a
+# building sits at loc_1, a lienholder holds an interest in veh_1. A reference
+# only means something next to the row it names, so every table that refers to
+# a risk unit is read in the same group as the units: `arrays`. That is also
+# where the coverage table is read, and so where a printed value with no field
+# (additional_fields) is decided. The declarations keep the policy-level
+# objects; the premium stays with them, so the declarations value still wins a
+# conflict, and its per-unit items keep only their description and code.
+common_model:
+  groups:
+    decl: [document, carrier, producer, named_insured, policy, lob_parts, premium, billing]
+    arrays: [coverages, deductibles, interested_parties, locations, buildings, vehicles,
+             drivers, watercraft, scheduled_items, rating_modifiers, underlying_insurance,
+             additional_fields]
+    lineblk: remainder
+
+  # Never asked for: the full-text tier is the text path's, not the model's.
+  # (Every `fideon:` property is left out too.)
+  exclude: [text_sections]
+
+  # The structural id each table's rows carry, and its prefix. The model numbers
+  # them from 1 in printed order; the pipeline renumbers them across windows.
+  # drv, wc and item are this repository's choice until SPEC_21 names them.
+  ids:
+    lob_parts: {field: part_id, prefix: part}
+    locations: {field: unit_id, prefix: loc}
+    buildings: {field: unit_id, prefix: bldg}
+    vehicles: {field: unit_id, prefix: veh}
+    drivers: {field: unit_id, prefix: drv}
+    watercraft: {field: unit_id, prefix: wc}
+    scheduled_items: {field: unit_id, prefix: item}
+    coverages: {field: coverage_id, prefix: cov}
+
+  # Fields that hold another row's id, and the tables those ids can name. A
+  # slice drops a reference field whose tables are all read by another group:
+  # the window could only guess at an id it cannot see.
+  references:
+    applies_to: [locations, buildings, vehicles, drivers, watercraft, scheduled_items]
+    location_ref: [locations]
+    garaging_location_ref: [locations]
+    attached_to_ref: [vehicles, watercraft]
+    part: [lob_parts]
+
+  # Identifying keys, as above. A reference field is compared after it is
+  # resolved to the units' own keys (the ids differ window to window).
+  array_keys:
+    lob_parts: [lob]
+    coverages: [coverage_code, applies_to, part]
+    deductibles: [deductible_type, applies_to_coverages, applies_to]
+    interested_parties: [role, name]
+    rating_modifiers: [modifier_type, description]
+    underlying_insurance: [coverage_code, policy_number]
+    forms_and_endorsements: [form_number, edition_date]
+    additional_fields: [label, value]
+
+  # What identifies a risk unit across windows: the FIRST of these that a row
+  # states (a list inside means those fields together). Unlike array_keys, a
+  # row carrying only its VIN and a fragment carrying only its vehicle number
+  # are still compared on whatever they share.
+  unit_keys:
+    locations: [location_number, address]
+    buildings: [[location_ref, building_number]]
+    vehicles: [vin, vehicle_number, [year, make, model]]
+    drivers: [license_number, driver_number, name]
+    watercraft: [hin, watercraft_number, [year, make, model]]
+    scheduled_items: [item_number, [category, description]]

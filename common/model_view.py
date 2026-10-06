@@ -95,6 +95,8 @@ def model_view(bundle: dict[str, Any]) -> dict[str, Any]:
     if lob and "LobPart" in defs and "lob" in defs["LobPart"].get("properties", {}):
         defs["LobPart"]["properties"]["lob"] = {"const": lob, "description": "Line of business of the part."}
     _apply_descriptions(defs, config.get("descriptions") or {})
+    if lob:
+        _apply_id_patterns(schema, defs, lob)
     for name, defn in list(defs.items()):
         variants = _as_variants(defn, defs)
         if variants is not None:
@@ -213,6 +215,19 @@ def _description_target(defs: dict[str, Any], path: str) -> dict[str, Any] | Non
         return node
     target = (node.get("properties") or {}).get(field)
     return target if isinstance(target, dict) else None
+
+
+def _apply_id_patterns(schema: dict[str, Any], defs: dict[str, Any], lob: str) -> None:
+    """Each table's structural id held to its own prefix (``veh_2``, not ``loc_2``),
+    from the section map's ``ids``. The common model allows any ``word_N``."""
+    from common.schema_sections import structural_ids
+
+    for table, spec in structural_ids(lob).items():
+        block = _resolved((schema.get("properties") or {}).get(table), defs)
+        row = _resolved(block.get("items"), defs) if block.get("type") == "array" else {}
+        field = (row.get("properties") or {}).get(spec["field"])
+        if isinstance(field, dict):
+            field["pattern"] = f"^{spec['prefix']}_[0-9]+$"
 
 
 def _as_variants(defn: Any, defs: dict[str, Any]) -> dict[str, Any] | None:

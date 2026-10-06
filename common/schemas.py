@@ -522,10 +522,60 @@ def _schema_for_key(key: str) -> dict[str, Any]:
     if not name:
         return schema
     sliced = _slice_sections(schema, name, key)
+    if not source.common_model:
+        return sliced
     # A bundle carries the definitions of every block; a slice keeps only those
     # its own sections reach, or each window's prompt would describe the whole
     # common model. The self-contained files keep their $defs whole, as before.
-    return _prune_definitions(sliced) if source.common_model else sliced
+    lob = key.split(":", 1)[1].split(SLICE_SEPARATOR)[0]
+    return _prune_definitions(_without_cross_group_references(sliced, lob))
+
+
+def _without_cross_group_references(sliced: dict[str, Any], lob: str) -> dict[str, Any]:
+    """A slice without the reference fields whose tables another group reads.
+
+    A window could only guess at the id of a row it was not asked for: a
+    premium item's vehicle in the declarations window, a form's unit in the
+    forms window. The field is left out of that window's schema, so the model is
+    neither shown it nor able to write it, and the target builder leaves it out
+    the same way (the reference dangles in that window).
+    """
+    import copy
+
+    from common.schema_sections import references
+
+    present = set(sliced.get("properties") or {})
+    dropped = {
+        field for field, tables in references(lob).items() if not present & set(tables)
+    }
+    if not dropped:
+        return sliced
+    definitions = copy.deepcopy(sliced.get("$defs") or {})
+    for definition in definitions.values():
+        _drop_properties(definition, dropped)
+    return {**sliced, "$defs": definitions}
+
+
+def _drop_properties(node: Any, names: set[str]) -> None:
+    """Remove ``names`` from every object schema within ``node``, in place."""
+    if isinstance(node, list):
+        for item in node:
+            _drop_properties(item, names)
+        return
+    if not isinstance(node, dict):
+        return
+    properties = node.get("properties")
+    if isinstance(properties, dict):
+        for name in names & set(properties):
+            del properties[name]
+        if isinstance(node.get("required"), list):
+            node["required"] = [r for r in node["required"] if r not in names]
+    for key, value in node.items():
+        if key != "properties":
+            _drop_properties(value, names)
+        else:
+            for sub in value.values():
+                _drop_properties(sub, names)
 
 
 def _prune_definitions(schema: dict[str, Any]) -> dict[str, Any]:

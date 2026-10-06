@@ -48,7 +48,12 @@ def test_every_section_is_asked_for_by_exactly_one_group(lob):
 
 @pytest.mark.parametrize("lob", _registered_lobs())
 def test_a_slice_is_a_subset_of_the_whole_schema(lob):
-    whole = set(schemas.load_schema("policy", None, lob).get("properties") or {})
+    from common.schema_sections import _excluded, _profile
+
+    # Annotations and (on the common-model lines) the full-text tier are asked
+    # for by no group, by design.
+    whole = {name for name in schemas.load_schema("policy", None, lob).get("properties") or {}
+             if not _excluded(name, _profile(lob))}
     seen: set[str] = set()
     for group in groups_for(lob):
         sections = set(sections_for(group, lob))
@@ -220,3 +225,91 @@ def test_every_shared_array_has_an_identifying_key():
     it needs a key per array."""
     for section in sections_for("arrays", "gl"):
         assert array_key(section), f"{section} has no identifying key to de-duplicate on"
+
+
+# --------------------------------------------------------------------------
+# The common-model lines (configs/schema_sections.yaml `common_model`)
+# --------------------------------------------------------------------------
+
+COMMON_MODEL_LINES = (
+    "homeowners", "personal_auto", "dwelling_fire", "ocean_marine",
+    "motorcycle", "recreational_vehicle", "personal_umbrella",
+)
+
+
+@pytest.mark.parametrize("lob", COMMON_MODEL_LINES)
+def test_a_common_model_line_is_read_in_three_groups(lob):
+    assert groups_for(lob) == ("decl", "arrays", "lineblk")
+    # The remainder is the forms list: no line block, and never an annotation
+    # or the full-text tier.
+    assert sections_for("lineblk", lob) == ("forms_and_endorsements",)
+    for group in groups_for(lob):
+        for section in sections_for(group, lob):
+            assert not section.startswith("fideon:") and section != "text_sections"
+
+
+@pytest.mark.parametrize("lob", COMMON_MODEL_LINES)
+def test_every_table_that_refers_to_a_unit_is_read_with_the_units(lob):
+    from common.schema_sections import references
+
+    arrays = set(sections_for("arrays", lob))
+    for table in ("coverages", "deductibles", "interested_parties", "rating_modifiers"):
+        if table in schemas.load_schema("policy", None, lob)["properties"]:
+            assert table in arrays
+    assert set(references(lob)["applies_to"]) & set(schemas.load_schema("policy", None, lob)["properties"]) \
+        <= arrays
+
+
+@pytest.mark.parametrize("lob", COMMON_MODEL_LINES)
+def test_no_window_is_shown_a_reference_it_cannot_resolve(lob):
+    """A reference field stays in a window's schema only if a table it can name
+    is read in that window."""
+    from common.schema_sections import references
+
+    for group in groups_for(lob):
+        present = set(sections_for(group, lob))
+        text = schemas.schema_text("policy", None, lob, group)
+        for field, tables in references(lob).items():
+            if f'"{field}"' in text:
+                assert present & set(tables), f"{lob}/{group} shows {field} but reads none of {tables}"
+
+
+@pytest.mark.parametrize("lob", COMMON_MODEL_LINES)
+def test_every_common_model_slice_compiles_and_is_one_xgrammar_supports(lob):
+    from jsonschema import Draft202012Validator
+
+    from tests.test_vllm_patches import _xgrammar_unsupported
+
+    for group in groups_for(lob):
+        sliced = schemas.resolved_schema("policy", None, lob, group)
+        Draft202012Validator.check_schema(sliced)
+        assert not _xgrammar_unsupported(sliced), f"{lob}/{group}"
+        assert "fideon:" not in json.dumps(sliced)
+
+
+def test_each_table_holds_its_own_id_prefix():
+    defs = schemas.resolved_schema("policy", None, "personal_auto", "arrays")["$defs"]
+    assert defs["Vehicle"]["properties"]["unit_id"]["pattern"] == "^veh_[0-9]+$"
+    assert defs["Driver"]["properties"]["unit_id"]["pattern"] == "^drv_[0-9]+$"
+    assert defs["Location"]["properties"]["unit_id"]["pattern"] == "^loc_[0-9]+$"
+
+
+@pytest.mark.parametrize("lob", COMMON_MODEL_LINES)
+def test_a_schedule_window_still_holds_several_pages(lob):
+    from data_pipeline.dataset_builder.expand_tasks import pages_per_extraction_call
+
+    assert pages_per_extraction_call("policy", None, lob, "arrays") >= 2
+
+
+def test_a_common_model_group_keeps_its_task_and_page_rule():
+    from common.schema_sections import reads_declarations, task_for
+
+    assert task_for("decl") == "policy_declarations" and reads_declarations("decl")
+    assert task_for("arrays") == "policy_schedule" and not reads_declarations("arrays")
+    assert group_names("homeowners") == ("decl", "arrays", "lineblk")
+    assert group_names("gl") == group_names()
+
+
+def test_the_common_model_keys_are_their_own():
+    assert array_key("interested_parties", "homeowners") == ("role", "name")
+    assert array_key("interested_parties", "gl") == ("name", "party_type")
