@@ -141,3 +141,19 @@ def test_a_dry_run_reports_everything_and_writes_nothing(tmp_path):
     report = prepare_twin_bundles(root, out, dry_run=True)
     assert report.written == {("train", "synthetic"): 2} and report.corrections["carrier missing"] == 1
     assert not out.exists() and "dry run" in report.describe()
+
+
+def test_a_twin_whose_two_renders_are_the_same_file_is_one_scanned_document(tmp_path):
+    """A scanned seed's twins are delivered as the same scan in both folders."""
+    import shutil
+
+    root = _delivery(tmp_path, {1: _gold()})
+    row = next(csv.DictReader((root / "split_manifest.csv").open(encoding="utf-8")))
+    shutil.copyfile(root / row["scanned"], root / row["digital"])
+    out = tmp_path / "bundles"
+    (out / Path(row["digital"]).stem).mkdir(parents=True)                # left by an earlier run
+    report = prepare_twin_bundles(root, out)
+    assert report.written == {("train", "synthetic"): 1} and report.corrections["renders identical"] == 1
+    assert not (out / Path(row["digital"]).stem).exists()
+    meta = json.loads((out / Path(row["scanned"]).stem / "metadata.json").read_text(encoding="utf-8"))
+    assert meta["render_mode"] == "scanned"

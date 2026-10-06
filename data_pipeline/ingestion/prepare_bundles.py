@@ -36,7 +36,8 @@ the fix living only in a folder someone deleted by hand.
 digital, scanned, gold) delivers each twin twice - a digital PDF and a scanned
 rendering of it - with one gold. Each render becomes a document of its own
 (``render_mode`` digital or scanned, ``sample`` the twin's number, the seed as
-the family), both reading one gold. The gold the bundles hold is corrected
+the family), both reading one gold - one document when the two are the same
+file, as a scanned seed's twins are. The gold the bundles hold is corrected
 where the delivered one cannot be trained on as it is (:func:`corrected_gold`),
 each change listed in ``<out>/corrections.csv``; the delivery is never changed.
 A gold still outside its line's schema after that is left out, with the reason.
@@ -272,6 +273,13 @@ def prepare_twin_bundles(
             report.skipped[f"gold outside its line's schema after correction: {problem}"] += 2
             report.correction_rows.append((row["twin"], "left out", problem))
             continue
+        if _same_file(renders[0][1], renders[1][1]):
+            # A scanned seed's twin is a scan in both folders, byte for byte: one
+            # document, a scan, not the same PDF twice under two render modes.
+            notes.append(("renders identical", f"{renders[0][1].name} is the scan; one document"))
+            if not dry_run and (out / renders[0][1].stem).is_dir():
+                shutil.rmtree(out / renders[0][1].stem)          # made by an earlier run
+            renders = renders[1:]
         for kind, detail in notes:
             report.corrections[kind] += 1
             report.correction_rows.append((row["twin"], kind, detail))
@@ -318,6 +326,15 @@ def prepare_twin_bundles(
             writer.writerow(["twin", "correction", "detail"])
             writer.writerows(report.correction_rows)
     return report
+
+
+def _same_file(a: Path, b: Path) -> bool:
+    """Whether two files hold the same bytes (size first, then a hash)."""
+    import hashlib
+
+    if a.stat().st_size != b.stat().st_size:
+        return False
+    return hashlib.sha256(a.read_bytes()).digest() == hashlib.sha256(b.read_bytes()).digest()
 
 
 def read_recodes(path: Path = RECODES) -> dict[str, dict[str, str]]:
