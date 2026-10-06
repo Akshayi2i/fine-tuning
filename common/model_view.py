@@ -18,7 +18,8 @@ held to, something narrower:
   value they require; and the keywords xgrammar refuses (``minProperties``,
   ``uniqueItems``, ...) dropped;
 * the line's coverage codes, each with its meaning, as the only values a code
-  field of the line's own coverages takes;
+  field of the line's own coverages takes - an umbrella's underlying policy,
+  and its limits, code another line's coverages and keep the client's string;
 * descriptions written for the model where the client's are written for schema
   authors (``configs/model_view.yaml``).
 
@@ -60,6 +61,19 @@ CODE_FIELDS: dict[str, tuple[str, ...]] = {
 }
 CODE_LIST_FIELDS: dict[str, tuple[str, ...]] = {"Deductible": ("applies_to_coverages",)}
 
+#: A table that gets its own copy of a shared definition: (definition, field)
+#: -> (shared definition, the copy). An underlying policy's limits are the
+#: client's Limit, but a percentage limit there is a percentage of the
+#: underlying policy's coverage (40% of X_VEHICLE_LIABILITY) - another line's
+#: code, like the policy's own ``coverage_code``. The copy is not in
+#: :data:`CODE_FIELDS`, so its ``basis_coverage_code`` keeps the client's plain
+#: string, while a coverage's own limit stays held to the line's list. Every
+#: other step treats the copy as the definition it copies: it is split into the
+#: same variants, and a description written for ``Limit`` describes it too.
+OWN_COPIES: dict[tuple[str, str], tuple[str, str]] = {
+    ("UnderlyingPolicy", "limits"): ("Limit", "UnderlyingLimit"),
+}
+
 COVERAGE_CODE_DEF = "CoverageCode"
 
 #: Keywords the decoder cannot use: xgrammar refuses the first four outright
@@ -96,12 +110,13 @@ def model_view(bundle: dict[str, Any]) -> dict[str, Any]:
     for name, defn in list(defs.items()):
         if _is_value_type(defn):
             defs[name] = _narrowed_value(defn)
+    copies = _own_copies(defs)
     if names:
         defs[COVERAGE_CODE_DEF] = _coverage_code_def(names, config.get("coverage_code_style", "oneof"))
         _point_code_fields(defs)
     if lob and "LobPart" in defs and "lob" in defs["LobPart"].get("properties", {}):
         defs["LobPart"]["properties"]["lob"] = {"const": lob, "description": "Line of business of the part."}
-    _apply_descriptions(defs, config.get("descriptions") or {})
+    _apply_descriptions(defs, _with_copies(config.get("descriptions") or {}, copies))
     if lob:
         _apply_id_patterns(schema, defs, lob)
     for name, defn in list(defs.items()):
@@ -168,6 +183,35 @@ def _narrowed_value(defn: dict[str, Any]) -> dict[str, Any]:
     }
     if defn.get("description"):
         out["description"] = defn["description"]
+    return out
+
+
+def _own_copies(defs: dict[str, Any]) -> dict[str, str]:
+    """Give each table in :data:`OWN_COPIES` its own copy of the definition its
+    rows share, before any code field is pointed at the line's list. Returns
+    copy -> shared, for the copies made: a bundle or slice without the table,
+    or whose rows are not the shared definition, gets none."""
+    made: dict[str, str] = {}
+    for (owner, field), (shared, copy_name) in OWN_COPIES.items():
+        prop = ((defs.get(owner) or {}).get("properties") or {}).get(field)
+        items = prop.get("items") if isinstance(prop, dict) else None
+        if not (isinstance(items, dict) and items.get("$ref") == f"#/$defs/{shared}" and shared in defs):
+            continue
+        defs[copy_name] = copy.deepcopy(defs[shared])
+        prop["items"] = {**items, "$ref": f"#/$defs/{copy_name}"}
+        made[copy_name] = shared
+    return made
+
+
+def _with_copies(overrides: dict[str, str | None], copies: dict[str, str]) -> dict[str, str | None]:
+    """``overrides`` with each one written for a shared definition repeated for
+    its copies, so the model reads the same text on both."""
+    out = dict(overrides)
+    for copy_name, shared in copies.items():
+        for path, text in overrides.items():
+            name, dot, field = path.partition(".")
+            if name == shared:
+                out.setdefault(f"{copy_name}{dot}{field}", text)
     return out
 
 

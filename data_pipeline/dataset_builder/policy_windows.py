@@ -95,7 +95,9 @@ class TargetReport:
     unread: list[str] = field(default_factory=list)
     #: Row fragments left out of a window because they hold none of their row's
     #: identifiers there (a premium with no coverage name): no window, and no
-    #: merge, can tell which row such a fragment belongs to.
+    #: merge, can tell which row such a fragment belongs to. On a common-model
+    #: line only a fragment whose every value is also printed outside the
+    #: window, where its row is taught, is left out.
     orphaned: list[str] = field(default_factory=list)
     #: Values with no recorded page that were given the one page whose OCR
     #: text prints them (:func:`with_inferred_pages`).
@@ -473,11 +475,17 @@ def _within(
             # vehicle whose VIN is on page 6 and whose coverages table is on
             # page 7 is real content of the page-7 window. Dropping it taught
             # those coverages in no window at all. The serving merge joins such
-            # a fragment to its row when only one row can own it. On a
-            # common-model line only a table identified here spares it: a
-            # coverage's limits carry no printed identifier of their own, so a
-            # limit amount alone would keep a nameless coverage in the window.
-            spared = (_holds_identified_rows(item, row, f"{path}[{i}]", lob) if common_model
+            # a fragment to its row when only one row can own it.
+            #
+            # On a common-model line a fragment is an orphan only when nothing
+            # is lost by it: every value it holds is also cited on a page
+            # outside this window, where the row can be taught whole (a premium
+            # printed again on a summary page). A coverage split at the window
+            # boundary - its name at the foot of page 3, its limits and premium
+            # at the top of page 4 - holds values no other window shows, so it
+            # is taught here, or they are taught nowhere.
+            spared = ((_holds_identified_rows(item, row, f"{path}[{i}]", lob)
+                       or _cited_only_here(item, pages, plan)) if common_model
                       else _holds_rows(row))
             if keys and _identified(item, keys) and not _identified(row, keys) and not spared:
                 if report is not None:
@@ -636,6 +644,25 @@ def _holds_identified_rows(item: dict[str, Any], row: dict[str, Any], path: str,
         keys = _row_identifiers(item.get(key) or [], f"{path}.{key}", lob=lob, common_model=True)
         if keys and any(_identified(r, keys) for r in value):
             return True
+    return False
+
+
+def _cited_only_here(node: Any, pages: set[int], plan: PolicyWindowPlan) -> bool:
+    """Whether the label's row ``node`` holds a stated value, nested rows
+    included, that this window teaches and no page outside it cites - a value
+    that, left out here, no window would teach. Read on the label, not the
+    fragment: the fragment's ``page_ref`` is already narrowed to these pages.
+    A value with no page is in the window only when the window is the whole
+    document (:func:`_on_pages`), and then it is cited nowhere else."""
+    if is_field_value(node):
+        if node.get("raw") is None and node.get("parsed") is None:
+            return False
+        refs = {int(p) for p in node.get("page_ref") or []}
+        return refs <= pages if refs else plan.single
+    if isinstance(node, dict):
+        return any(_cited_only_here(value, pages, plan) for value in node.values())
+    if isinstance(node, list):
+        return any(_cited_only_here(value, pages, plan) for value in node)
     return False
 
 

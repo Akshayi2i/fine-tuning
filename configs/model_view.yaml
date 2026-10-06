@@ -11,7 +11,9 @@
 # so a fixed upstream description is not shadowed by a stale copy here.
 #
 # Keys: "Definition" or "Definition.field", as named in common_model.json $defs.
-# null removes the description.
+# null removes the description. An entry for a definition the model view copies
+# (Limit, whose copy UnderlyingLimit holds an umbrella's underlying limits:
+# common.model_view.OWN_COPIES) describes the copy too.
 
 # How the line's coverage codes are offered: "oneof" (each code with its meaning,
 # once) or "enum" (codes, with the meanings in one description). "enum" is the
