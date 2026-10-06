@@ -379,9 +379,16 @@ def process_document(
             and existing.get("ocr_device") == env.device
             and existing.get("resolution_cap_px") == cap
         )
-        if unchanged and not _needs_ocr_now(existing, client, doc_type, source_id, tenant_id):
-            log.info("skipping %s: already processed and unchanged", source_id)
-            return existing
+        if unchanged:
+            redo = _needs_ocr_now(existing, client, doc_type, source_id, tenant_id)
+            if not redo:
+                if redo is False and _rules_of(existing) < OCR_RULES_VERSION:
+                    # Re-checked against the current rules and it stands: recorded,
+                    # so the next run does not fetch the PDF to check it again.
+                    existing = {**existing, "drawn_check": True, "ocr_rules": OCR_RULES_VERSION}
+                    client.write_json(meta_key, existing)
+                log.info("skipping %s: already processed and unchanged", source_id)
+                return existing
 
     raw_meta = client.read_json(paths.raw_metadata(doc_type, source_id, tenant_id))
     pdf_bytes = client.read_bytes(paths.raw_pdf(doc_type, source_id, tenant_id))
@@ -437,23 +444,35 @@ def process_document(
     return ocr_meta
 
 
+def _rules_of(meta: dict[str, Any]) -> int:
+    """The OCR_RULES_VERSION a stored reading was made under."""
+    return int(meta.get("ocr_rules", 1 if meta.get("drawn_check") else 0))
+
+
 def _needs_ocr_now(existing: dict[str, Any], client: BlobClient, doc_type: str, source_id: str,
-                   tenant_id: str | None) -> bool:
+                   tenant_id: str | None) -> bool | None:
     """Whether a stored reading was made from the text layer under older reading
     rules (OCR_RULES_VERSION) that the current rules send through OCR: a native
     PDF whose figures are drawn (SPEC_05 §4.1), or a searchable scan whose
     invisible OCR layer passed for a text layer. Only those are redone - OCR is
-    the expensive part."""
-    rules = existing.get("ocr_rules", 1 if existing.get("drawn_check") else 0)
-    if rules >= OCR_RULES_VERSION or existing.get("read_by_ocr"):
+    the expensive part.
+
+    False when the reading stands under the current rules - made under them, or
+    re-checked against them just now; None when it is kept unchecked (read by
+    OCR, or a check could not run), so a later run asks again."""
+    rules = _rules_of(existing)
+    if rules >= OCR_RULES_VERSION:
         return False
+    if existing.get("read_by_ocr"):
+        return None
     from data_pipeline.ocr import modality
 
     try:
         pdf = client.read_bytes(paths.raw_pdf(doc_type, source_id, tenant_id))
     except Exception as exc:  # noqa: BLE001 - an unreadable PDF is OCR's to report, not the skip check's
         log.warning("%s: could not re-check how it is read (%s); keeping the stored reading", source_id, exc)
-        return False
+        return None
+    checked = True
     for reason, check in (("it is a scan (no visible text layer)", lambda: modality.detect_modality(pdf)
                            == modality.SCANNED and not existing.get("is_scanned")),
                           ("its figures are drawn", lambda: rules < 1 and modality.data_is_drawn(pdf))):
@@ -464,7 +483,8 @@ def _needs_ocr_now(existing: dict[str, Any], client: BlobClient, doc_type: str, 
                 return True
         except Exception as exc:  # noqa: BLE001 - a check that cannot run keeps the stored reading
             log.warning("%s: re-check failed (%s); keeping the stored reading", source_id, exc)
-    return False
+            checked = False
+    return False if checked else None
 
 
 def process_batch(

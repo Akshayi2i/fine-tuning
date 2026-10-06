@@ -527,10 +527,16 @@ def test_a_reading_from_before_the_drawn_figure_check_is_redone_only_where_figur
            if k not in ("drawn_check", "read_by_ocr", "ocr_rules")}
     ocr_client.write_json(meta_key, old)                                   # as an older version wrote it
 
-    monkeypatch.setattr(modality, "detect_modality", lambda pdf: modality.NATIVE)
+    checks = []
+    monkeypatch.setattr(modality, "detect_modality", lambda pdf: checks.append(1) or modality.NATIVE)
     monkeypatch.setattr(modality, "data_is_drawn", lambda pdf: False)
     run_mineru.process_document("policy", "policy_0001", ocr_client, engine)
     assert len(engine.calls) == 1                                          # not drawn: kept
+    assert ocr_client.read_json(meta_key)["ocr_rules"] == run_mineru.OCR_RULES_VERSION   # and recorded
+    run_mineru.process_document("policy", "policy_0001", ocr_client, engine)
+    assert len(engine.calls) == 1 and len(checks) == 1                     # so not checked again
+
+    ocr_client.write_json(meta_key, old)
     monkeypatch.setattr(modality, "data_is_drawn", lambda pdf: True)
     run_mineru.process_document("policy", "policy_0001", ocr_client, engine)
     assert len(engine.calls) == 2                                          # drawn: read again
@@ -560,8 +566,33 @@ def test_a_reading_from_before_the_visible_text_rule_is_redone_where_it_is_a_sca
     monkeypatch.setattr(modality, "detect_modality", lambda pdf: modality.NATIVE)
     run_mineru.process_document("policy", "policy_0001", ocr_client, engine)
     assert len(engine.calls) == 1                                          # still digital: kept
+    assert ocr_client.read_json(meta_key)["ocr_rules"] == run_mineru.OCR_RULES_VERSION
+
+    ocr_client.write_json(meta_key, rules_1)
     monkeypatch.setattr(modality, "detect_modality", lambda pdf: modality.SCANNED)
     run_mineru.process_document("policy", "policy_0001", ocr_client, engine)
     assert len(engine.calls) == 2                                          # a scan after all: read again
     run_mineru.process_document("policy", "policy_0001", ocr_client, engine)
     assert len(engine.calls) == 2
+
+
+def test_a_reading_whose_recheck_cannot_run_is_kept_and_checked_again_next_time(ocr_client, monkeypatch):
+    from data_pipeline.ocr import modality
+
+    monkeypatch.setattr(run_mineru, "current_environment",
+                        lambda device=None, strict=True: mv.OcrEnvironment("1.4.2", "cuda"))
+    _seed_raw_document(ocr_client)
+    engine = StubEngine()
+    run_mineru.process_document("policy", "policy_0001", ocr_client, engine)
+    meta_key = paths.ocr_meta("policy", "policy_0001")
+    rules_1 = {k: v for k, v in ocr_client.read_json(meta_key).items() if k != "ocr_rules"}
+    rules_1.update(drawn_check=True, read_by_ocr=False, is_scanned=False)
+    ocr_client.write_json(meta_key, rules_1)
+
+    def broken(pdf):
+        raise RuntimeError("cannot read it")
+
+    monkeypatch.setattr(modality, "detect_modality", broken)
+    run_mineru.process_document("policy", "policy_0001", ocr_client, engine)
+    assert len(engine.calls) == 1                                          # kept
+    assert "ocr_rules" not in ocr_client.read_json(meta_key)              # not recorded as checked
