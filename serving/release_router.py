@@ -66,13 +66,15 @@ class ServedRelease:
         return self.doc_types or tuple(ACTIVE_DOC_TYPES)
 
     def covers_lob(self, lob: object) -> bool:
-        """Every line when unrestricted; otherwise all of the document's lines."""
+        """Every line when unrestricted; otherwise all of the document's lines,
+        and never a package of common-model lines (common.scopes.common_model_package):
+        that is read against another shape than the release's adapter learned."""
         if not self.lines:
             return True
-        from common.scopes import lob_lines
+        from common.scopes import common_model_package, lob_lines
 
         found = lob_lines(lob)
-        return bool(found) and found <= set(self.lines)
+        return bool(found) and found <= set(self.lines) and not common_model_package(found)
 
     @property
     def breadth(self) -> int:

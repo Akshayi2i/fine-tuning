@@ -274,3 +274,24 @@ def test_l1_watercraft_is_the_ocean_marine_line(client):
     assert request_lob({"lob": "watercraft"}) == "ocean_marine"
     _promote_personal(client)
     assert build_serving_plan(client).route("policy", "watercraft").release.scope == "personal_lines"
+
+
+def test_a_package_of_personal_lines_is_read_as_a_package_not_by_the_personal_adapter(client):
+    """It is read against _fallback.json; the personal_lines adapter learns the common model."""
+    from inference_core.model_runner import EchoBackend, load_model
+    from serving.doc_type_classifier import StaticClassifier
+    from serving.pipeline import extract
+
+    _promote_personal(client)
+    routed = build_serving_plan(client).route("policy", ["homeowners", "personal_auto"])
+    assert routed.release is None and routed.lob_fallback_used                  # the base model
+    promote(client, "release-2026.9.1", scope="unified")
+    assert build_serving_plan(client).route("policy", ["homeowners", "personal_auto"]).release.scope == "unified"
+
+    alone = BlobClient(backend=InMemoryBackend(), container="main", raw_container="raw")
+    _promote_personal(alone)
+    backend = EchoBackend(json.dumps({}))
+    model = load_model("base", alone, backend_impl=backend)
+    result = extract(_fallback_request(["homeowners", "personal_auto"]), model, StaticClassifier("policy"),
+                     None, plan=build_serving_plan(alone), strict_schema=False)
+    assert result.route_info["lob_fallback_used"] and all(c["adapter"] is None for c in backend.calls)

@@ -115,12 +115,14 @@ class Scope:
         a document only when ALL its lines are in scope: a package policy with
         one personal and one commercial line is not a personal-lines document.
         A document with no recorded line is outside a line-scoped scope — its
-        line cannot be shown to be one the model trained on.
+        line cannot be shown to be one the model trained on. Nor is a package of
+        common-model lines (:func:`common_model_package`): it is read against
+        another shape than the one the scope's adapter learns.
         """
         if not self.lines:
             return True
         found = lob_lines(lob)
-        return bool(found) and found <= self.lines
+        return bool(found) and found <= self.lines and not common_model_package(found)
 
     def describe(self) -> str:
         return (
@@ -145,6 +147,23 @@ class Scope:
 # --------------------------------------------------------------------------
 # Structural not-applicable
 # --------------------------------------------------------------------------
+
+
+def common_model_package(lines: frozenset[str] | set[str]) -> bool:
+    """Whether a document naming these lines is a package of common-model lines.
+
+    A package names several lines, so it is read against the client's
+    ``_fallback.json`` (common.schemas.schema_key selects a line's schema only
+    when exactly one is named) - the old shape. When its lines are SPEC_21
+    common-model lines, their adapter learns another shape entirely, so neither
+    training nor serving gives such a package to it: it is read as any other
+    package is (an unrestricted release, else the base model).
+    """
+    if len(lines) < 2:
+        return False
+    from common.schemas import is_common_model
+
+    return any(is_common_model("policy", None, line) for line in lines)
 
 
 def lob_lines(lob: object) -> frozenset[str]:

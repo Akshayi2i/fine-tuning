@@ -33,7 +33,9 @@ def client() -> BlobClient:
 
 @pytest.mark.parametrize("lob,covered", [
     ("homeowners", True),
-    (["homeowners", "personal_auto"], True),     # a personal package
+    # A package of common-model lines is read against _fallback.json, another
+    # shape than the personal_lines adapter learns (common.scopes.common_model_package).
+    (["homeowners", "personal_auto"], False),
     ("flood", False),                             # flood is not in this adapter
     (["homeowners", "gl"], False),                # personal + commercial is not personal
     ("workers_comp", False),
@@ -151,7 +153,9 @@ def test_alone_a_personal_release_refuses_other_lines_and_unknown_lines(client):
     _promote_personal(client)
     plan = build_serving_plan(client)
     assert "policy" in plan.served_doc_types
-    assert plan.release_for("policy", ["personal_auto", "motorcycle"]).scope == "personal_lines"
+    assert plan.release_for("policy", "personal_auto").scope == "personal_lines"
+    with pytest.raises(UnservedDocType):
+        plan.release_for("policy", ["personal_auto", "motorcycle"])    # a package: not its shape
     with pytest.raises(UnservedDocType, match="cover only"):
         plan.release_for("policy", "wc")
     with pytest.raises(UnservedDocType, match="cover only"):
