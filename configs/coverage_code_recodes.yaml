@@ -1,0 +1,45 @@
+# Coverage codes a SPEC_21 seed gold carries that are in no list of its line,
+# and the listed code each one is - applied when a delivery is turned into
+# bundles (data_pipeline.ingestion.prepare_bundles), to the gold copies the
+# bundles hold. The delivery itself is never changed.
+#
+# Taken from the overlays' own changelogs ("Seed golds to re-code at review",
+# configs/canonical schema/LOB Schema/CHANGELOG_<line>.md), keeping only a code
+# that (a) is in no list of its line - the decoder could never write it - and
+# (b) the changelogs map to exactly one listed code wherever it appears, so the
+# re-code is the same in every gold. Left to the schema owners because they
+# depend on the coverage printed, not on the code: X_UM -> X_UIM (motorcycle,
+# recreational vehicle), X_PIP -> five personal-auto codes, X_PIP ->
+# MC_OPTIONAL_BASIC_ECONOMIC_LOSS, X_PIP -> RV_PEDESTRIAN_PIP. Those codes are
+# listed, so the decoder can still write them.
+
+dwelling_fire:
+  HO_COV_A: DF_COV_A
+  HO_COV_B: DF_COV_B
+  HO_COV_C: DF_COV_C
+  X_PERSONAL_LIABILITY: DF_COV_L
+homeowners:
+  HO_COVERAGE_M_MEDICAL_PAYMENTS_TO_OTHERS: X_MED_PAY
+  HO_HO_2550_01_06_LOSS_ASSESSMENT_COVERAGE_D: HO_LOSS_ASSESSMENT
+  HO_HO_2584_01_06_AUTOMATIC_ADJUSTMENT_OF_LI: HO_AUTOMATIC_INCREASE
+  HO_HO_2708_07_11_WATER_BACK_UP_AND_SUMP_DIS: X_WATER_BACKUP
+  HO_HO_4855_01_06_REPLACEMENT_COST_LOSS_SETT: HO_PERSONAL_PROPERTY_REPLACEMENT_COST
+  HO_LIMITS_CREDIT_CARD_ELECTRONIC_FUND_TRANS: HO_CREDIT_CARD_FORGERY
+  HO_MM_HO_5039_09_19_DISAPPEARING_DEDUCTIBLE: HO_DISAPPEARING_DEDUCTIBLE
+  HO_MM_HO_5140_09_19_ADDITIONAL_INSURED_SPEC: HO_ADDITIONAL_INSURED
+  HO_MM_HO_5346_09_19_EQUIPMENT_BREAKDOWN_ENH: X_EQUIPMENT_BREAKDOWN
+  HO_ORDINANCE_OR_LAW: X_ORDINANCE_LAW
+personal_auto:
+  PA_ADDED_PIP: PA_ADDITIONAL_PIP
+  PA_ADDITIONAL_PERSONAL_INJURY_PROTECTION: PA_ADDITIONAL_PIP
+  PA_FULL_COVERAGE_WINDOW_GLASS: PA_FULL_GLASS
+  PA_MEDIA: PA_TAPES_DISCS_MEDIA
+  PA_OEM: PA_OEM_PARTS
+  PA_PERSONAL_ARTICLES_COVERAGE: PA_PERSONAL_ARTICLES
+  PA_PET_INJURY_COVERAGE: PA_PET_INJURY
+  PA_RENTAL_VEHICLE: X_RENTAL
+  PA_ROADSIDE_ASSISTANCE: X_TOWING
+  PA_SUPP_SPOUSAL_LIAB: PA_SUPPLEMENTAL_SPOUSAL_LIABILITY
+  PA_TOTAL_NO_FAULT_BENEFITS: PA_AGGREGATE_NO_FAULT_BENEFITS_AVAILABLE
+  PA_TOWING_LABOR: X_TOWING
+  PA_TRAVEL_TRIP_INTERRUPTION: PA_TRIP_INTERRUPTION

@@ -1,0 +1,143 @@
+"""A SPEC_21 delivery turned into bundles: two renders per twin, one corrected gold
+(data_pipeline.ingestion.prepare_bundles.prepare_twin_bundles)."""
+
+from __future__ import annotations
+
+import copy
+import csv
+import json
+from pathlib import Path
+
+import pytest
+
+from data_pipeline.ingestion.prepare_bundles import (
+    corrected_gold,
+    delivery_line,
+    prepare_bundles,
+    prepare_twin_bundles,
+    read_recodes,
+)
+
+pymupdf = pytest.importorskip("pymupdf")
+
+EXAMPLE = Path("configs/canonical schema/common schema/examples/homeowners_minimal.json")
+
+
+def _pdf(path: Path, text: str) -> None:
+    doc = pymupdf.open()
+    doc.new_page(width=612, height=792).insert_text((72, 72), text)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    doc.save(path)
+
+
+def _delivery(tmp_path: Path, golds: dict[str, dict], line_folder: str = "homeowners", lob: str = "homeowners"):
+    """``golds``: twin number -> gold. One seed, every twin in train."""
+    root = tmp_path / "delivery"
+    rows = []
+    for number, gold in golds.items():
+        twin = f"{lob}__all_state__seed_a__twin_{number:03d}"
+        digital = f"train/{line_folder}/Digital/{twin}.pdf"
+        scanned = f"train/{line_folder}/Scanned/{twin}__scan.pdf"
+        gold_path = f"train/{line_folder}/Gold_json/{twin}.json"
+        _pdf(root / digital, "Allstate eBill: enrolled. Declarations page for the homeowners policy.")
+        _pdf(root / scanned, "scan")
+        (root / gold_path).parent.mkdir(parents=True, exist_ok=True)
+        (root / gold_path).write_text(json.dumps(gold), encoding="utf-8")
+        rows.append({"split": "train", "lob": lob, "carrier": "all_state", "seed": "seed_a", "twin": twin,
+                     "digital": digital, "scanned": scanned, "gold": gold_path})
+    with (root / "split_manifest.csv").open("w", newline="", encoding="utf-8") as fh:
+        writer = csv.DictWriter(fh, fieldnames=list(rows[0]))
+        writer.writeheader()
+        writer.writerows(rows)
+    return root
+
+
+def _gold(**changes):
+    gold = json.loads(EXAMPLE.read_text(encoding="utf-8"))
+    for key, value in changes.items():
+        if value is None:
+            gold.pop(key, None)
+        else:
+            gold[key] = value
+    return gold
+
+
+def test_each_twin_becomes_a_digital_and_a_scanned_document_reading_one_gold(tmp_path):
+    root = _delivery(tmp_path, {1: _gold(), 2: _gold()})
+    out = tmp_path / "bundles"
+    report = prepare_bundles(root, out)                                 # finds split_manifest.csv itself
+    assert report.written == {("train", "synthetic"): 4}
+    folder = out / "homeowners__all_state__seed_a__twin_002__scan"
+    meta = json.loads((folder / "metadata.json").read_text(encoding="utf-8"))
+    assert meta == {"lob": "homeowners", "synthetic": True, "template_id": "homeowners/seed_a", "split": "train",
+                    "carrier": "all_state", "source_system": "fideon_synth", "sample": 2, "render_mode": "scanned"}
+    digital = json.loads((out / "homeowners__all_state__seed_a__twin_002" / "metadata.json").read_text("utf-8"))
+    assert digital["render_mode"] == "digital" and digital["template_id"] == meta["template_id"]
+
+
+def test_the_misspelt_motorcycle_line_is_read_as_motorcycle():
+    assert delivery_line("motorcyle") == "motorcycle"
+    assert delivery_line("classic_auto") == "personal_auto"
+
+
+def test_a_coverage_code_in_no_list_is_recoded_as_the_changelogs_say():
+    gold = _gold()
+    gold["coverages"][1]["coverage_code"] = "HO_COVERAGE_M_MEDICAL_PAYMENTS_TO_OTHERS"
+    fixed, notes, problem = corrected_gold(gold, "homeowners", carrier="example", text_pdf=Path("none.pdf"),
+                                           recodes=read_recodes())
+    assert problem is None and fixed["coverages"][1]["coverage_code"] == "X_MED_PAY"
+    assert ("coverage code", "coverages[1] HO_COVERAGE_M_MEDICAL_PAYMENTS_TO_OTHERS -> X_MED_PAY") in notes
+    assert gold["coverages"][1]["coverage_code"] == "HO_COVERAGE_M_MEDICAL_PAYMENTS_TO_OTHERS"   # input untouched
+
+
+def test_a_premium_written_twice_keeps_its_coverage_home(tmp_path):
+    """The example writes $1,210 and $190 in coverages[].premium and in premium.items."""
+    gold = _gold()
+    gold["premium"]["items"].append({**copy.deepcopy(gold["premium"]["items"][0]), "unit_type": "location",
+                                     "coverage_code": None})
+    gold["premium"]["items"][-1].pop("coverage_code")
+    fixed, notes, problem = corrected_gold(gold, "homeowners", carrier="example", text_pdf=Path("none.pdf"),
+                                           recodes={})
+    assert problem is None
+    assert [i.get("unit_type") for i in fixed["premium"]["items"]] == ["location"]   # the non-coverage item stays
+    assert sum(1 for kind, _ in notes if kind == "premium written twice") == 2
+
+
+def test_a_premium_item_that_totals_the_per_vehicle_rows_is_dropped_one_the_rows_lack_stays():
+    gold = _gold()
+    first = gold["coverages"][0]
+    gold["coverages"] = [copy.deepcopy(first), copy.deepcopy(first)]    # two HO_COV_A rows, 1,210 each
+    item = copy.deepcopy(gold["premium"]["items"][0])
+    item["amount"] = {**item["amount"], "raw": "$2,420", "parsed": 2420.0}
+    lone = copy.deepcopy(gold["premium"]["items"][0])
+    lone["coverage_code"] = "HO_SPECIAL_LIMITS"                          # no coverage row: its only home
+    gold["premium"]["items"] = [item, lone]
+    fixed, notes, _problem = corrected_gold(gold, "homeowners", carrier="x", text_pdf=Path("none.pdf"), recodes={})
+    assert [i["coverage_code"] for i in fixed["premium"]["items"]] == ["HO_SPECIAL_LIMITS"]
+
+
+def test_a_missing_carrier_is_filled_as_the_document_prints_it(tmp_path):
+    root = _delivery(tmp_path, {1: _gold(carrier=None)})
+    out = tmp_path / "bundles"
+    report = prepare_twin_bundles(root, out)
+    gold = json.loads((out / "homeowners__all_state__seed_a__twin_001" / "golden.json").read_text("utf-8"))
+    assert gold["carrier"]["name"]["raw"] == "Allstate" and gold["carrier"]["name"]["page_ref"] == [1]
+    assert report.corrections["carrier missing"] == 1
+    rows = list(csv.DictReader((out / "corrections.csv").open(encoding="utf-8")))
+    assert {r["correction"] for r in rows} >= {"carrier missing", "premium written twice"}
+
+
+def test_a_gold_still_outside_its_schema_is_left_out_with_the_reason(tmp_path):
+    root = _delivery(tmp_path, {1: _gold(), 2: _gold(coverages=None)})
+    report = prepare_twin_bundles(root, tmp_path / "bundles")
+    assert report.written == {("train", "synthetic"): 2}
+    assert any("'coverages' is a required property" in reason for reason in report.skipped)
+    assert not (tmp_path / "bundles" / "homeowners__all_state__seed_a__twin_002").exists()
+
+
+def test_a_dry_run_reports_everything_and_writes_nothing(tmp_path):
+    root = _delivery(tmp_path, {1: _gold(carrier=None)})
+    out = tmp_path / "bundles"
+    report = prepare_twin_bundles(root, out, dry_run=True)
+    assert report.written == {("train", "synthetic"): 2} and report.corrections["carrier missing"] == 1
+    assert not out.exists() and "dry run" in report.describe()
