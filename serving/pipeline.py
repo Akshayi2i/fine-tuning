@@ -182,15 +182,18 @@ def _classifier_input(request: ExtractionRequest) -> tuple[list[str], str | None
     the order the caller listed them - ``page_10.png`` before ``page_2.png``.
     It reads the first two pages: their images by page number, their text
     joined. None under ``image_only``, where the prompt says no text exists.
+    Picked by ``classifier_input``, the rule a training row is built by too.
     """
+    from serving.doc_type_classifier import classifier_input
+
     if not request.page_texts:
         return request.image_paths, request.ocr_text
-    pages = sorted(request.page_texts)[:2]
-    images = [_image_for(request, page) for page in pages]
-    if request.modality_mode == "image_only":
-        return images, None
-    text = "\n\n".join(t for page in pages if (t := request.page_texts.get(page)))
-    return images, text or request.ocr_text
+    image_only = request.modality_mode == "image_only"
+    images, text = classifier_input(
+        request.page_texts, lambda page: _image_for(request, page),
+        None if image_only else request.page_texts.get,
+    )
+    return images, None if image_only else text or request.ocr_text
 
 
 def _image_for(request: ExtractionRequest, page: int) -> str:
@@ -483,8 +486,9 @@ class LobResolution:
     ``source``: ``caller`` (sent with the request, as L1/L2 do), ``detected``
     (the classifier, confidently), ``detected_uncertain`` (the classifier, below
     the line threshold: its family's adapter and its line's schema, flagged), or
-    ``undetected`` (no line: the base model against the fallback schema,
-    flagged). None for a document that is no policy, or when detection is off.
+    ``undetected`` (no line found, or the read failed: the base model against
+    the fallback schema, flagged). None for a document that is no policy, when
+    detection is off, or when nothing wired reads lines - no detection at all.
     """
 
     lob: Any = None
@@ -502,17 +506,26 @@ class LobResolution:
 
 
 def _resolve_lob(
-    request: ExtractionRequest, classifier: Classifier, route_: Route, *,
+    request: ExtractionRequest, classifier: Classifier | None, route_: Route, *,
     detect: bool, line_threshold: float, family_threshold: float,
 ) -> LobResolution:
     """The line a policy is read with: the caller's, or the classifier's.
 
     A policy reaching L3 with no line - a scan L1/L2 could not read - used to be
-    refused, or read by the base model against the generic schema. The
-    classifier now reads the line too, and its confidence (the line's own token
-    probability) decides how far it is trusted.
+    refused, or read by the base model against the generic schema. With
+    detection on, the classifier reads the line too, and its confidence (the
+    line's own token probability) decides how far it is trusted.
+
+    Only a classifier that reads lines can report one missing. With none wired,
+    a :class:`~serving.doc_type_classifier.StaticClassifier`, or an answer from a
+    classifier that never asks for the line, there is no detection: the policy
+    is refused, or read against the fallback when the caller asked
+    (``allow_lob_fallback``), as before detection existed - a reading nobody
+    made must not switch the fallback on. A read that fails (an answer that is
+    no JSON, a backend error) is ``undetected``: an optional lookup does not
+    fail the extraction.
     """
-    from serving.doc_type_classifier import combine_lob_with_hypothesis, known_line
+    from serving.doc_type_classifier import StaticClassifier, combine_lob_with_hypothesis, known_line
 
     classification = route_.classification
     if route_.doc_type != "policy":
@@ -529,8 +542,23 @@ def _resolve_lob(
     if not detect:
         return LobResolution(None)
     if classification is None or classification.method == "static":
-        # The caller named the type, so the classifier never ran: run it for the line.
-        classification = classifier.classify(*_classifier_input(request))
+        # The caller named the type, so the classifier has not read this document.
+        if classifier is None or isinstance(classifier, StaticClassifier):
+            return LobResolution(None)
+        try:
+            classification = classifier.classify(*_classifier_input(request))
+        except Exception as exc:  # noqa: BLE001 - a failed lookup is no line, not a failed request
+            # The type only: a parse failure's message quotes the model's
+            # answer, and that can quote the document.
+            log.warning("%s: the line of business could not be read (%s); reading the policy "
+                        "against the fallback, flagged", request.source_id, type(exc).__name__)
+            # No hint either: a hint is too weak to route on alone.
+            return LobResolution(None, "undetected", flags=["lob:undetected"])
+    reads_lines = (classification.method in ("zero_shot", "zero_shot_base")
+                   or getattr(classifier, "reads_lob", False))
+    if classification.lob is None and not reads_lines:
+        # Never asked for the line, so its absence says nothing about the policy.
+        return LobResolution(None)
     classification = combine_lob_with_hypothesis(
         classification, request.lob_hypothesis, confidence_threshold=line_threshold)
     found = LobResolution(
@@ -809,7 +837,7 @@ def extract(
     fallback_doc_type: str | None = None,
     long_doc_types: tuple[str, ...] = ("policy",),
     release_runtimes: Mapping[str, Any] | None = None,
-    detect_lob: bool = True,
+    detect_lob: bool = False,
     lob_confidence_threshold: float = 0.90,
     lob_family_threshold: float = 0.60,
 ) -> ExtractionResult:
@@ -826,6 +854,12 @@ def extract(
         long_doc_types: which types get page routing. The page signals are policy
             vocabulary (declarations, schedule, endorsement), so routing a Loss
             Run through them spends a pass to select every page anyway.
+        detect_lob: read the line of a policy that arrives with none
+            (:func:`_resolve_lob`). Off by default, and in the endpoint's config,
+            until ``scripts/measure_lob_detection.py`` has measured the reading on
+            held-out policies: a confident wrong line routes to the wrong adapter
+            and schema with no flag. Off, such a policy is refused, or read
+            against the fallback when the caller asked.
     """
     route_ = _resolve_route(
         request, classifier,

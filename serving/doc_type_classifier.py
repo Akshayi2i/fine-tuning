@@ -24,6 +24,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
@@ -66,8 +67,10 @@ class Classification:
     acord_edition: str | None = None
 
     #: A policy's line of business, when the classifier was asked for one (a
-    #: policy that reached L3 with none from L1/L2). One of the registered lines,
-    #: or None for a package, an unknown line, or a document that is no policy.
+    #: policy that reached L3 with none from L1/L2). One of the registered lines
+    #: (a package line such as ``commercial_package`` among them), or None when
+    #: no single line describes the policy, for an unknown line, or for a
+    #: document that is no policy.
     lob: str | None = None
     #: The probability of the line's own tokens (the product over them), from
     #: the generation's logprobs - never a number the model writes about itself.
@@ -149,6 +152,21 @@ class Classifier(Protocol):
     def classify(self, image_paths: list[str], ocr_text: str | None) -> Classification: ...
 
 
+def _json_object_span(text: str) -> tuple[int, int] | None:
+    """Where the answer's JSON object sits in ``text``, as ``(start, end)``.
+
+    Inside the fence when the model fenced it, else from the first brace to the
+    last - past a ``<think>`` block or a sentence before or after it. None when
+    there is no brace at all. The one place the object is found, so the line's
+    confidence is read from the object the answer was parsed from.
+    """
+    if fenced := re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.S):
+        return fenced.span(1)
+    if braced := re.search(r"\{.*\}", text, re.S):
+        return braced.span(0)
+    return None
+
+
 def parse_classification(response: str) -> Classification:
     """Parse the model's JSON answer, tolerating the usual wrapping.
 
@@ -157,10 +175,8 @@ def parse_classification(response: str) -> Classification:
     document to human review for no reason.
     """
     text = response.strip()
-    if fenced := re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.S):
-        text = fenced.group(1)
-    elif braced := re.search(r"\{.*\}", text, re.S):
-        text = braced.group(0)
+    if (where := _json_object_span(text)) is not None:
+        text = text[where[0]:where[1]]
 
     try:
         payload = json.loads(text)
@@ -225,19 +241,67 @@ def line_confidence(text: str, tokens: list[str], logprobs: list[float]) -> floa
     """The probability of the ``lob`` value's tokens: exp of their summed logprobs.
 
     Read from the generation, so a line the model wrote hesitantly scores low
-    even when the model claims to be sure. None when the value cannot be
-    located in the tokens.
+    even when the model claims to be sure. The value is looked for in the JSON
+    object :func:`parse_classification` reads - inside a fence, or past a
+    ``<think>`` block or a sentence around it - and its characters are mapped to
+    the tokens of the raw text. None, never an exception, when it cannot be
+    located: the tokens do not rebuild the text, the object has no ``lob``, or
+    it does not scan. The line is then one read with no confidence (uncertain,
+    flagged); an exception here failed the whole request instead, even one whose
+    caller had sent the line.
     """
     import math
 
-    from inference_core.span_map import map_field_spans
+    from inference_core.span_map import scan_json_spans, token_char_offsets
 
-    if not tokens or len(tokens) != len(logprobs):
+    if not tokens or len(tokens) != len(logprobs) or "".join(tokens) != text:
         return None
-    span = map_field_spans(text, tokens, logprobs).get("lob")
-    if span is None or not getattr(span, "mapped", False) or not span.token_logprobs:
+    where = _json_object_span(text)
+    if where is None:
         return None
-    return round(math.exp(sum(span.token_logprobs)), 4)
+    start = where[0]
+    try:
+        # The last `lob` when the object repeats the key, as json.loads reads it.
+        span = {s.field_path: s for s in scan_json_spans(text[start:where[1]])}.get("lob")
+        if span is None:
+            return None
+        first, last = start + span.char_start, start + span.char_end
+        chosen = [logprob for (t_start, t_end), logprob
+                  in zip(token_char_offsets(tokens), logprobs, strict=True)
+                  if t_start < last and t_end > first]
+        return round(math.exp(sum(chosen)), 4) if chosen else None
+    except (ValueError, TypeError, OverflowError):
+        # SpanMapError is a ValueError, and so is a malformed \u escape; a
+        # logprob that is no number is a TypeError.
+        return None
+
+
+#: How many of a document's pages the classifier reads, from the first: the
+#: type and the line show in the opening pages - a form's header, a policy's
+#: declarations - and a 50-page policy sent whole to answer a one-word
+#: question is waste.
+CLASSIFIER_PAGES = 2
+
+
+def classifier_input(
+    pages: Iterable[int],
+    image_of: Callable[[int], str],
+    text_of: Callable[[int], str | None] | None,
+) -> tuple[list[str], str | None]:
+    """What the classifier reads of a document: its first two pages by page
+    number - their images, and their text joined with a blank line between.
+
+    ``text_of`` is None under ``image_only``, where the prompt says no text
+    exists; the text is None then, and when those pages have none. One rule for
+    both sides - a served request (``serving.pipeline._classifier_input``) and a
+    training row (``build_jsonl.classify_rows``) - so the classifier is trained
+    on the input it is served.
+    """
+    first = sorted(pages)[:CLASSIFIER_PAGES]
+    images = [image_of(page) for page in first]
+    if text_of is None:
+        return images, None
+    return images, "\n\n".join(t for page in first if (t := text_of(page))) or None
 
 
 def classifier_messages(
@@ -245,12 +309,12 @@ def classifier_messages(
     lines: list[str] | None = None, line_only: bool = False,
 ) -> list[dict[str, Any]]:
     """The classifier's messages, the same whether a model answers them at
-    serving or is trained on them: the first two page images and the first page's
-    text. Shared so the two cannot drift."""
-    content: list[dict[str, Any]] = [{"type": "image", "image": p} for p in image_paths[:2]]
+    serving or is trained on them: the first two page images and the text
+    :func:`classifier_input` picked for them. Shared so the two cannot drift."""
+    content: list[dict[str, Any]] = [{"type": "image", "image": p} for p in image_paths[:CLASSIFIER_PAGES]]
     if ocr_text:
-        # First page only: the type is determined by the header and layout,
-        # and sending a 50-page policy to answer a one-word question is waste.
+        # Cut at 4,000 characters: the type and the line show in the headers
+        # and the layout, not in every word of the opening pages.
         content.append({"type": "text", "text": ocr_text[:4000]})
     return [
         {"role": "system", "content": render_classifier_prompt(lines=lines, line_only=line_only)},
@@ -292,6 +356,10 @@ def combine_lob_with_hypothesis(
 
 class ZeroShotClassifier:
     """Classify by prompting the already-loaded model (arch §4a Option C)."""
+
+    #: It asks a policy for its line, so a line it leaves null was looked for
+    #: and not found (serving.pipeline._resolve_lob): no line is a reading.
+    reads_lob = True
 
     def __init__(self, model: Any, generate_fn: Any) -> None:
         self.model = model

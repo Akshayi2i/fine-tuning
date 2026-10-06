@@ -6,9 +6,16 @@ adapter (one family) with the wrong schema; a personal auto policy read as
 commercial auto reaches the wrong adapter altogether. An overall accuracy hides
 both behind the volume of the easy lines.
 
-The gate's floor is ``lob_detection_accuracy`` (evaluation.gating, 0.85); a
-line with enough documents is also held to the floor on its own
-(:meth:`LobDetectionReport.below_floor`).
+:data:`DETECTION_FLOOR` is what the measurement must clear before detection is
+switched on (``routing.detect_lob`` in configs/inference/vllm_serving.yaml):
+overall, and on its own for every line with enough documents
+(:meth:`LobDetectionReport.below_floor`). It is measured by
+``evaluation.lob_detection_eval`` (``scripts/measure_lob_detection.py``) and is
+not a release gate: the detector is the base model answering zero-shot, not the
+adapter a release promotes, so a release cannot move it. The gate's
+``lob_detection_accuracy`` (evaluation.gating) is another number - the
+extracted ``line_of_business`` field, which a canonical policy label does not
+carry.
 """
 
 from __future__ import annotations
@@ -16,6 +23,10 @@ from __future__ import annotations
 from collections import Counter
 from collections.abc import Iterable
 from dataclasses import dataclass, field
+
+#: The accuracy line detection must reach - overall, and per line with enough
+#: documents - before it routes production policies.
+DETECTION_FLOOR = 0.85
 
 #: A line is held to the floor on its own once it has this many documents.
 PER_LINE_MIN_SUPPORT = 20

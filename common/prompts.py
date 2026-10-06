@@ -322,8 +322,11 @@ def prompt_input_files() -> list[Path]:
 
     The line overlays compose the common model, and their coverage-code files
     give each code the meaning the prompt shows, so both are prompt input too.
+    So are the classifier's: each line's meaning (``lob_meanings.yaml``) is
+    written into its prompt, and the layout families (``layout_families.yaml``)
+    pick the lines a family's line question offers.
     """
-    from common.config import CONFIG_DIR
+    from common.config import CONFIG_DIR, LAYOUT_FAMILIES_CONFIG
     from common.model_view import MODEL_VIEW_CONFIG
     from common.schemas import CANONICAL_DIR, COMMON_MODEL, SCHEMA_DIR
 
@@ -335,6 +338,7 @@ def prompt_input_files() -> list[Path]:
         + sorted(CANONICAL_DIR.glob("*.coverage_codes.yaml"))
         + [MODEL_VIEW_CONFIG]
         + [CONFIG_DIR / "schema_sections.yaml"]
+        + [CONFIG_DIR / "lob_meanings.yaml", LAYOUT_FAMILIES_CONFIG]
     )
 
 

@@ -121,6 +121,7 @@ class _Reads:
 
 
 def _extract(classifier, **request):
+    """Extract with detection on: it is off by default until it has been measured."""
     from artifact_registry.blob_client import BlobClient, InMemoryBackend
     from inference_core.model_runner import EchoBackend, load_model
     from serving.pipeline import ExtractionRequest, extract
@@ -132,6 +133,7 @@ def _extract(classifier, **request):
         ExtractionRequest(source_id="p1", image_paths=["d/page_1.png"], page_texts={1: "Declarations"},
                           **request),
         load_model("base", client, backend_impl=backend), classifier, CALIBRATION, strict_schema=False,
+        detect_lob=True,
     )
     schemas = [json.dumps(call["json_schema"]) for call in backend.calls]
     return result, schemas

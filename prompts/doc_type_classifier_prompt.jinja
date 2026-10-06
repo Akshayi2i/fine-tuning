@@ -60,7 +60,7 @@ If and only if the type is `policy`, also report its line of business: the one l
 {% for name, meaning in lines -%}
 - `{{ name }}` - {{ meaning }}
 {% endfor %}
-Judge the line by what the coverage is for - what is insured, against what, for whom - not by which words appear on the document. Report null when the policy is a package covering several of these lines, or none of them.
+Judge the line by what the coverage is for - what is insured, against what, for whom - not by which words appear on the document. A package policy written on one of the lines above is reported as that line, not as one of the coverages it combines. Report null only when no single line above describes the policy as a whole.
 
 Return only this JSON object, with no explanation and no markdown fences:
 {"doc_type": "acord" | "policy" | "lossrun", "acord_form": "25" | "125" | "140" | null, "lob": "<one of the lines above>" | null, "confidence": 0.0}

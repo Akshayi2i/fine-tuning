@@ -475,6 +475,7 @@ def build_request(payload: dict[str, Any]) -> ExtractionRequest:
         known_doc_type=payload.get("doc_type"),
         known_acord_form=payload.get("acord_form"),
         known_lob=request_lob(payload),
+        lob_hypothesis=lob_hypothesis(payload),
         allow_lob_fallback=bool(payload.get("allow_lob_fallback", False)),
         # Serving fills document.source_file_name from this (the model is never
         # asked for it); without it the served output never carried the field.
@@ -530,6 +531,27 @@ def request_lob(payload: Mapping[str, Any]) -> str | list[str] | None:
                 f"{sorted(known | set(LOB_SCHEMA_ALIASES))}"
             )
     return lob
+
+
+def lob_hypothesis(payload: Mapping[str, Any]) -> str | None:
+    """The line L1/L2 suspects without being sure enough to send it as ``lob``.
+
+    ``lob_hypothesis``: one line name, or absent. Reconciled with the line the
+    classifier reads (``combine_lob_with_hypothesis``): agreement lifts an
+    uncertain reading, a disagreement becomes a candidate. Nothing read it
+    before, so the hint the pipeline reconciles never arrived from a caller.
+    Normalised as ``lob`` is (classic auto is personal auto); a line with no
+    schema is passed on rather than refused - a hint is evidence, not a
+    selector, and the reconciliation ignores a line it does not know.
+    """
+    hint = payload.get("lob_hypothesis")
+    if hint is None:
+        return None
+    if not isinstance(hint, str) or not hint.strip():
+        raise ServingError(f"lob_hypothesis must be one line name, got {hint!r}")
+    from common.lob import merge_line
+
+    return str(merge_line(hint.strip().lower()))
 
 
 def serving_thresholds() -> dict[str, Any]:

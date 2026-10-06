@@ -338,19 +338,25 @@ def _policy_window_rows(
     return rows
 
 
-def classify_rows(document: SourceDocument, split: str, modes: tuple[str, ...]) -> list[dict[str, Any]]:
+def classify_rows(
+    document: SourceDocument, split: str, modes: tuple[str, ...], *, seed: int = 42,
+) -> list[dict[str, Any]]:
     """The family adapter's line question for one policy: one row per mode.
 
     Stage 2 of line detection (serving.doc_type_classifier): once the base model
     has placed a policy in a layout family, the family's own adapter chooses
     among the family's lines - where the confusable pairs are (homeowners and
     dwelling fire; personal auto, motorcycle and RV). The messages are the
-    classifier's own (``classifier_messages``), so the question trained is the
-    question served. Nothing for a document that is no policy, names several
-    lines, or has a line in no family.
+    classifier's own (``classifier_messages``) over the input serving picks
+    (``classifier_input``: the first two pages' images, their text joined, none
+    under ``image_only``) - the text in the row's own mode, corrupted under
+    ``noisy_ocr_image`` as a window's is, so the input trained is the input
+    served. Serving does not ask this question yet (``build_corpus`` refuses
+    the rows until it does). Nothing for a document that is no policy, names
+    several lines, or has a line in no family.
     """
     from common.config import lob_to_layout_family, lobs_in_family
-    from serving.doc_type_classifier import classifier_messages, known_line
+    from serving.doc_type_classifier import CLASSIFIER_PAGES, classifier_input, classifier_messages, known_line
 
     lines = document.lob if isinstance(document.lob, list) else [document.lob]
     line = known_line(lines[0]) if document.doc_type == "policy" and len(lines) == 1 else None
@@ -358,10 +364,25 @@ def classify_rows(document: SourceDocument, split: str, modes: tuple[str, ...]) 
     if family is None:
         return []
     choices = list(lobs_in_family(family))
+    # Page N is the N-th image and the N-th text, as in every other row.
+    pages = range(1, len(document.image_paths) + 1)
     rows = []
     for index, mode in enumerate(modes):
-        text = None if mode == "image_only" or not document.ocr_pages else document.ocr_pages[0]
-        messages = classifier_messages(document.image_paths, text, lines=choices, line_only=True)
+        texts: list[str] | None = None
+        if mode != "image_only":
+            texts = list(document.ocr_pages)
+            if mode == "noisy_ocr_image":
+                # The document-level budget on the pages this row carries, seeded
+                # per row as a window's is: spread over a long policy, it would
+                # rarely touch the opening pages and leave the row clean.
+                opening, _details = corrupt_ocr_pages(
+                    texts[:CLASSIFIER_PAGES], f"{document.source_id}#classify", seed=seed)
+                texts[:CLASSIFIER_PAGES] = opening
+        images, text = classifier_input(
+            pages, lambda page: document.image_paths[page - 1],
+            None if texts is None else (lambda page, t=texts: t[page - 1] if page <= len(t) else None),
+        )
+        messages = classifier_messages(images, text, lines=choices, line_only=True)
         messages.append({"role": "assistant", "content": json.dumps({"lob": line})})
         rows.append({
             "doc_type": "policy", "acord_form": None, "lob": [line], "modality_mode": mode,
@@ -387,11 +408,14 @@ def build_corpus(
     with the same seed. Train always gets one row per epoch; there is no path
     that expands a train document into all three regimes.
 
-    ``with_classify_rows`` adds, per policy whose line has a layout family, the
-    family adapter's line question (:func:`classify_rows`) - off until the
-    base model's zero-shot line detection has been measured and found short of
-    its target; turning it on is also when ``common.tasks.CORPUS_TASKS`` gains
-    ``classify``.
+    ``with_classify_rows`` would add, per policy whose line has a layout
+    family, the family adapter's line question (:func:`classify_rows`). It is
+    refused: those rows train the family stage's question, which serving does
+    not ask yet - its classifier asks every document the type-and-line
+    question - so the rows would teach an answer nothing reads. The family
+    stage at serving and these rows are turned on together, once the base
+    model's zero-shot line detection has been measured and found short of its
+    target; that is also when ``common.tasks.CORPUS_TASKS`` gains ``classify``.
 
     A document that fails to expand is set aside - except on a common-model
     line, where more than ``max_expansion_failures`` such documents fail the
@@ -401,6 +425,13 @@ def build_corpus(
     """
     from common.schemas import is_common_model
 
+    if with_classify_rows:
+        raise CorpusBuildError(
+            "with_classify_rows trains the family stage's line question, which serving does not "
+            "ask yet: its classifier asks every document the type-and-line question. Add the "
+            "family stage to serving and turn both on together, or the rows teach an answer "
+            "nothing reads."
+        )
     result = BuildResult(rows_by_split={"train": [], "val": [], "test": []})
     common_model_failures: list[tuple[str, str]] = []
     if mode_assignment is None:
@@ -440,8 +471,8 @@ def build_corpus(
                     ) from exc
             continue
 
-        if with_classify_rows:
-            rows += classify_rows(document, split, epoch_modes)
+        if with_classify_rows:  # refused above until serving asks the family question
+            rows += classify_rows(document, split, epoch_modes, seed=seed)
 
         # Reject, never truncate. A row over its task budget would be clipped on
         # the pod, and a clipped target trains the model to stop early. The

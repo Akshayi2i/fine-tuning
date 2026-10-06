@@ -68,15 +68,22 @@ routing:
   classifier_confidence_threshold: 0.70
   fallback: "foundation_only"
 
-  # A policy that arrives with no line of business (a scan L1/L2 could not read)
-  # has its line read by the classifier, with the line's own token probability
-  # as its confidence. At or above lob_confidence_threshold it routes as the
-  # caller's line would; at or above lob_family_threshold it routes to that
-  # line's family adapter and schema, flagged lob:uncertain_within_family;
-  # below, the base model reads it against the fallback schema, flagged
-  # lob:undetected. Fit both thresholds on held-out data (scanned documents
-  # and held-out carriers reported apart) before relying on them.
-  detect_lob: true
+  # With detect_lob on, a policy that arrives with no line of business (a scan
+  # L1/L2 could not read) has its line read by the classifier, with the line's
+  # own token probability as its confidence. At or above
+  # lob_confidence_threshold it routes as the caller's line would; at or above
+  # lob_family_threshold it routes to that line's family adapter and schema,
+  # flagged lob:uncertain_within_family; below, the base model reads it against
+  # the fallback schema, flagged lob:undetected.
+  #
+  # Off until it has been measured: a confident wrong line routes to the wrong
+  # adapter and schema with no flag. Turn it on after
+  # scripts/measure_lob_detection.py has been run on held-out policies (scanned
+  # documents and held-out carriers reported apart), both thresholds fitted from
+  # its sweep, and every line has cleared its floor. Off, a policy with no line
+  # is refused, or read against the fallback when the caller sends
+  # allow_lob_fallback.
+  detect_lob: false
   lob_confidence_threshold: 0.90
   lob_family_threshold: 0.60
 
