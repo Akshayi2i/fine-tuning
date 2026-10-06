@@ -305,3 +305,14 @@ def reference_pairs(doc: Any, lob: str | list[str] | None) -> list[tuple[Any, ..
                 for target in value if isinstance(value, list) else [value] if value else []:
                     pairs.append((table, identity, field_name, target))
     return pairs
+
+
+def comparable_for(doc: Any, doc_type: str, acord_form: str | None, lob: Any) -> Any:
+    """:func:`comparable_view` for a common-model policy; ``doc`` itself otherwise."""
+    from common.schemas import SchemaError, is_common_model
+
+    try:
+        common_model = doc_type == "policy" and is_common_model(doc_type, acord_form, lob)
+    except SchemaError:
+        common_model = False
+    return comparable_view(doc, lob) if common_model else doc

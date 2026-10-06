@@ -156,19 +156,88 @@ def field_type_table(path: Path = FIELD_TYPE_TABLE) -> dict[str, str]:
     return {str(f): str(t) for f, t in table.items()}
 
 
+#: The common model's typed values (SPEC_21) and the calibrator each belongs to.
+#: A plain FieldValue says nothing about its kind, so it is left to the name.
+VALUE_TYPE_FIELD_TYPES: dict[str, str] = {
+    "DateValue": "date",
+    "MoneyValue": "money",
+    "PercentValue": "number",
+    "NumberValue": "number",
+    "YearValue": "number",
+    "NaicValue": "identifier",
+    "PostalCodeValue": "identifier",
+    "StateValue": "enum",
+    "BoolValue": "enum",
+    "TransactionTypeValue": "enum",
+    "CoverageTriggerValue": "enum",
+    "IncludedValue": "enum",
+    "ValuationValue": "enum",
+    "AdmittedStatusValue": "enum",
+    "DriverStatusValue": "enum",
+}
+
+
+@cache
+def common_model_field_types() -> dict[str, str]:
+    """Field type by path (list markers removed), for every field the
+    common-model lines declare with a typed value. One table for every such
+    line: the common model gives a path one type wherever it appears."""
+    from common.schemas import is_common_model, resolved_schema, schema_selectors
+
+    out: dict[str, str] = {}
+    for doc_type, form, lob in schema_selectors():
+        if doc_type == "policy" and lob and is_common_model(doc_type, form, lob):
+            view = resolved_schema(doc_type, form, lob)
+            _collect_typed(view, view.get("$defs") or {}, "", out, frozenset())
+    return out
+
+
+def _collect_typed(node: Any, defs: dict[str, Any], path: str, out: dict[str, str],
+                   seen: frozenset[str]) -> None:
+    from common.schemas import resolve_local
+
+    variants = [node, *(node.get("anyOf") or [])] if isinstance(node, dict) else []
+    for variant in variants:
+        for name, sub in (variant.get("properties") or {}).items():
+            here = f"{path}.{name}" if path else name
+            ref = sub.get("$ref", "") if isinstance(sub, dict) else ""
+            target = ref.rsplit("/", 1)[-1] if ref else ""
+            if target in VALUE_TYPE_FIELD_TYPES:
+                out.setdefault(here, VALUE_TYPE_FIELD_TYPES[target])
+                continue
+            if target in seen:
+                continue
+            resolved = resolve_local(sub, defs)
+            if not isinstance(resolved, dict):
+                continue
+            items = resolve_local(resolved.get("items"), defs) if "items" in resolved else None
+            for child in (resolved, items):
+                if isinstance(child, dict) and (child.get("properties") or child.get("anyOf")):
+                    _collect_typed(child, defs, here, out, seen | ({target} if target else set()))
+
+
 def infer_field_type(field_path: str, value: Any = None) -> str:
     """Which calibrator this field belongs to.
 
-    The reviewed table first (configs/field_types.yaml). Otherwise name-based, reusing ``common.normalize``'s inference so a field is
-    *normalised* and *calibrated* under the same notion of what it is. Two
-    different answers to "what kind of field is this" is how a money field gets
-    compared as text and calibrated as a number.
+    The reviewed table first (configs/field_types.yaml); then, for a
+    common-model field, the type its schema declares (a MoneyValue is money); a
+    common-model overflow value by what was parsed. Otherwise name-based,
+    reusing ``common.normalize``'s inference so a field is *normalised* and
+    *calibrated* under the same notion of what it is. Two different answers to
+    "what kind of field is this" is how a money field gets compared as text and
+    calibrated as a number.
     """
     from common.normalize import infer_field_kind
 
-    reviewed = field_type_table().get(re.sub(r"\[\d*\]", "", field_path))
+    bare = re.sub(r"\[\d*\]", "", field_path)
+    reviewed = field_type_table().get(bare)
     if reviewed:
         return reviewed
+    declared = common_model_field_types().get(bare)
+    if declared:
+        return declared
+    if bare == "additional_fields.value" and isinstance(value, (int, float)) and not isinstance(value, bool):
+        return "number"
     kind = infer_field_kind(field_path)
     mapping = {
         "identifier": "identifier",

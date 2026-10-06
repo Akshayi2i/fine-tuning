@@ -76,6 +76,9 @@ GATING_METRICS: dict[str, Direction] = {
     # on the golden set through serving with the release's thresholds
     # (evaluation.metrics.auto_accept). The number the thresholds promise.
     "auto_accept_error_rate": "lower_is_better",
+    # The weakest common-model line's field match (evaluation.run_eval): one
+    # line of a family adapter cannot hide behind the others' volume.
+    "worst_line_field_match": "higher_is_better",
 }
 
 #: Gating under arch v2.1 §15.2, but **not enforced yet** — nothing produces
@@ -115,6 +118,8 @@ CONDITIONAL_METRICS: frozenset[str] = frozenset({
     # Only canonical outputs carry review flags. When present it faces its
     # floor like any other metric.
     "auto_accept_error_rate",
+    # Only common-model lines with enough values scored per line produce it.
+    "worst_line_field_match",
 })
 
 
@@ -184,6 +189,7 @@ PILOT_FLOORS: dict[str, float] = {
     # identifiers; 2% enums; 5% names and addresses), so a release whose
     # thresholds hold on unseen documents passes with room.
     "auto_accept_error_rate": 0.02,
+    "worst_line_field_match": 0.85,
 }
 
 #: Non-inferiority margins in absolute units (arch v2.1 §15.5). Per metric,
@@ -209,6 +215,7 @@ NON_INFERIORITY_DELTA: dict[str, float] = {
     # Half a point: on a 2% ceiling, more would let a release double the wrong
     # values users receive unreviewed and still count as no worse.
     "auto_accept_error_rate": 0.005,
+    "worst_line_field_match": 0.015,
 }
 DEFAULT_DELTA = 0.015
 

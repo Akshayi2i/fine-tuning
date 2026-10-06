@@ -27,6 +27,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import re
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -319,12 +320,23 @@ def score_subset(
         score_hallucinations,
         score_page_selection,
     )
+    from common.canonical import without_bare_values
+    from evaluation.metrics.common_model import CommonModelTally, core_for_scoring, without_overflow
     from evaluation.metrics.field_accuracy import score_all_list_fields, score_fields
     from training.vit_gate import classify_error
 
     report = SubsetReport(doc_type=doc_type, subset=subset, documents=len(scored))
     if not scored:
         return report
+
+    # Common-model lines (SPEC_21): values inside rows count, links, codes and
+    # overflow are scored apart, and no id is ever a value (build_report has
+    # already put both sides through comparable_view).
+    common_model = [_is_common_model_document(doc_type, m) for _e, _g, m in scored]
+    model_tally = CommonModelTally()
+    # Field accuracy on printed labels training showed vs never showed, where the
+    # eval metadata carries the training set's seen labels and the page text.
+    by_label: dict[str, list[bool]] = {"seen": [], "unseen": []}
 
     accuracies, exacts, recalls, f1s, list_precisions = [], [], [], [], []
     # Single-value fields as a retrieval task, counted over every field of the
@@ -356,7 +368,20 @@ def score_subset(
     # than a 0.0.
     pooled: dict[Any, list[int]] = {}
     for index, (expected, got, metadata) in enumerate(scored):
-        accuracy = score_fields(expected, got)
+        if common_model[index]:
+            model_tally.add(expected, got, metadata.get("lob"))
+            accuracy = score_fields(*core_for_scoring(expected, got, metadata.get("lob")),
+                                    skip_lists=False)
+            if metadata.get("seen_labels") is not None and metadata.get("ocr_text"):
+                from evaluation.metrics.unseen_labels import common_model_aliases, label_split
+
+                split = label_split(accuracy.results, str(metadata["ocr_text"]),
+                                    common_model_aliases(str(metadata.get("lob"))),
+                                    set(metadata["seen_labels"]))
+                for bucket, outcomes in split.items():
+                    by_label[bucket].extend(outcomes)
+        else:
+            accuracy = score_fields(expected, got)
         key = (metadata.get("source_id") or f"#{index}", metadata.get("modality_mode"))
         tally = pooled.setdefault(key, [0, 0, 0])
         tally[0] += sum(r.correct for r in accuracy.results)
@@ -372,7 +397,8 @@ def score_subset(
             written += wrote
             expected_filled += has_value
             right_and_written += bool(result.correct and has_value and wrote)
-            field_tally = by_field.setdefault(result.field_path, [0, 0])
+            # Per field, not per row: coverages[3].limits[0].amount is one field.
+            field_tally = by_field.setdefault(re.sub(r"\[\d+\]", "[]", result.field_path), [0, 0])
             field_tally[0] += bool(result.correct)
             field_tally[1] += 1
 
@@ -404,7 +430,8 @@ def score_subset(
                 "is_scanned": bool(metadata.get("is_scanned")),
             })
 
-        for list_report in score_all_list_fields(expected, got).values():
+        tables = (without_overflow(expected), without_overflow(got)) if common_model[index] else (expected, got)
+        for list_report in score_all_list_fields(*tables).values():
             recalls.append(list_report.recall)
             f1s.append(list_report.f1)
             if list_report.got_rows:
@@ -497,7 +524,7 @@ def score_subset(
         # A false null produces NO tokens, so §5 confidence is blind to it —
         # only this metric sees a value that was on the page and came back empty.
         "false_null_rate": score_false_nulls(
-            [(expected, got) for expected, got, _ in scored],
+            [_read_values(expected, got, cm) for (expected, got, _), cm in zip(scored, common_model, strict=True)],
             source_ids=[m.get("source_id", "") for _, _, m in scored],
         ).rate,
         # Scored against the TEXT OF THE PAGES THAT WERE SENT, not against the
@@ -508,8 +535,8 @@ def score_subset(
         # Only rows that were SENT text: against an image-only row's empty text
         # every value the model read off the image would count as invented.
         "hallucination_rate": score_hallucinations([
-            (expected, got, str(metadata["ocr_text"]))
-            for expected, got, metadata in scored
+            (*_read_values(expected, got, cm), str(metadata["ocr_text"]))
+            for (expected, got, metadata), cm in zip(scored, common_model, strict=True)
             if metadata.get("ocr_text")
         ]).rate if any(m.get("ocr_text") for _, _, m in scored) else None,
         # Only meaningful where routing ran. A document that sent every page has
@@ -532,9 +559,51 @@ def score_subset(
         # Loss Runs only: claims matched by claim number with total incurred
         # within a cent (evaluation.metrics.lossrun_table).
         "table_f1": _table_f1(scored),
+        # The weakest common-model line's field match: gated (a conditional
+        # metric), so one line cannot hide behind the others' volume.
+        "worst_line_field_match": _worst_line(by_lob, scored, common_model),
+        **(model_tally.metrics() if any(common_model) else {}),
+        "seen_label_field_match": (
+            round(sum(by_label["seen"]) / len(by_label["seen"]), 4) if by_label["seen"] else None),
+        "unseen_label_field_match": (
+            round(sum(by_label["unseen"]) / len(by_label["unseen"]), 4) if by_label["unseen"] else None),
     }
     report.metrics = {k: v for k, v in report.metrics.items() if v is not None}
     return report
+
+
+def _is_common_model_document(doc_type: str, metadata: dict[str, Any]) -> bool:
+    from common.schemas import SchemaError, is_common_model
+
+    if doc_type != "policy":
+        return False
+    try:
+        return is_common_model("policy", None, metadata.get("lob"))
+    except SchemaError:
+        return False
+
+
+def _read_values(expected: Any, got: Any, common_model: bool) -> tuple[Any, Any]:
+    """What was READ: a common-model document without its codes and links,
+    which no page prints, so neither can be a false null or a hallucination."""
+    from common.canonical import without_bare_values
+
+    return (without_bare_values(expected), without_bare_values(got)) if common_model else (expected, got)
+
+
+#: A line's field match is gated only once it has this many values scored: below
+#: it the number is noise, and one odd document would block a release.
+WORST_LINE_MIN_VALUES = 200
+
+
+def _worst_line(by_lob: dict[str, list[int]], scored: Sequence[Any], common_model: list[bool]) -> float | None:
+    lines = {
+        ", ".join(m.get("lob")) if isinstance(m.get("lob"), list) else str(m.get("lob"))
+        for (_e, _g, m), cm in zip(scored, common_model, strict=True) if cm
+    }
+    rates = [correct / total for line, (correct, total) in by_lob.items()
+             if line in lines and total >= WORST_LINE_MIN_VALUES]
+    return round(min(rates), 4) if rates else None
 
 
 def expected_subsets(scope: Any = None) -> set[str]:
@@ -594,6 +663,13 @@ def build_report(
         selectors = (doc_type, metadata.get("acord_form"), metadata.get("lob"))
         expected = schema_label(expected, *selectors)
         got = schema_label(got, *selectors)
+        if _is_common_model_document(doc_type, metadata):
+            # Ids are the writer's numbering, never right or wrong: links are
+            # compared by what they name (common.structural_ids).
+            from common.structural_ids import comparable_view
+
+            expected = comparable_view(expected, metadata.get("lob"))
+            got = comparable_view(got, metadata.get("lob"))
         for subset in subset_of(metadata):
             buckets.setdefault((doc_type, subset), []).append((expected, got, metadata))
 

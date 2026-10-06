@@ -206,9 +206,14 @@ def compare(gold_label: dict[str, Any] | None, base: dict[str, Any], adapter: di
     from common.canonical import schema_label, without_system_fields
     from common.label_mapping import map_label
 
+    from common.structural_ids import comparable_for
+
     gold = without_system_fields(schema_label(gold_label or {}, doc_type, acord_form, lob))
     outside = _stated(without_system_fields(map_label(gold_label or {}, lob))) - _stated(gold)
     base, adapter = without_system_fields(base or {}), without_system_fields(adapter or {})
+    # A common-model line's ids are each writer's own numbering: compared by
+    # what its links name, never by id (common.structural_ids.comparable_view).
+    gold, base, adapter = (comparable_for(doc, doc_type, acord_form, lob) for doc in (gold, base, adapter))
 
     flat_gold = keyed_flatten(gold, gold)
     flat_base = keyed_flatten(base, gold)

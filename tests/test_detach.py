@@ -82,7 +82,7 @@ QUICK = {
     "scripts/derive_aliases_from_canonical.py", "testing/render_prompts.py",
     "pilot/pilot_report.py", "pilot/zero_shot_baseline.py",
     "data_pipeline/ocr/mineru_config.py", "scripts/propose_field_types.py",
-    "scripts/diagnose_windowing.py",
+    "scripts/diagnose_windowing.py", "scripts/check_alias_coverage.py",
 }
 
 

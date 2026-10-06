@@ -101,6 +101,12 @@ def score_against_ground_truth(
     golden, extraction = without_system_fields(golden), without_system_fields(result.extraction)
     # Scored on what the line's schema can hold, as run_eval scores it.
     golden = schema_label(golden, result.doc_type, acord_form, lob)
+    # A common-model line's ids are each writer's own numbering: compared by
+    # what its links name, never by id (common.structural_ids.comparable_view).
+    from common.structural_ids import comparable_for
+
+    golden = comparable_for(golden, result.doc_type, acord_form, lob)
+    extraction = comparable_for(extraction, result.doc_type, acord_form, lob)
     accuracy = score_fields(golden, extraction)
     list_reports = score_all_list_fields(golden, extraction)
 

@@ -323,7 +323,12 @@ ROW_IDENTIFIERS: tuple[str, ...] = (
 
 #: Identifiers that are only unique together with a companion: a location's
 #: buildings are numbered 1, 2, … within each location.
-_COMPANIONS: dict[str, tuple[str, ...]] = {"location_number": ("building_number",)}
+#: A common-model coverage code names what is covered, not which unit: the same
+#: code on two vehicles is two rows, told apart by the units they apply to.
+_COMPANIONS: dict[str, tuple[str, ...]] = {
+    "location_number": ("building_number",),
+    "coverage_code": ("applies_to",),
+}
 
 
 def _filled_share(rows: list[dict[str, Any]], field_name: str) -> float:
@@ -430,3 +435,63 @@ def score_all_list_fields(
         name: score_list_field(rows, _at(got, name) or [], name)
         for name, rows in find_list_fields(expected).items()
     }
+
+
+def aligned_for_scoring(expected: Any, got: Any) -> tuple[Any, Any]:
+    """``(expected, got)`` with every table's rows paired by identity at one index.
+
+    Like :func:`rows_aligned_to`, but for scoring values INSIDE rows, so it keeps
+    what that drops: an expected row the answer left out goes after the answer's
+    rows, where its values meet nothing and count as misses, and an answer row
+    the label does not hold faces an empty row, where its values count as
+    invented. Nested tables (a coverage's limits) are paired the same way. Both
+    sides as values (``values_view``).
+    """
+    if isinstance(expected, dict) or isinstance(got, dict):
+        left = expected if isinstance(expected, dict) else {}
+        right = got if isinstance(got, dict) else {}
+        out_left: dict[str, Any] = {}
+        out_right: dict[str, Any] = {}
+        for key in dict.fromkeys([*left, *right]):
+            paired_left, paired_right = aligned_for_scoring(left.get(key), right.get(key))
+            if key in left:
+                out_left[key] = paired_left
+            if key in right:
+                out_right[key] = paired_right
+        return out_left, out_right
+    if _is_table(expected) or _is_table(got):
+        rows = expected if isinstance(expected, list) else []
+        answer = got if isinstance(got, list) else []
+        keys = _infer_key_fields(rows or answer)
+        pool = _index_rows(rows, keys)
+        mates: list[Any] = []
+        for row in answer:
+            candidates = pool.get(_row_key(row, keys))
+            mates.append(candidates.pop(0) if candidates else None)
+        # A row that misses on the whole key - a coverage whose link the answer
+        # lost - still pairs on the identifier alone, among the rows left: the
+        # link is scored on its own (reference accuracy), not again here.
+        if len(keys) > 1:
+            primary = _index_rows([r for group in pool.values() for r in group], keys[:1])
+            for index, row in enumerate(answer):
+                if mates[index] is None:
+                    candidates = primary.get(_row_key(row, keys[:1]))
+                    if candidates:
+                        mate = candidates.pop(0)
+                        mates[index] = mate
+                        pool = {k: [r for r in g if r is not mate] for k, g in pool.items()}
+        paired_left, paired_right = [], []
+        for row, mate in zip(answer, mates, strict=True):
+            a, b = aligned_for_scoring(mate if mate is not None else {}, row)
+            paired_left.append(a)
+            paired_right.append(b)
+        for remaining in pool.values():
+            for row in remaining:
+                a, _ = aligned_for_scoring(row, {})
+                paired_left.append(a)
+        return paired_left, paired_right
+    return expected, got
+
+
+def _is_table(node: Any) -> bool:
+    return isinstance(node, list) and bool(node) and all(isinstance(row, dict) for row in node)
