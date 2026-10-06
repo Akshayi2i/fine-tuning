@@ -39,9 +39,15 @@ rendering of it - with one gold. Each render becomes a document of its own
 the family), both reading one gold - one document when the two are the same
 file, as a scanned seed's twins are. The gold the bundles hold is corrected
 where the delivered one cannot be trained on as it is (:func:`corrected_gold`),
-each change listed in ``<out>/corrections.csv``; the delivery is never changed.
-A gold still outside its line's schema after that is left out, with the reason.
-``--dry-run`` reports all of it and writes nothing.
+each change listed in ``<out>/corrections.csv``; the delivery is never changed
+(a corrected gold is written as a new file, never through a hard link to the
+delivered one). A gold still outside its line's schema after that is left out,
+with the reason. ``--dry-run`` reports all of it and writes nothing.
+
+A re-run leaves ``<out>`` holding exactly what it bundles of the delivery: a
+folder an earlier run made for a document this run leaves out (its gold, its
+files, its line, ``--originals none``) is removed, and ``corrections.csv`` is
+rewritten. Folders of other deliveries are not touched.
 
 **The seeds themselves** - the real documents the twins were made from - are
 delivered apart (``--originals``, default ``data/source data``: ``pdfs/`` and
@@ -97,6 +103,8 @@ class PrepareReport:
     relined: Counter = field(default_factory=Counter)          # "old -> new" -> rows given another line
     linked: int = 0
     copied: int = 0
+    #: Folders an earlier run made for documents this run leaves out.
+    removed: int = 0
     #: Gold corrections by kind, and one row per change: (document, kind, detail).
     corrections: Counter = field(default_factory=Counter)
     correction_rows: list = field(default_factory=list)
@@ -121,6 +129,9 @@ class PrepareReport:
         for kind, n in sorted(self.corrections.items()):
             lines.append(f"  gold corrected ({kind}): {n}")
         lines.append(f"  files linked {self.linked}, copied {self.copied}")
+        if self.removed:
+            verb = "would remove" if self.dry_run else "removed"
+            lines.append(f"  {verb} {self.removed} folder(s) an earlier run made for documents now left out")
         if self.dry_run:
             lines.append("  dry run: nothing was written")
         return "\n".join(lines)
@@ -147,6 +158,15 @@ def _place(source: Path, dest: Path, mode: str, report: PrepareReport) -> None:
     report.copied += 1
 
 
+def _write_gold(path: Path, gold: dict) -> None:
+    """Write a corrected gold as a NEW file at ``path``. An earlier run may have
+    hard-linked the delivered gold there; writing in place went through the link
+    and overwrote the delivery's own gold."""
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(json.dumps(gold, indent=2, ensure_ascii=False), encoding="utf-8")
+    os.replace(tmp, path)
+
+
 def prepare_bundles(
     delivery: Path,
     out: Path = DEFAULT_OUT,
@@ -155,10 +175,13 @@ def prepare_bundles(
     mode: str = "link",
     exclusions: dict[str, str] | None = None,
     lob_overrides: list[tuple[str, str]] | None = None,
+    dry_run: bool = False,
 ) -> PrepareReport:
-    """Write ``out/<name>/{document.pdf, golden.json, metadata.json}`` for each usable row."""
+    """Write ``out/<name>/{document.pdf, golden.json, metadata.json}`` for each usable row
+    (with ``dry_run``, count them and write nothing)."""
     if (delivery / TWIN_MANIFEST).is_file():
-        return prepare_twin_bundles(delivery, out, lines=lines, mode=mode, exclusions=exclusions)
+        return prepare_twin_bundles(delivery, out, lines=lines, mode=mode, exclusions=exclusions,
+                                    dry_run=dry_run)
     manifest = delivery / "manifest.csv"
     if not manifest.is_file():
         raise BundleError(f"no manifest.csv in {delivery}")
@@ -170,7 +193,7 @@ def prepare_bundles(
     if mode not in ("link", "copy", "move"):
         raise BundleError(f"mode {mode!r} is not link, copy or move")
 
-    report = PrepareReport(out=out)
+    report = PrepareReport(out=out, dry_run=dry_run)
     seen: dict[str, str] = {}
     for row in rows:
         lob = row["lob"].strip()
@@ -197,7 +220,9 @@ def prepare_bundles(
         if exclusions and name in exclusions:
             report.skipped[f"excluded: {exclusions[name]}"] += 1
             if (out / name).is_dir():
-                shutil.rmtree(out / name)          # made by an earlier run: take it out
+                report.removed += 1
+                if not dry_run:
+                    shutil.rmtree(out / name)      # made by an earlier run: take it out
             continue
         if name in seen:
             raise BundleError(f"two manifest rows name the document {name!r} ({seen[name]}, {row['pdf']})")
@@ -207,10 +232,6 @@ def prepare_bundles(
             raise BundleError(f"{name}: split {row['split']!r} is not Train, Val or Test")
         kind = row["kind"].strip().lower()
 
-        folder = out / name
-        folder.mkdir(parents=True, exist_ok=True)
-        _place(pdf, folder / "document.pdf", mode, report)
-        _place(gold, folder / "golden.json", mode, report)
         metadata = {
             "lob": lob,
             "synthetic": kind == "synthetic",
@@ -223,8 +244,14 @@ def prepare_bundles(
             # ...): the per-seed twin cap counts each mode apart.
             "render_mode": render_mode(row, gold),
         }
-        (folder / "metadata.json").write_text(json.dumps(metadata, indent=2), encoding="utf-8")
         report.written[(split, "synthetic" if metadata["synthetic"] else "real")] += 1
+        if dry_run:
+            continue
+        folder = out / name
+        folder.mkdir(parents=True, exist_ok=True)
+        _place(pdf, folder / "document.pdf", mode, report)
+        _place(gold, folder / "golden.json", mode, report)
+        (folder / "metadata.json").write_text(json.dumps(metadata, indent=2), encoding="utf-8")
     return report
 
 
@@ -288,20 +315,17 @@ def prepare_twin_bundles(
             # A scanned seed's twin is a scan in both folders, byte for byte: one
             # document, a scan, not the same PDF twice under two render modes.
             notes.append(("renders identical", f"{renders[0][1].name} is the scan; one document"))
-            if not dry_run and (out / renders[0][1].stem).is_dir():
-                shutil.rmtree(out / renders[0][1].stem)          # made by an earlier run
             renders = renders[1:]
+        changed = any(kind != "renders identical" for kind, _ in notes)
         for kind, detail in notes:
             report.corrections[kind] += 1
             report.correction_rows.append((row["twin"], kind, detail))
 
         number = re.search(r"(\d+)$", row["twin"].strip())
-        for render, pdf in renders:
+        for index, (render, pdf) in enumerate(renders):
             name = pdf.stem
             if exclusions and name in exclusions:
                 report.skipped[f"excluded: {exclusions[name]}"] += 1
-                if not dry_run and (out / name).is_dir():
-                    shutil.rmtree(out / name)
                 continue
             if name in seen:
                 raise BundleError(f"two manifest rows name the document {name!r} ({seen[name]}, {pdf})")
@@ -323,24 +347,51 @@ def prepare_twin_bundles(
             folder = out / name
             folder.mkdir(parents=True, exist_ok=True)
             _place(pdf, folder / "document.pdf", mode, report)
-            if notes:
-                (folder / "golden.json").write_text(json.dumps(gold, indent=2, ensure_ascii=False),
-                                                    encoding="utf-8")
+            if changed:
+                _write_gold(folder / "golden.json", gold)
             else:
-                _place(gold_path, folder / "golden.json", mode, report)
+                # The two renders share one delivered gold: moved with the last,
+                # copied for the one before (moving it first left nothing to place).
+                last = index == len(renders) - 1
+                _place(gold_path, folder / "golden.json", "copy" if mode == "move" and not last else mode,
+                       report)
             (folder / "metadata.json").write_text(json.dumps(metadata, indent=2), encoding="utf-8")
 
     if originals is not None:
         _bundle_originals(originals, rows, out, lines=lines, mode=mode, exclusions=exclusions,
                           dry_run=dry_run, recodes=recodes, report=report, seen=seen)
 
-    if not dry_run and report.correction_rows:
+    # What an earlier run bundled of this delivery and this one leaves out.
+    for name in sorted(_delivery_names(rows) - set(seen)):
+        if (out / name).is_dir():
+            report.removed += 1
+            if not dry_run:
+                shutil.rmtree(out / name)
+
+    if not dry_run:
+        # Rewritten every run, if only with its header: an earlier run's list
+        # would describe golds this run did not write.
         out.mkdir(parents=True, exist_ok=True)
         with (out / "corrections.csv").open("w", encoding="utf-8", newline="") as fh:
             writer = csv.writer(fh)
             writer.writerow(["twin", "correction", "detail"])
             writer.writerows(report.correction_rows)
     return report
+
+
+def _original_name(lob: str, carrier: str, seed: str) -> str:
+    """The folder of a seed's own document."""
+    return f"{lob}__{carrier.strip()}__{seed.strip()}__original"
+
+
+def _delivery_names(rows: list[dict[str, str]]) -> set[str]:
+    """Every folder a SPEC_21 delivery's bundles can have: both renders of each
+    twin, and each seed's original."""
+    names: set[str] = set()
+    for row in rows:
+        names.update((Path(row["digital"]).stem, Path(row["scanned"]).stem,
+                      _original_name(delivery_line(row["lob"]), row["carrier"], row["seed"])))
+    return names
 
 
 def _same_file(a: Path, b: Path) -> bool:
@@ -375,7 +426,7 @@ def _bundle_originals(
         if pdf is None or gold_path is None:
             report.skipped["seed document or its gold not in the originals"] += 1
             continue
-        name = f"{lob}__{row['carrier'].strip()}__{seed}__original"
+        name = _original_name(lob, row["carrier"], seed)
         gold, notes, problem = corrected_gold(json.loads(gold_path.read_text(encoding="utf-8")), lob,
                                               carrier=row["carrier"], text_pdf=pdf, recodes=recodes)
         if problem:
@@ -384,8 +435,6 @@ def _bundle_originals(
             continue
         if exclusions and name in exclusions:
             report.skipped[f"excluded: {exclusions[name]}"] += 1
-            if not dry_run and (out / name).is_dir():
-                shutil.rmtree(out / name)
             continue
         if name in seen:
             raise BundleError(f"two documents are named {name!r}")
@@ -411,7 +460,7 @@ def _bundle_originals(
         folder.mkdir(parents=True, exist_ok=True)
         _place(pdf, folder / "document.pdf", mode, report)
         if notes:
-            (folder / "golden.json").write_text(json.dumps(gold, indent=2, ensure_ascii=False), encoding="utf-8")
+            _write_gold(folder / "golden.json", gold)
         else:
             _place(gold_path, folder / "golden.json", mode, report)
         (folder / "metadata.json").write_text(json.dumps(metadata, indent=2), encoding="utf-8")
@@ -597,7 +646,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--lob-overrides", type=Path, default=DEFAULT_LOB_OVERRIDES,
                         help="source_prefix,lob,reason CSV of lines to correct")
     parser.add_argument("--dry-run", action="store_true",
-                        help="SPEC_21 delivery: report the bundles and gold corrections, write nothing")
+                        help="report the bundles (and a SPEC_21 delivery's gold corrections), write nothing")
     parser.add_argument("--originals", type=Path, default=DEFAULT_ORIGINALS,
                         help="SPEC_21 delivery: the seed documents (pdfs/, gold json/); 'none' leaves them out")
     args = parser.parse_args(argv)
@@ -621,7 +670,7 @@ def main(argv: list[str] | None = None) -> int:
         else:
             report = prepare_bundles(args.input, args.out, lines=lines, mode=args.mode,
                                      exclusions=read_exclusions(args.exclude),
-                                     lob_overrides=read_lob_overrides(args.lob_overrides))
+                                     lob_overrides=read_lob_overrides(args.lob_overrides), dry_run=args.dry_run)
     except BundleError as exc:
         print(exc, file=sys.stderr)
         return 1

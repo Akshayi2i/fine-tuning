@@ -189,3 +189,89 @@ def test_a_seed_without_its_document_is_counted_not_guessed(tmp_path):
     report = prepare_twin_bundles(root, tmp_path / "bundles", originals=originals)
     assert report.skipped["seed document or its gold not in the originals"] == 1
     assert ("train", "real") not in report.written
+
+
+TWIN_1 = "homeowners__all_state__seed_a__twin_001"
+ORIGINAL = "homeowners__all_state__seed_a__original"
+
+
+def _corrections(monkeypatch, marker):
+    """``corrected_gold`` changing nothing (``marker`` None), or adding ``marker``."""
+    from data_pipeline.ingestion import prepare_bundles as module
+
+    def corrected(gold, lob, **_kwargs):
+        if marker is None:
+            return gold, [], None
+        return {**gold, "x_marker": marker}, [("test", "changed")], None
+
+    monkeypatch.setattr(module, "corrected_gold", corrected)
+
+
+def test_a_gold_corrected_on_a_rerun_is_a_new_file_and_the_delivered_gold_is_untouched(tmp_path, monkeypatch):
+    """The first run links the uncorrected golds; writing the corrected one in
+    place went through the link into the delivery."""
+    root = _delivery(tmp_path, {1: _gold()})
+    originals = _originals(tmp_path, _gold())
+    out = tmp_path / "bundles"
+    _corrections(monkeypatch, None)
+    prepare_twin_bundles(root, out, originals=originals)
+    delivered = [root / "train" / "homeowners" / "Gold_json" / f"{TWIN_1}.json",
+                 originals / "gold json" / "homeowners" / "All State" / "seed_a.gold.json"]
+    before = [path.read_bytes() for path in delivered]
+    _corrections(monkeypatch, 1)
+    prepare_twin_bundles(root, out, originals=originals)
+    assert [path.read_bytes() for path in delivered] == before
+    for name in (TWIN_1, f"{TWIN_1}__scan", ORIGINAL):
+        assert json.loads((out / name / "golden.json").read_text(encoding="utf-8"))["x_marker"] == 1
+
+
+def test_move_mode_gives_both_renders_their_shared_gold(tmp_path, monkeypatch):
+    root = _delivery(tmp_path, {1: _gold()})
+    _corrections(monkeypatch, None)
+    out = tmp_path / "bundles"
+    report = prepare_twin_bundles(root, out, mode="move")
+    assert report.written == {("train", "synthetic"): 2}
+    for name in (TWIN_1, f"{TWIN_1}__scan"):
+        assert (out / name / "golden.json").is_file() and (out / name / "document.pdf").is_file()
+    assert not (root / "train" / "homeowners" / "Gold_json" / f"{TWIN_1}.json").exists()   # moved once
+
+
+def test_a_rerun_removes_what_an_earlier_run_bundled_and_this_one_leaves_out(tmp_path):
+    root = _delivery(tmp_path, {1: _gold(), 2: _gold()})
+    out = tmp_path / "bundles"
+    prepare_twin_bundles(root, out, originals=_originals(tmp_path, _gold()))
+    (out / "another_delivery__document").mkdir()
+    twin_2 = root / "train" / "homeowners" / "Gold_json" / "homeowners__all_state__seed_a__twin_002.json"
+    twin_2.write_text(json.dumps(_gold(coverages=None)), encoding="utf-8")       # now outside its schema
+
+    dry = prepare_twin_bundles(root, out, dry_run=True)                          # and no originals
+    assert dry.removed == 3 and (out / ORIGINAL).is_dir()
+    report = prepare_twin_bundles(root, out)
+    assert report.removed == 3
+    assert {p.name for p in out.iterdir() if p.is_dir()} == {TWIN_1, f"{TWIN_1}__scan", "another_delivery__document"}
+
+
+def test_corrections_csv_is_rewritten_by_a_run_with_nothing_to_correct(tmp_path, monkeypatch):
+    root = _delivery(tmp_path, {1: _gold()})
+    out = tmp_path / "bundles"
+    prepare_twin_bundles(root, out)                       # the example writes its premiums twice
+    assert len((out / "corrections.csv").read_text(encoding="utf-8").splitlines()) > 1
+    _corrections(monkeypatch, None)
+    prepare_twin_bundles(root, out)
+    assert (out / "corrections.csv").read_text(encoding="utf-8").splitlines() == ["twin,correction,detail"]
+
+
+def test_a_dry_run_of_an_older_delivery_writes_nothing(tmp_path):
+    root = tmp_path / "older"
+    _pdf(root / "Train" / "pdfs" / "a.pdf", "a policy")
+    (root / "Train" / "gold json").mkdir(parents=True)
+    (root / "Train" / "gold json" / "a.json").write_text(json.dumps(_gold()), encoding="utf-8")
+    with (root / "manifest.csv").open("w", newline="", encoding="utf-8") as fh:
+        writer = csv.writer(fh)
+        writer.writerow(["split", "lob", "source", "kind", "pdf", "gold", "ok"])
+        writer.writerow(["Train", "homeowners", "src/a.pdf", "synthetic", "Train/pdfs/a.pdf",
+                         "Train/gold json/a.json", "true"])
+    out = tmp_path / "bundles"
+    report = prepare_bundles(root, out, dry_run=True)
+    assert report.written == {("train", "synthetic"): 1} and not out.exists()
+    assert (root / "Train" / "pdfs" / "a.pdf").is_file()

@@ -21,12 +21,11 @@ extends: unified
 # unsteered (every synthetic document trains). A line's own value overrides
 # the default; null under a line takes the default.
 #
-# Both are null until set, which trains exactly what it did before: all 152
-# originals are scans and every synthetic copy is rendered from one, so a
-# scanned share below 1 has no digital documents to reach it with yet - the
-# view would say so and keep everything. Set scanned_share per line from the
-# production share once it is known, and synthetic_fraction once the new
-# training set shows how many twins a seed brings.
+# Both are null until set: every document trains. The SPEC_21 set gives each
+# seed 15 twins, each in a digital and a scanned render (one scan where the
+# seed was itself a scan), so a line's train documents are about half scanned.
+# Set scanned_share per line from the production share once it is known, and
+# synthetic_fraction to train fewer twins per seed.
 #
 # The values used, and what each line came to, are recorded on the run
 # manifest (data_stats.data_mix) and in the run's model card.
