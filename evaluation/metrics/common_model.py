@@ -108,26 +108,28 @@ def _overflow(doc: Any) -> Counter:
 
 
 def _codes(expected: dict[str, Any], got: dict[str, Any]) -> tuple[int, int]:
-    """Coverages paired by what they apply to and their printed name; of the
-    pairs, how many carry the same code."""
-    from common.normalize import normalize_text
+    """Coverages paired by what the page prints - what they apply to and their
+    name, then the name alone - never by the code being measured; of the
+    pairs, how many carry the same code.
 
-    def by_identity(doc: Any) -> dict[tuple, list[str]]:
-        out: dict[tuple, list[str]] = {}
-        for row in (doc or {}).get("coverages") or [] if isinstance(doc, dict) else []:
-            if not isinstance(row, dict):
-                continue
-            name = normalize_text(values_view(row.get("coverage_name")))
-            if not name:
-                continue
-            key = (tuple(sorted(row.get("applies_to") or [])), name)
-            out.setdefault(key, []).append(str(row.get("coverage_code") or ""))
-        return out
+    The name alone pairs a coverage whose link was lost between windows (its
+    units and its coverages on different pages): keyed on the link as well,
+    no coverage of such a policy paired and the metric was never measured.
+    Where several share a name, the one sharing the most values is taken
+    (``field_accuracy.pair_coverages_by_name``).
+    """
+    from evaluation.metrics.field_accuracy import pair_coverages_by_name
 
-    gold, answer = by_identity(expected), by_identity(got)
+    def coverages(doc: Any) -> list[dict[str, Any]]:
+        rows = (doc or {}).get("coverages") if isinstance(doc, dict) else None
+        return [row for row in rows or [] if isinstance(row, dict)]
+
+    answer = coverages(got)
     right = scored = 0
-    for key, codes in gold.items():
-        for code, other in zip(codes, answer.get(key, []), strict=False):
-            scored += 1
-            right += code == other
+    for row, mate in zip(answer, pair_coverages_by_name(coverages(expected), answer), strict=True):
+        if mate is None:
+            continue
+        scored += 1
+        right += str(values_view(mate.get("coverage_code")) or "") == str(
+            values_view(row.get("coverage_code")) or "")
     return right, scored

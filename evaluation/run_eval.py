@@ -312,6 +312,7 @@ def score_subset(
     from evaluation.metrics.common_model import CommonModelTally, core_for_scoring, without_overflow
     from evaluation.metrics.confusable import aggregate_misattribution, score_misattribution
     from evaluation.metrics.coverage_metrics import (
+        SchemaValidityReport,
         expected_calibration_error,
         score_lob,
         score_schema_validity,
@@ -434,7 +435,7 @@ def score_subset(
             })
 
         tables = (without_overflow(expected), without_overflow(got)) if common_model[index] else (expected, got)
-        for list_report in score_all_list_fields(*tables).values():
+        for list_report in score_all_list_fields(*tables, common_model=common_model[index]).values():
             recalls.append(list_report.recall)
             f1s.append(list_report.f1)
             if list_report.got_rows:
@@ -452,9 +453,20 @@ def score_subset(
     # it as invalid keeps the run going and does not flatter the result; letting
     # the SchemaError escape would discard every other document's score too.
     validatable, unselectable = [], []
-    for _e, got, meta in scored:
+    # A common-model document served with its verdict (golden_eval): serving's
+    # own judgement, the audit gate's. The JSON it served has every key filled,
+    # so a section no window wrote is there as nulls and checking it again
+    # would pass what serving refused.
+    served = SchemaValidityReport()
+    for (_e, got, meta), cm in zip(scored, common_model, strict=True):
         form = meta.get("acord_form")
-        if doc_type == "acord" and not form:
+        if cm and isinstance(meta.get("schema_valid"), bool):
+            served.total += 1
+            if meta["schema_valid"]:
+                served.valid += 1
+            else:
+                served.invalid_source_ids.append(meta.get("source_id", ""))
+        elif doc_type == "acord" and not form:
             unselectable.append(meta.get("source_id", ""))
         else:
             validatable.append((
@@ -465,6 +477,9 @@ def score_subset(
             ))
 
     validity = score_schema_validity(validatable)
+    validity.valid += served.valid
+    validity.total += served.total
+    validity.invalid_source_ids.extend(served.invalid_source_ids)
     validity_total = validity.total + len(unselectable)
     validity_rate = validity.valid / validity_total if validity_total else 0.0
     if unselectable:
@@ -602,6 +617,12 @@ def _read_values(expected: Any, got: Any, common_model: bool) -> tuple[Any, Any]
     another order put a liability row's limits against a collision row with
     none. Paired on the whole documents, then stripped: the codes and links
     that pair the rows are themselves bare values.
+
+    A row the model wrote that pairs with no label row then takes the next
+    label row nothing paired, in table order (``fill_unpaired``): its values
+    were written, so a gold row it misread is wrong values, which field match
+    prices, never false nulls. Only label rows left after that - rows the model
+    did not write at all - count their values as nulls.
     """
     from common.canonical import without_bare_values
 
@@ -609,7 +630,7 @@ def _read_values(expected: Any, got: Any, common_model: bool) -> tuple[Any, Any]
         return expected, got
     from evaluation.metrics.field_accuracy import aligned_for_scoring
 
-    expected, got = aligned_for_scoring(expected, got)
+    expected, got = aligned_for_scoring(expected, got, fill_unpaired=True)
     return without_bare_values(expected), without_bare_values(got)
 
 

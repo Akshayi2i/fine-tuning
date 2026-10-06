@@ -17,6 +17,7 @@ a dropped Loss Run claim.
 
 from __future__ import annotations
 
+from collections import Counter
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -252,13 +253,22 @@ def score_list_field(
     field_name: str,
     *,
     key_fields: list[str] | None = None,
+    common_model: bool = False,
 ) -> ListFieldReport:
     """Match rows by identity, then score.
 
     Rows are matched on an identifying subset (a claim number, say) rather than
     by position, because a model that drops row 2 would otherwise mis-align every
     row after it and score near zero for one omission.
+
+    ``common_model``: the rows are a common-model document's, and pair as its
+    field match pairs them (:func:`_pair_rows`). Keyed on the code and the link,
+    a coverage whose link was lost between windows, or that got a sibling's
+    code, counted as a missed row and an invented one, though field match
+    reads the same row as one wrong value.
     """
+    if common_model and key_fields is None:
+        return _score_paired_rows(expected_rows, got_rows, field_name)
     keys = key_fields or _infer_key_fields(expected_rows)
     # Keys are counted, not deduplicated. Indexing rows into a dict collapsed
     # duplicates, so two claim rows sharing a claim number scored recall 0.5 on a
@@ -288,6 +298,29 @@ def score_list_field(
         expected_rows=len(expected_rows),
         got_rows=len(got_rows),
         matched_rows=matched_rows,
+        row_field_accuracy=sum(field_scores) / len(field_scores) if field_scores else 0.0,
+    )
+
+
+def _score_paired_rows(expected_rows: list[Any], got_rows: list[Any], field_name: str) -> ListFieldReport:
+    """:func:`score_list_field` for a common-model table: rows paired by
+    :func:`_pair_rows`."""
+    mates, _unpaired = _pair_rows(expected_rows, got_rows)
+    field_scores: list[float] = []
+    for got_row, mate in zip(got_rows, mates, strict=True):
+        if mate is None:
+            continue
+        if not isinstance(mate, dict) or not isinstance(got_row, dict):
+            field_scores.append(1.0 if mate == got_row else 0.0)
+            continue
+        report = score_fields(mate, got_row, skip_lists=False)
+        if report.total:
+            field_scores.append(report.normalized_match)
+    return ListFieldReport(
+        field_name=field_name,
+        expected_rows=len(expected_rows),
+        got_rows=len(got_rows),
+        matched_rows=sum(mate is not None for mate in mates),
         row_field_accuracy=sum(field_scores) / len(field_scores) if field_scores else 0.0,
     )
 
@@ -431,7 +464,7 @@ def _at(obj: dict[str, Any], dotted: str) -> Any:
 
 
 def score_all_list_fields(
-    expected: dict[str, Any], got: dict[str, Any]
+    expected: dict[str, Any], got: dict[str, Any], *, common_model: bool = False
 ) -> dict[str, ListFieldReport]:
     """Score every list field. Fields absent from the output score zero recall,
     which is the correct reading: the rows were expected and not produced.
@@ -441,17 +474,20 @@ def score_all_list_fields(
     claim match only when raw text and page_ref were byte-identical — and never
     against a stored golden, which also carries confidence and flagged — while
     unkeyed tables matched on nothing, so any rows counted as the right rows.
+
+    ``common_model``: a common-model document's rows pair as its field match
+    pairs them (:func:`score_list_field`).
     """
     from common.canonical import values_view
 
     expected, got = values_view(expected), values_view(got)
     return {
-        name: score_list_field(rows, _at(got, name) or [], name)
+        name: score_list_field(rows, _at(got, name) or [], name, common_model=common_model)
         for name, rows in find_list_fields(expected).items()
     }
 
 
-def aligned_for_scoring(expected: Any, got: Any) -> tuple[Any, Any]:
+def aligned_for_scoring(expected: Any, got: Any, *, fill_unpaired: bool = False) -> tuple[Any, Any]:
     """``(expected, got)`` with every table's rows paired by identity at one index.
 
     Like :func:`rows_aligned_to`, but for scoring values INSIDE rows, so it keeps
@@ -461,6 +497,13 @@ def aligned_for_scoring(expected: Any, got: Any) -> tuple[Any, Any]:
     invented. Nested tables (a coverage's limits) are paired the same way.
     Rows pair as their values do (:func:`_pair_rows`), so two documents with
     their envelopes pair exactly as their values views would.
+
+    ``fill_unpaired``: after that pairing, each answer row nothing paired takes
+    the next label row nothing paired, in table order, and only the label rows
+    left after that go at the end. For the metrics that ask whether a value was
+    WRITTEN where the label has one (false nulls): a row the model wrote but
+    misread is a wrong value there, never a null. Field match keeps the strict
+    pairing, where such a row is one missed row and one invented one.
     """
     if isinstance(expected, dict) or isinstance(got, dict):
         left = expected if isinstance(expected, dict) else {}
@@ -468,7 +511,8 @@ def aligned_for_scoring(expected: Any, got: Any) -> tuple[Any, Any]:
         out_left: dict[str, Any] = {}
         out_right: dict[str, Any] = {}
         for key in dict.fromkeys([*left, *right]):
-            paired_left, paired_right = aligned_for_scoring(left.get(key), right.get(key))
+            paired_left, paired_right = aligned_for_scoring(
+                left.get(key), right.get(key), fill_unpaired=fill_unpaired)
             if key in left:
                 out_left[key] = paired_left
             if key in right:
@@ -478,72 +522,179 @@ def aligned_for_scoring(expected: Any, got: Any) -> tuple[Any, Any]:
         rows = expected if isinstance(expected, list) else []
         answer = got if isinstance(got, list) else []
         mates, unpaired = _pair_rows(rows, answer)
+        if fill_unpaired:
+            free = iter(unpaired)
+            mates = [mate if mate is not None else next(free, None) for mate in mates]
+            unpaired = list(free)
         paired_left, paired_right = [], []
         for row, mate in zip(answer, mates, strict=True):
-            a, b = aligned_for_scoring(mate if mate is not None else {}, row)
+            a, b = aligned_for_scoring(mate if mate is not None else {}, row,
+                                       fill_unpaired=fill_unpaired)
             paired_left.append(a)
             paired_right.append(b)
         for row in unpaired:
-            a, _ = aligned_for_scoring(row, {})
+            a, _ = aligned_for_scoring(row, {}, fill_unpaired=fill_unpaired)
             paired_left.append(a)
         return paired_left, paired_right
     return expected, got
 
 
-#: Where a coverage pairs once its code has failed it: what it applies to and
-#: the name the page prints - the identity ``coverage_code_accuracy`` pairs on
-#: (``evaluation.metrics.common_model._codes``). The code is a choice the model
-#: makes from a list; one wrong pick is one wrong value, not a missed row.
+#: What a coverage prints: what it applies to and its name - where it pairs
+#: before its code is trusted against a name that disagrees, and the identity
+#: ``coverage_code_accuracy`` pairs on (``common_model._codes``). The code is a
+#: choice the model makes from a list; one wrong pick is one wrong value, not
+#: a missed row.
 _PRINTED_COVERAGE_KEYS: tuple[str, ...] = ("applies_to", "coverage_name")
+
+#: One pass of row pairing: the fields both rows must agree on, and a test of
+#: an (answer row, label row) pair, as values, that must hold as well.
+_Pass = tuple[list[str], Any]
 
 
 def _pair_rows(rows: list[Any], answer: list[Any]) -> tuple[list[Any], list[Any]]:
     """Each answer row's label row (``None`` where none pairs), and the label
-    rows nothing paired with, in table order.
+    rows nothing paired with, in table order. Only a common-model document's
+    rows are paired here (field match, false nulls, auto-accept, list metrics).
 
     Rows pair on the table's identifiers (:func:`_infer_key_fields`), as values
-    (``values_view``), each label row once. A row that misses on the whole key
-    - a coverage whose link the answer lost - still pairs on the identifier
-    alone, among the rows left: the link is scored on its own (reference
-    accuracy), not again here. A coverage that misses on its code too pairs on
-    :data:`_PRINTED_COVERAGE_KEYS`, where it prints a name.
+    (``values_view``), each label row once, in passes from the strictest
+    identity down; each pass runs over every answer row before the next, so a
+    row that would pair on a weaker identity cannot take a row a stronger one
+    claims. A row that misses on the whole key - a unit whose link the answer
+    lost - still pairs on the identifier alone: the link is scored on its own
+    (reference accuracy), not again here.
+
+    A coverage is known by the name its page prints before the code, which is a
+    choice the model makes from a list: a wrong code is most often a sibling
+    coverage's, and on the code it would take that sibling's row. So the code
+    pairs first only where the printed names agree, then the printed identity
+    (:data:`_PRINTED_COVERAGE_KEYS`), then the name alone - a link lost between
+    windows - and only then the code whatever the names say (a misread name).
+
+    Where several label rows qualify, the one sharing the most values with the
+    answer row is taken (premium, limits, deductibles ...), then the one nearest
+    in the table: two Collision rows with their links lost are told apart by
+    their premiums and deductibles, never by which comes first. Last, a row
+    still unpaired takes the unpaired label row it shares the most values
+    with, if that is at least half of that row's values: a misread VIN or
+    limit amount then costs that value, not the row.
     """
     from common.canonical import values_view
 
     keys = _infer_key_fields(values_view(rows or answer))
-
-    def index(pool_rows: list[Any], fields: list[str]) -> dict[tuple, list[Any]]:
-        grouped: dict[tuple, list[Any]] = {}
-        for row in pool_rows:
-            grouped.setdefault(_row_key(values_view(row), fields), []).append(row)
-        return grouped
-
-    pool = index(rows, keys)
-    mates: list[Any] = []
-    for row in answer:
-        candidates = pool.get(_row_key(values_view(row), keys))
-        mates.append(candidates.pop(0) if candidates else None)
-    # (fields, whether a row must print a coverage name to pair on them)
-    fallbacks: list[tuple[list[str], bool]] = [(keys[:1], False)] if len(keys) > 1 else []
+    passes: list[_Pass] = [(keys, None)]
     if keys[:1] == ["coverage_code"]:
-        fallbacks.append((list(_PRINTED_COVERAGE_KEYS), True))
-    for fields, named_only in fallbacks:
-        left = index([r for group in pool.values() for r in group
-                      if not named_only or _names_coverage(r)], fields)
-        for position, row in enumerate(answer):
-            if mates[position] is not None or (named_only and not _names_coverage(row)):
+        passes = [
+            (keys, _names_agree),
+            (list(_PRINTED_COVERAGE_KEYS), _both_named),
+            (["coverage_name"], _both_named),
+            (keys, None),
+            (["coverage_code"], None),
+        ]
+    elif len(keys) > 1:
+        passes.append((keys[:1], None))
+    return _pair_in_passes(rows, answer, passes, final=True)
+
+
+def pair_coverages_by_name(rows: list[Any], answer: list[Any]) -> list[Any]:
+    """Each answer coverage's label coverage by what its page prints alone:
+    what it applies to and its name, then its name - never its code, which is
+    what ``coverage_code_accuracy`` measures. A coverage that prints no name
+    pairs with nothing (``None``)."""
+    passes: list[_Pass] = [(list(_PRINTED_COVERAGE_KEYS), _both_named),
+                           (["coverage_name"], _both_named)]
+    return _pair_in_passes(rows, answer, passes, final=False)[0]
+
+
+def _pair_in_passes(rows: list[Any], answer: list[Any], passes: list[_Pass], *,
+                    final: bool) -> tuple[list[Any], list[Any]]:
+    """Pair ``answer`` with ``rows`` pass by pass (:func:`_pair_rows`). Within a
+    pass the pairs that share the most values go first, then the nearest in
+    the table; ``final`` adds the last pass on shared values alone."""
+    from common.canonical import values_view
+
+    label_views = [values_view(row) for row in rows]
+    answer_views = [values_view(row) for row in answer]
+    label_values = [_stated_values(view) for view in label_views]
+    answer_values = [_stated_values(view) for view in answer_views]
+    mates: list[int | None] = [None] * len(answer)
+    free = set(range(len(rows)))
+
+    def assign(candidates: list[tuple[int, int, int, int]]) -> None:
+        # (shared values, distance, answer position, label index), best first.
+        for _shared, _distance, position, label in sorted(candidates, key=lambda c: (-c[0], *c[1:])):
+            if mates[position] is None and label in free:
+                mates[position] = label
+                free.discard(label)
+
+    for fields, qualifies in passes:
+        candidates = []
+        for position, view in enumerate(answer_views):
+            if mates[position] is not None:
                 continue
-            candidates = left.get(_row_key(values_view(row), fields))
-            if candidates:
-                mate = candidates.pop(0)
-                mates[position] = mate
-                pool = {k: [r for r in g if r is not mate] for k, g in pool.items()}
-    return mates, [row for group in pool.values() for row in group]
+            key = _row_key(view, fields)
+            for label in sorted(free):
+                if _row_key(label_views[label], fields) != key:
+                    continue
+                if qualifies is not None and not qualifies(view, label_views[label]):
+                    continue
+                shared = sum((answer_values[position] & label_values[label]).values())
+                candidates.append((shared, abs(label - position), position, label))
+        assign(candidates)
+    if final:
+        scalars = {label: _stated_values(label_views[label], scalars_only=True) for label in free}
+        candidates = []
+        for position in range(len(answer)):
+            if mates[position] is not None:
+                continue
+            mine = _stated_values(answer_views[position], scalars_only=True)
+            for label in sorted(free):
+                theirs = scalars[label]
+                shared = sum((mine & theirs).values())
+                if shared and 2 * shared >= sum(theirs.values()):
+                    candidates.append((shared, abs(label - position), position, label))
+        assign(candidates)
+    return ([rows[m] if m is not None else None for m in mates],
+            [row for index, row in enumerate(rows) if index in free])
+
+
+def _stated_values(view: Any, *, scalars_only: bool = False) -> Counter:
+    """A row's stated values, nested rows included, as ``(field, value)`` counts
+    with row positions left out - so a coverage's limits in another order are
+    the same values. ``scalars_only`` leaves out a list of values (a link's
+    references): what a row applies to alone is no identity."""
+    import re
+
+    out: Counter = Counter()
+    if not isinstance(view, dict):
+        return out
+    for path, value in flatten_scalars(view).items():
+        if isinstance(value, list) and scalars_only:
+            continue
+        field_name = re.sub(r"\[\d+\]", "[]", path)
+        for item in value if isinstance(value, list) else [value]:
+            text = _key_text(item)
+            if text:
+                out[(field_name, text)] += 1
+    return out
+
+
+def _both_named(row: Any, label: Any) -> bool:
+    """Whether both coverage rows print a name: without one, what a coverage
+    applies to alone is no identity, and two unnamed coverages of a unit are
+    not paired."""
+    return _names_coverage(row) and _names_coverage(label)
+
+
+def _names_agree(row: Any, label: Any) -> bool:
+    """Whether two coverage rows print the same name, or either prints none."""
+    if not (_names_coverage(row) and _names_coverage(label)):
+        return True
+    return _key_text(row.get("coverage_name")) == _key_text(label.get("coverage_name"))
 
 
 def _names_coverage(row: Any) -> bool:
-    """Whether a coverage row prints a name: without one, what it applies to
-    alone is no identity, and two unnamed coverages of a unit are not paired."""
+    """Whether a coverage row prints a name."""
     from common.canonical import values_view
 
     return isinstance(row, dict) and bool(_key_text(values_view(row.get("coverage_name"))))

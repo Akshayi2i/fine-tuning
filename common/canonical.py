@@ -554,9 +554,17 @@ def schema_label(
 ) -> Any:
     """A golden label as training and scoring use it: moved into its line's
     block (configs/label_mappings.yaml), then narrowed to what the line's
-    canonical schema can hold. Flat document types are returned as they are."""
+    canonical schema can hold. Flat document types are returned as they are.
+
+    On a common-model line, a part whose line is read as this one
+    (``common.lob.merge_line``: classic auto is personal auto) is written as
+    this line, which is what the model view holds a part to and what training
+    teaches. Done here, where training (``window_target``) and scoring
+    (``build_report``, both sides) both start, so the two cannot drift: a
+    classic-auto gold scored the answer training taught as a wrong part.
+    """
     from common.label_mapping import map_label
-    from common.schemas import SchemaError, is_canonical, resolved_schema
+    from common.schemas import SchemaError, is_canonical, is_common_model, resolved_schema
 
     label = map_label(label, lob)
     try:
@@ -567,7 +575,35 @@ def schema_label(
         return label
     if not canonical:
         return label
+    if is_common_model(doc_type, acord_form, lob):
+        label = _parts_as_line(label, doc_type, acord_form, lob)
     return within_schema(label, resolved_schema(doc_type, acord_form, lob))[0]
+
+
+def _parts_as_line(
+    label: dict[str, Any], doc_type: str, acord_form: str | None, lob: str | list[str] | None,
+) -> dict[str, Any]:
+    """``label`` with each ``lob_parts[].lob`` that ``merge_line`` reads as the
+    schema's line written as that line; a copy when one is rewritten. A part
+    of another line is left as it is (training refuses such a label)."""
+    from common.lob import merge_line
+    from common.schemas import schema_key
+
+    parts = label.get("lob_parts")
+    if not isinstance(parts, list):
+        return label
+    line = schema_key(doc_type, acord_form, lob).split(":", 1)[1]
+
+    def own(part: Any) -> Any:
+        name = part.get("lob") if isinstance(part, dict) else None
+        if not isinstance(name, str) or name == line or merge_line(name.strip().lower()) != line:
+            return part
+        return {**part, "lob": line}
+
+    rewritten = [own(part) for part in parts]
+    if all(new is old for new, old in zip(rewritten, parts, strict=True)):
+        return label
+    return {**label, "lob_parts": rewritten}
 
 
 def training_target(

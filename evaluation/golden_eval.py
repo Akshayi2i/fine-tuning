@@ -213,6 +213,12 @@ def evaluate(
             # For the release measurements: which adapter served, and each call's time.
             metadata["adapter"] = result.route_info.get("adapter")
             metadata["window_latencies_ms"] = list(result.window_latencies_ms)
+            # Serving's own verdict, the audit gate's: a common-model policy is
+            # served with every key filled, so a section no window wrote is there
+            # as nulls and only serving knows it was never written.
+            # schema_validity_rate reads this verdict (run_eval.score_subset).
+            metadata["schema_valid"] = result.schema_valid
+            metadata["validation_errors"] = list(result.validation_errors[:4])
             triples.append((doc.golden, result.extraction, metadata))
     return triples
 
