@@ -70,6 +70,44 @@ def test_offline_detection_reads_native_and_scanned():
     assert detect_modality(_scan()) == SCANNED
 
 
+def _searchable_scan(pages=2):
+    """A scan made searchable: each page an image, with the scanner's OCR text laid
+    invisibly over it (render mode 3)."""
+    doc = pymupdf.open()
+    for i in range(pages):
+        page = doc.new_page(width=612, height=792)
+        pix = pymupdf.Pixmap(pymupdf.csRGB, pymupdf.IRect(0, 0, 60, 80), 0)
+        pix.clear_with(220)
+        page.insert_image(page.rect, pixmap=pix)
+        page.insert_text((72, 72), f"Named Insured Rivera Fabrication LLC policy page {i + 1} of the declarations",
+                         render_mode=3)
+    return doc.tobytes()
+
+
+def test_a_searchable_scan_is_a_scan_its_invisible_ocr_layer_is_no_text_layer():
+    from data_pipeline.ocr.run_mineru import text_layer_pages
+
+    scan = _searchable_scan()
+    assert text_layer_pages(scan) == [False, False]
+    assert detect_modality(scan) == SCANNED and reads_by_ocr(scan)
+    assert text_layer_pages(_native()) == [True]                     # visible text: digital
+
+
+def test_a_blank_page_does_not_make_a_digital_pdf_a_scan():
+    from data_pipeline.ocr.run_mineru import text_layer_pages
+
+    doc = pymupdf.open(stream=_native(), filetype="pdf")
+    doc.new_page(width=612, height=792)                               # nothing on it
+    pdf = doc.tobytes()
+    assert text_layer_pages(pdf) == [True, True] and detect_modality(pdf) == NATIVE
+
+
+def test_the_engine_reads_a_searchable_scan_by_ocr(monkeypatch):
+    calls = _fake_mineru(monkeypatch, CONTENT, scanned=False)          # MinerU itself would say text
+    pages = MinerUEngine().process(_searchable_scan(3), device="cuda", max_long_side_px=800)
+    assert calls["mode"] == "ocr" and all(p.scanned for p in pages)
+
+
 def test_drawn_figures_are_found_and_a_vector_logo_beside_typed_text_is_not():
     assert data_is_drawn(_drawn())
     assert not data_is_drawn(_native())

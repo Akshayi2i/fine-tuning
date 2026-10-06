@@ -523,9 +523,11 @@ def test_a_reading_from_before_the_drawn_figure_check_is_redone_only_where_figur
     engine = StubEngine()
     run_mineru.process_document("policy", "policy_0001", ocr_client, engine)
     meta_key = paths.ocr_meta("policy", "policy_0001")
-    old = {k: v for k, v in ocr_client.read_json(meta_key).items() if k not in ("drawn_check", "read_by_ocr")}
+    old = {k: v for k, v in ocr_client.read_json(meta_key).items()
+           if k not in ("drawn_check", "read_by_ocr", "ocr_rules")}
     ocr_client.write_json(meta_key, old)                                   # as an older version wrote it
 
+    monkeypatch.setattr(modality, "detect_modality", lambda pdf: modality.NATIVE)
     monkeypatch.setattr(modality, "data_is_drawn", lambda pdf: False)
     run_mineru.process_document("policy", "policy_0001", ocr_client, engine)
     assert len(engine.calls) == 1                                          # not drawn: kept
@@ -533,5 +535,33 @@ def test_a_reading_from_before_the_drawn_figure_check_is_redone_only_where_figur
     run_mineru.process_document("policy", "policy_0001", ocr_client, engine)
     assert len(engine.calls) == 2                                          # drawn: read again
     assert ocr_client.read_json(meta_key)["drawn_check"] is True
+    assert ocr_client.read_json(meta_key)["ocr_rules"] == run_mineru.OCR_RULES_VERSION
     run_mineru.process_document("policy", "policy_0001", ocr_client, engine)
     assert len(engine.calls) == 2                                          # and not again after that
+
+
+def test_a_reading_from_before_the_visible_text_rule_is_redone_where_it_is_a_scan(ocr_client, monkeypatch):
+    """Read from its text layer under the drawn-figure rules, a searchable scan
+    passed for digital: its invisible OCR layer counted. It is read again
+    through OCR; a document still digital keeps its reading."""
+    from data_pipeline.ocr import modality
+
+    monkeypatch.setattr(run_mineru, "current_environment",
+                        lambda device=None, strict=True: mv.OcrEnvironment("1.4.2", "cuda"))
+    _seed_raw_document(ocr_client)
+    engine = StubEngine()
+    run_mineru.process_document("policy", "policy_0001", ocr_client, engine)
+    meta_key = paths.ocr_meta("policy", "policy_0001")
+    rules_1 = {k: v for k, v in ocr_client.read_json(meta_key).items() if k != "ocr_rules"}
+    rules_1.update(drawn_check=True, read_by_ocr=False, is_scanned=False)   # as the drawn-figure version wrote it
+    ocr_client.write_json(meta_key, rules_1)
+
+    monkeypatch.setattr(modality, "data_is_drawn", lambda pdf: True)        # not re-checked under rules 1
+    monkeypatch.setattr(modality, "detect_modality", lambda pdf: modality.NATIVE)
+    run_mineru.process_document("policy", "policy_0001", ocr_client, engine)
+    assert len(engine.calls) == 1                                          # still digital: kept
+    monkeypatch.setattr(modality, "detect_modality", lambda pdf: modality.SCANNED)
+    run_mineru.process_document("policy", "policy_0001", ocr_client, engine)
+    assert len(engine.calls) == 2                                          # a scan after all: read again
+    run_mineru.process_document("policy", "policy_0001", ocr_client, engine)
+    assert len(engine.calls) == 2

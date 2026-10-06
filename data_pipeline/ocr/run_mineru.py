@@ -180,21 +180,46 @@ class MinerUEngine:
 #: Characters of embedded text below which a page counts as having no text layer.
 TEXT_LAYER_MIN_CHARS = 30
 
+#: Text render modes that draw nothing on the page: 3 is invisible text - the
+#: layer a scanner's OCR lays under a page image to make it searchable - and 7
+#: adds the text to a clipping path only.
+INVISIBLE_TEXT_MODES = (3, 7)
+
+#: Versions of the rules that decide how a document is read; recorded in its OCR
+#: meta so a stored reading made under older rules is checked again
+#: (_needs_ocr_now). 1: drawn figures send a native PDF through OCR. 2: only
+#: visible text counts as a text layer, so a searchable scan is a scan.
+OCR_RULES_VERSION = 2
+
+
+def visible_text_chars(page: Any) -> int:
+    """Characters of text drawn visibly on a page, not counting an invisible
+    OCR layer or fully transparent text."""
+    return sum(
+        len(span.get("chars", ()))
+        for span in page.get_texttrace()
+        if span.get("type") not in INVISIBLE_TEXT_MODES and span.get("opacity", 1) > 0
+    )
+
 
 def text_layer_pages(pdf_bytes: bytes) -> list[bool]:
     """Per page, whether it is a digital page rather than a scan.
 
-    A page with a text layer is digital. So is an EMPTY page - no text, no
-    image, no drawing: there is nothing on it to OCR. Counting it as a scan
-    sent a whole digital policy with one blank page through OCR mode and into
-    the scanned eval subset. A page with no text layer but an image or
-    drawings on it is a scan (or might be), and is read by OCR.
+    A page with visible text is digital. Only visible text counts: a scan made
+    searchable is a page image with the scanner's OCR text laid invisibly under
+    it, and counting that layer called it digital - its own OCR was read
+    instead of MinerU's, and it was recorded as not scanned. An EMPTY page - no
+    text, no image, no drawing - is digital too: there is nothing on it to OCR.
+    Counting it as a scan sent a whole digital policy with one blank page
+    through OCR mode and into the scanned eval subset. A page with no visible
+    text but an image or drawings on it is a scan (or might be), and is read by
+    OCR.
     """
     import pymupdf
 
     with pymupdf.open(stream=pdf_bytes, filetype="pdf") as doc:
         return [
-            len(page.get_text().strip()) >= TEXT_LAYER_MIN_CHARS
+            visible_text_chars(page) >= TEXT_LAYER_MIN_CHARS
             or not (page.get_images() or page.get_drawings())
             for page in doc
         ]
@@ -394,11 +419,12 @@ def process_document(
         # From MinerU's classification, not from failed pages: a text PDF with one
         # blank page was recorded as a scan, and counted in the scanned gate.
         "is_scanned": any(p.scanned for p in pages),
-        # Read in OCR mode, and by a version that checks for drawn figures
-        # (data_pipeline.ocr.modality): an older reading of a document whose
-        # figures are drawn is redone (_needs_ocr_now).
+        # Read in OCR mode, and under which version of the reading rules: an
+        # older reading of a document the current rules send through OCR is
+        # redone (_needs_ocr_now).
         "read_by_ocr": any(p.read_by_ocr for p in pages),
         "drawn_check": True,
+        "ocr_rules": OCR_RULES_VERSION,
     }
     client.write_json(meta_key, ocr_meta)
     # The marker distinguishes a real OCR pass from the stored metadata returned
@@ -413,22 +439,32 @@ def process_document(
 
 def _needs_ocr_now(existing: dict[str, Any], client: BlobClient, doc_type: str, source_id: str,
                    tenant_id: str | None) -> bool:
-    """Whether a stored reading predates the drawn-figure check and the check now
-    sends the document through OCR: its text layer was read, but its figures are
-    drawn (SPEC_05 §4.1). Only those are redone - OCR is the expensive part."""
-    if existing.get("drawn_check") or existing.get("read_by_ocr") or existing.get("is_scanned"):
+    """Whether a stored reading was made from the text layer under older reading
+    rules (OCR_RULES_VERSION) that the current rules send through OCR: a native
+    PDF whose figures are drawn (SPEC_05 §4.1), or a searchable scan whose
+    invisible OCR layer passed for a text layer. Only those are redone - OCR is
+    the expensive part."""
+    rules = existing.get("ocr_rules", 1 if existing.get("drawn_check") else 0)
+    if rules >= OCR_RULES_VERSION or existing.get("read_by_ocr"):
         return False
-    from data_pipeline.ocr.modality import data_is_drawn
+    from data_pipeline.ocr import modality
 
     try:
-        drawn = data_is_drawn(client.read_bytes(paths.raw_pdf(doc_type, source_id, tenant_id)))
+        pdf = client.read_bytes(paths.raw_pdf(doc_type, source_id, tenant_id))
     except Exception as exc:  # noqa: BLE001 - an unreadable PDF is OCR's to report, not the skip check's
-        log.warning("%s: drawn-figure check failed (%s); keeping the stored reading", source_id, exc)
+        log.warning("%s: could not re-check how it is read (%s); keeping the stored reading", source_id, exc)
         return False
-    if drawn:
-        log.info("%s: read from its text layer before the drawn-figure check, and its figures are "
-                 "drawn; reading it again through OCR", source_id)
-    return drawn
+    for reason, check in (("it is a scan (no visible text layer)", lambda: modality.detect_modality(pdf)
+                           == modality.SCANNED and not existing.get("is_scanned")),
+                          ("its figures are drawn", lambda: rules < 1 and modality.data_is_drawn(pdf))):
+        try:
+            if check():
+                log.info("%s: read from its text layer under older rules, but %s; reading it again "
+                         "through OCR", source_id, reason)
+                return True
+        except Exception as exc:  # noqa: BLE001 - a check that cannot run keeps the stored reading
+            log.warning("%s: re-check failed (%s); keeping the stored reading", source_id, exc)
+    return False
 
 
 def process_batch(
