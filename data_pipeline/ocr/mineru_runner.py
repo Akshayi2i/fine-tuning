@@ -26,7 +26,7 @@ from dataclasses import dataclass, field
 from typing import Literal
 
 from data_pipeline.ocr.modality import MODALITIES, NATIVE
-from data_pipeline.ocr.run_mineru import MinerUEngine, OcrEngine, OcrError, PageOutput
+from data_pipeline.ocr.run_mineru import MinerUEngine, OcrEngine, PageOutput
 
 NATIVE_TIMEOUT_S = 30
 SCANNED_TIMEOUT_S = 90   # OCR is slower; a GPU brings it nearer 20 s
@@ -70,20 +70,24 @@ async def run_mineru(
         max_long_side_px = resolution_cap_px()
     engine = engine or MinerUEngine()
 
+    def read() -> list[PageOutput]:
+        # Every failure inside the engine becomes MinerUError here, in the worker
+        # thread - an unreadable PDF raises pymupdf's own errors - so only the
+        # deadline below raises TimeoutError, and a TimeoutError the engine itself
+        # raised is not reported as the budget running out.
+        try:
+            return engine.process(pdf_bytes, device="cuda", max_long_side_px=max_long_side_px,
+                                  modality=modality, force_ocr=force_ocr)
+        except Exception as exc:  # noqa: BLE001 - SPEC_05 §9: any failure goes to review as MinerUError
+            raise MinerUError(f"MinerU failed: {type(exc).__name__}: {exc}") from exc
+
     started = time.monotonic()
     try:
-        pages = await asyncio.wait_for(
-            asyncio.to_thread(engine.process, pdf_bytes, device="cuda",
-                              max_long_side_px=max_long_side_px,
-                              modality=modality, force_ocr=force_ocr),
-            timeout=timeout,
-        )
+        pages = await asyncio.wait_for(asyncio.to_thread(read), timeout=timeout)
     except TimeoutError:
         raise MinerUError(
             f"MinerU timed out after {timeout}s on the {'native' if native else 'scanned'} path"
         ) from None
-    except OcrError as exc:
-        raise MinerUError(str(exc)) from exc
     if sum(len(page.markdown.strip()) for page in pages or []) < MIN_TEXT_CHARS:
         raise MinerUError(f"MinerU read fewer than {MIN_TEXT_CHARS} characters from the document")
     return MinerUOutput(

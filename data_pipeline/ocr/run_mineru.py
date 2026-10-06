@@ -53,6 +53,9 @@ class PageOutput:
     #: The page has no text layer (a scan). A document with any such page is
     #: OCR'd whole and recorded as ``is_scanned``.
     scanned: bool = False
+    #: MinerU read the document in OCR mode (a scan, a mixed document, drawn
+    #: figures, or the caller's force_ocr), not from its text layer.
+    read_by_ocr: bool = False
 
 
 class OcrEngine(Protocol):
@@ -126,6 +129,11 @@ class MinerUEngine:
 
         images = render_pdf_pages(pdf_bytes, max_long_side_px)
         text_layer = text_layer_pages(pdf_bytes)
+        if not ocr and modality is not None and not all(text_layer):
+            # Trusted as given (SPEC_05 §4), but said: these pages read as blank.
+            log.warning("the caller sent a document as %s, but page(s) %s have no text layer; they "
+                        "are read in text mode and flagged as unread", modality,
+                        [i + 1 for i, has in enumerate(text_layer) if not has])
         import json
         import tempfile
 
@@ -159,8 +167,11 @@ class MinerUEngine:
                 # Nothing read on a SCANNED page is an OCR failure; on a text-layer
                 # page it is a blank or picture-only page, which is not. Either
                 # way the page is kept and built with the blank-page placeholder.
-                ocr_failed=scanned and not text.strip(),
+                # A page with no text layer read in text mode (the caller said
+                # native) yields nothing either, and is flagged the same way.
+                ocr_failed=(scanned or not text_layer[index]) and not text.strip(),
                 scanned=not text_layer[index],
+                read_by_ocr=scanned,
             )
             for index, (text, image) in enumerate(zip(texts, images, strict=True))
         ]
@@ -343,7 +354,7 @@ def process_document(
             and existing.get("ocr_device") == env.device
             and existing.get("resolution_cap_px") == cap
         )
-        if unchanged:
+        if unchanged and not _needs_ocr_now(existing, client, doc_type, source_id, tenant_id):
             log.info("skipping %s: already processed and unchanged", source_id)
             return existing
 
@@ -383,6 +394,11 @@ def process_document(
         # From MinerU's classification, not from failed pages: a text PDF with one
         # blank page was recorded as a scan, and counted in the scanned gate.
         "is_scanned": any(p.scanned for p in pages),
+        # Read in OCR mode, and by a version that checks for drawn figures
+        # (data_pipeline.ocr.modality): an older reading of a document whose
+        # figures are drawn is redone (_needs_ocr_now).
+        "read_by_ocr": any(p.read_by_ocr for p in pages),
+        "drawn_check": True,
     }
     client.write_json(meta_key, ocr_meta)
     # The marker distinguishes a real OCR pass from the stored metadata returned
@@ -393,6 +409,26 @@ def process_document(
     ocr_meta = {**ocr_meta, "_reprocessed": True}
     log.info("processed %s: %d pages on %s at %dpx", source_id, len(pages), env.device, cap)
     return ocr_meta
+
+
+def _needs_ocr_now(existing: dict[str, Any], client: BlobClient, doc_type: str, source_id: str,
+                   tenant_id: str | None) -> bool:
+    """Whether a stored reading predates the drawn-figure check and the check now
+    sends the document through OCR: its text layer was read, but its figures are
+    drawn (SPEC_05 §4.1). Only those are redone - OCR is the expensive part."""
+    if existing.get("drawn_check") or existing.get("read_by_ocr") or existing.get("is_scanned"):
+        return False
+    from data_pipeline.ocr.modality import data_is_drawn
+
+    try:
+        drawn = data_is_drawn(client.read_bytes(paths.raw_pdf(doc_type, source_id, tenant_id)))
+    except Exception as exc:  # noqa: BLE001 - an unreadable PDF is OCR's to report, not the skip check's
+        log.warning("%s: drawn-figure check failed (%s); keeping the stored reading", source_id, exc)
+        return False
+    if drawn:
+        log.info("%s: read from its text layer before the drawn-figure check, and its figures are "
+                 "drawn; reading it again through OCR", source_id)
+    return drawn
 
 
 def process_batch(

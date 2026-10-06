@@ -49,16 +49,36 @@ def detect_modality(pdf_bytes: bytes) -> str:
     return NATIVE if all(text_layer_pages(pdf_bytes)) else SCANNED
 
 
+#: A glyph is at least this thick both ways. A table's rules and cell borders,
+#: which many PDF writers draw as thin filled rectangles, are thinner.
+GLYPH_MIN_THICKNESS_PT = 1.5
+
+#: Path segments (pymupdf drawing items) an outline without curves needs: a
+#: digit drawn in straight lines has five or more, a box four.
+GLYPH_MIN_SEGMENTS = 5
+
+
+def _is_glyph(drawing: dict[str, Any]) -> bool:
+    """A filled, glyph-sized, glyph-thick OUTLINE: curves or several segments.
+
+    Not a box: a rectangle (one ``re`` item, or four lines) is a cell border, a
+    checkbox or a shading block, however small, and an ordinary digital table
+    is drawn from hundreds of them.
+    """
+    if drawing.get("fill") is None:
+        return False
+    rect = drawing.get("rect")
+    if rect is None or not (GLYPH_MIN_PT <= rect.width <= GLYPH_MAX_PT
+                            and GLYPH_MIN_PT <= rect.height <= GLYPH_MAX_PT):
+        return False
+    if min(rect.width, rect.height) < GLYPH_MIN_THICKNESS_PT:
+        return False
+    ops = [item[0] for item in drawing.get("items") or () if item]
+    return "c" in ops or len(ops) >= GLYPH_MIN_SEGMENTS
+
+
 def _glyph_paths(page: Any) -> int:
-    count = 0
-    for drawing in page.get_drawings():
-        if drawing.get("fill") is None:
-            continue
-        rect = drawing.get("rect")
-        if rect is not None and GLYPH_MIN_PT <= rect.width <= GLYPH_MAX_PT \
-                and GLYPH_MIN_PT <= rect.height <= GLYPH_MAX_PT:
-            count += 1
-    return count
+    return sum(1 for drawing in page.get_drawings() if _is_glyph(drawing))
 
 
 def _text_spans(page: Any) -> int:

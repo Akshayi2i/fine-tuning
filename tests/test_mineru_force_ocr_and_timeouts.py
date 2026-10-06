@@ -19,14 +19,32 @@ pymupdf = pytest.importorskip("pymupdf")
 
 
 def _native(lines=3, glyph_paths=0):
-    """A typed page; ``glyph_paths`` small filled vector shapes drawn beside the text."""
+    """A typed page; ``glyph_paths`` small filled outlines (curved, as a drawn
+    digit is) beside the text."""
     doc = pymupdf.open()
     page = doc.new_page(width=612, height=792)
     for i in range(lines):
         page.insert_text((72, 60 + 12 * i), f"LOCATION COVERAGES line {i} with a real text layer")
     for i in range(glyph_paths):
         x, y = 72 + (i % 40) * 12, 500 + (i // 40) * 14
-        page.draw_rect(pymupdf.Rect(x, y, x + 5, y + 8), color=None, fill=(0, 0, 0))
+        page.draw_oval(pymupdf.Rect(x, y, x + 5, y + 8), color=None, fill=(0, 0, 0))
+    return doc.tobytes()
+
+
+def _typed_table(rows=30, cols=10, filled_every=10):
+    """A digital schedule as Word or Excel export it: typed values, and each cell's
+    borders drawn as thin filled rectangles, some cells shaded."""
+    doc = pymupdf.open()
+    page = doc.new_page(width=612, height=792)
+    for r in range(rows):
+        for c in range(cols):
+            x, y = 40 + c * 52, 40 + r * 22
+            page.draw_rect(pymupdf.Rect(x, y, x + 0.75, y + 16), color=None, fill=(0, 0, 0))   # left rule
+            page.draw_rect(pymupdf.Rect(x, y + 16, x + 52, y + 16.75), color=None, fill=(0, 0, 0))
+            if (r * cols + c) % filled_every == 0:
+                page.draw_rect(pymupdf.Rect(x + 2, y + 2, x + 10, y + 10), color=None, fill=(0.9, 0.9, 0.9))
+            if c % 5 == 0:
+                page.insert_text((x + 3, y + 12), f"{r}.{c}")
     return doc.tobytes()
 
 
@@ -56,6 +74,11 @@ def test_drawn_figures_are_found_and_a_vector_logo_beside_typed_text_is_not():
     assert data_is_drawn(_drawn())
     assert not data_is_drawn(_native())
     assert not data_is_drawn(_native(lines=60, glyph_paths=100))   # many spans per path: typed
+
+
+def test_a_typed_table_drawn_from_thin_border_rectangles_is_not_drawn_data():
+    """Hundreds of filled border segments and shaded boxes: boxes, not glyph outlines."""
+    assert not data_is_drawn(_typed_table())
 
 
 def test_the_caller_decides_when_it_says_and_the_document_otherwise():
@@ -127,3 +150,19 @@ def test_nothing_read_or_an_unknown_modality_is_a_mineru_error():
 
 def test_the_spec_budgets():
     assert (mineru_runner.NATIVE_TIMEOUT_S, mineru_runner.SCANNED_TIMEOUT_S) == (30, 90)
+
+
+def test_an_unreadable_pdf_is_a_mineru_error_not_pymupdfs(monkeypatch):
+    _fake_mineru(monkeypatch, CONTENT)
+    for bad in (b"not a pdf", b""):
+        with pytest.raises(MinerUError, match="MinerU failed"):
+            asyncio.run(run_mineru(bad, NATIVE, engine=MinerUEngine(), max_long_side_px=800))
+
+
+def test_a_timeout_raised_inside_the_engine_is_a_failure_not_the_budget():
+    class _Raises(_Engine):
+        def process(self, *args, **kwargs):
+            raise TimeoutError("socket read timed out")
+
+    with pytest.raises(MinerUError, match="MinerU failed: TimeoutError"):
+        asyncio.run(run_mineru(b"%PDF", NATIVE, engine=_Raises(), max_long_side_px=800))

@@ -509,3 +509,29 @@ def test_grouping_is_deterministic():
 
     docs = [_fp(f"d{i}", layout_phash=f"h{i % 3}") for i in range(9)]
     assert assign_groups(docs).group_of == assign_groups(list(reversed(docs))).group_of
+
+
+def test_a_reading_from_before_the_drawn_figure_check_is_redone_only_where_figures_are_drawn(
+        ocr_client, monkeypatch):
+    """Documents OCR'd from their text layer before the check existed: a drawn one
+    is read again through OCR; the rest keep their reading."""
+    from data_pipeline.ocr import modality
+
+    monkeypatch.setattr(run_mineru, "current_environment",
+                        lambda device=None, strict=True: mv.OcrEnvironment("1.4.2", "cuda"))
+    _seed_raw_document(ocr_client)
+    engine = StubEngine()
+    run_mineru.process_document("policy", "policy_0001", ocr_client, engine)
+    meta_key = paths.ocr_meta("policy", "policy_0001")
+    old = {k: v for k, v in ocr_client.read_json(meta_key).items() if k not in ("drawn_check", "read_by_ocr")}
+    ocr_client.write_json(meta_key, old)                                   # as an older version wrote it
+
+    monkeypatch.setattr(modality, "data_is_drawn", lambda pdf: False)
+    run_mineru.process_document("policy", "policy_0001", ocr_client, engine)
+    assert len(engine.calls) == 1                                          # not drawn: kept
+    monkeypatch.setattr(modality, "data_is_drawn", lambda pdf: True)
+    run_mineru.process_document("policy", "policy_0001", ocr_client, engine)
+    assert len(engine.calls) == 2                                          # drawn: read again
+    assert ocr_client.read_json(meta_key)["drawn_check"] is True
+    run_mineru.process_document("policy", "policy_0001", ocr_client, engine)
+    assert len(engine.calls) == 2                                          # and not again after that
