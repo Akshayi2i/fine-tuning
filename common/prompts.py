@@ -152,8 +152,21 @@ def output_shape_for_prompt(
     immediately after and is the authority on both; this exists so the model sees
     the outline before the detail.
     """
+    from common.schemas import is_common_model, resolve_local, row_keys
+
     schema = resolved_schema(doc_type, acord_form, lob, sections)
     properties: dict[str, Any] = schema.get("properties", {})
+    if doc_type.lower() == "policy" and is_common_model(doc_type, acord_form, lob):
+        # Every common-model block is a $ref to a definition, so the outline is
+        # read through them; read as written, every block would look scalar.
+        defs = schema.get("$defs") or {}
+        properties = {name: resolve_local(node, defs) for name, node in properties.items()}
+
+        def row(node: dict[str, Any]) -> list[str]:
+            return row_keys(node.get("items") or {}, defs)
+    else:
+        def row(node: dict[str, Any]) -> list[str]:
+            return list((node.get("items") or {}).get("properties", {}))
 
     scalars = [name for name, node in properties.items() if not _is_array(node)]
     lines = [f'  {", ".join(scalars)}'] if scalars else []
@@ -161,8 +174,8 @@ def output_shape_for_prompt(
     for name, node in properties.items():
         if not _is_array(node):
             continue
-        row = list((node.get("items") or {}).get("properties", {}))
-        lines.append(f'  {name}: [ {{ {", ".join(row)} }}, ... ]' if row else f"  {name}: [ ... ]")
+        keys = row(node)
+        lines.append(f'  {name}: [ {{ {", ".join(keys)} }}, ... ]' if keys else f"  {name}: [ ... ]")
     return "\n".join(lines)
 
 
@@ -278,6 +291,7 @@ def prompt_input_files() -> list[Path]:
     give each code the meaning the prompt shows, so both are prompt input too.
     """
     from common.config import CONFIG_DIR
+    from common.model_view import MODEL_VIEW_CONFIG
     from common.schemas import CANONICAL_DIR, COMMON_MODEL, SCHEMA_DIR
 
     return (
@@ -286,6 +300,7 @@ def prompt_input_files() -> list[Path]:
         + sorted(CANONICAL_DIR.glob("*.json"))
         + [COMMON_MODEL]
         + sorted(CANONICAL_DIR.glob("*.coverage_codes.yaml"))
+        + [MODEL_VIEW_CONFIG]
         + [CONFIG_DIR / "schema_sections.yaml"]
     )
 

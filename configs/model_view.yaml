@@ -1,0 +1,45 @@
+# The common-model (SPEC_21) line schemas as the extraction model sees them
+# (common.model_view). The client's schema files are theirs and never edited;
+# what this repository changes for the model's benefit lives here.
+#
+# Descriptions are prompt text: they are how the model resolves a printed label
+# it has never seen onto a field (arch 0c). A description written for schema
+# authors - spec section numbers, notes on the synthetic-copy generator, file
+# paths - teaches nothing and misleads where it reads as a rule. Each entry here
+# replaces one such text until the client's own is rewritten for the model;
+# tests/test_schema2_model_view.py fails once an entry matches the client's text,
+# so a fixed upstream description is not shadowed by a stale copy here.
+#
+# Keys: "Definition" or "Definition.field", as named in common_model.json $defs.
+# null removes the description.
+
+# How the line's coverage codes are offered: "oneof" (each code with its meaning,
+# once) or "enum" (codes, with the meanings in one description). "enum" is the
+# fallback if the decoding backend refuses oneOf/const.
+coverage_code_style: oneof
+
+descriptions:
+  FieldValue: null
+  DateValue: >-
+    A date. `parsed` is MM/DD/YYYY, or null when the printed wording is not a
+    date (e.g. a retroactive date printed 'Full Prior Acts').
+  Address: Postal address.
+  carrier: The insurer.
+  LobPart: One line of business of the document. A single-line policy has one part.
+  LimitType: Kind of limit.
+  DeductibleType: Kind of deductible.
+  FormType: Kind of form.
+  AdditionalField: A printed value that no field of the schema is defined for.
+  additional_fields: Every printed value that no field of the schema is defined for.
+  Coverage.coverage_code: >-
+    What the coverage covers, as one of the listed codes. Policy comparison
+    aligns coverages by it.
+  Location.unit_id: &unit_id >-
+    Identifier of this entry, unique in the document: its kind's prefix and its
+    position in printed order, from 1 (e.g. 'loc_1', 'veh_2'). Never printed;
+    other entries refer to it.
+  Building.unit_id: *unit_id
+  Vehicle.unit_id: *unit_id
+  Driver.unit_id: *unit_id
+  Watercraft.unit_id: *unit_id
+  ScheduledItem.unit_id: *unit_id

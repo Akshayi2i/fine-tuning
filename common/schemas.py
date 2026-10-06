@@ -627,7 +627,14 @@ def required_fields(
     lob: str | list[str] | None = None,
     sections: str | None = None,
 ) -> list[str]:
-    """Top-level required field names for this document type."""
+    """Top-level required field names for this document type.
+
+    For a common-model line, the model view's: the keys the model must always
+    write. The client's file also requires lists the pipeline can supply, which
+    would otherwise reach every window's target as an empty list.
+    """
+    if doc_type.lower() == "policy" and is_common_model(doc_type, acord_form, lob):
+        return list(resolved_schema(doc_type, acord_form, lob, sections).get("required", []))
     return list(load_schema(doc_type, acord_form, lob, sections).get("required", []))
 
 
@@ -716,6 +723,8 @@ def resolved_schema(
     """
     key = schema_key(doc_type, acord_form, lob, sections)
     source = _sources()[base_key(key)]
+    if source.common_model:
+        return _model_view_for_key(key)
     if not source.inline_refs:
         return _model_facing_canonical(
             _strip_prefixed(_without_fsm_excluded(_schema_for_key(key)), source.strip_prefixes)
@@ -740,6 +749,17 @@ def resolved_schema(
         return {k: _resolve(v, depth + 1) for k, v in node.items()}
 
     return _strip_prefixed(_resolve(_schema_for_key(key)), source.strip_prefixes)
+
+
+@cache
+def _model_view_for_key(key: str) -> dict[str, Any]:
+    """A common-model line's schema as the model is shown and held to it
+    (:mod:`common.model_view`). Cached per key: every window of every request
+    asks for it. Shared - callers that change it must copy it first, as
+    :func:`with_page_bounds` does."""
+    from common.model_view import model_view
+
+    return model_view(_schema_for_key(key))
 
 
 #: What the model writes for one canonical leaf. The client's ``FieldValue`` also
@@ -827,12 +847,52 @@ def _strip_prefixed(node: Any, prefixes: tuple[str, ...]) -> Any:
     return node
 
 
-def iter_described_fields(schema: dict[str, Any], prefix: str = "") -> Iterator[tuple[str, str | None]]:
+def resolve_local(node: Any, defs: dict[str, Any]) -> Any:
+    """``node`` with its ``#/$defs/...`` reference followed, keeping the
+    description written beside the reference (it describes this use)."""
+    seen: set[str] = set()
+    out = node
+    while isinstance(out, dict) and isinstance(out.get("$ref"), str) and out["$ref"].startswith("#/$defs/"):
+        name = out["$ref"].split("/")[2]
+        if name in seen or name not in defs:
+            break
+        seen.add(name)
+        here = {k: v for k, v in out.items() if k != "$ref"}
+        out = {**defs[name], **here}
+    return out
+
+
+def row_keys(node: Any, defs: dict[str, Any]) -> list[str]:
+    """The fields an object (or each of its ``anyOf`` variants) can hold, in order."""
+    node = resolve_local(node, defs)
+    if not isinstance(node, dict):
+        return []
+    keys = list(node.get("properties") or {})
+    for variant in node.get("anyOf") or []:
+        keys += [k for k in row_keys(variant, defs) if k not in keys]
+    return keys
+
+
+def _is_value_node(node: Any) -> bool:
+    return isinstance(node, dict) and {"raw", "parsed", "page_ref"} <= set(node.get("properties") or {})
+
+
+def iter_described_fields(
+    schema: dict[str, Any], prefix: str = "", defs: dict[str, Any] | None = None
+) -> Iterator[tuple[str, str | None]]:
     """Walk a resolved schema yielding ``(field_path, description)`` for each field.
 
     Recurses into object properties and array items so nested fields —
     ``claims[].total_incurred``, ``coverage_schedule[].limit`` — are covered too.
+
+    With ``defs`` (a common-model schema, whose blocks are all references), the
+    walk follows ``#/$defs/...`` references, reads a value type as one field
+    rather than its ``raw``/``parsed``/``page_ref``, and reads a row with
+    variants as the union of their fields.
     """
+    if defs is not None:
+        yield from _iter_described_through_refs(schema, prefix, defs, frozenset())
+        return
     for name, node in (schema.get("properties") or {}).items():
         if not isinstance(node, dict):
             continue
@@ -843,6 +903,37 @@ def iter_described_fields(schema: dict[str, Any], prefix: str = "") -> Iterator[
         items = node.get("items")
         if isinstance(items, dict) and items.get("properties"):
             yield from iter_described_fields(items, prefix=f"{path}[].")
+
+
+def _iter_described_through_refs(
+    schema: dict[str, Any], prefix: str, defs: dict[str, Any], path_defs: frozenset[str]
+) -> Iterator[tuple[str, str | None]]:
+    properties: dict[str, Any] = {}
+    for variant in [schema, *(schema.get("anyOf") or [])]:
+        for name, node in (variant.get("properties") or {}).items():
+            properties.setdefault(name, node)
+    for name, node in properties.items():
+        if not isinstance(node, dict):
+            continue
+        path = f"{prefix}{name}"
+        ref = node.get("$ref", "")
+        target = resolve_local(node, defs)
+        yield path, target.get("description") if isinstance(target, dict) else None
+        if not isinstance(target, dict) or _is_value_node(target):
+            continue
+        reached = path_defs | ({ref.split("/")[-1]} if ref else set())
+        if ref and ref.split("/")[-1] in path_defs:
+            continue  # a definition that contains itself
+        if target.get("properties") or target.get("anyOf"):
+            yield from _iter_described_through_refs(target, f"{path}.", defs, reached)
+        items = target.get("items")
+        if isinstance(items, dict):
+            item = resolve_local(items, defs)
+            if isinstance(item, dict) and not _is_value_node(item) and (
+                    item.get("properties") or item.get("anyOf")):
+                item_ref = items.get("$ref", "")
+                yield from _iter_described_through_refs(
+                    item, f"{path}[].", defs, reached | ({item_ref.split("/")[-1]} if item_ref else set()))
 
 
 def assert_all_fields_described(doc_type: str, acord_form: str | None = None) -> None:

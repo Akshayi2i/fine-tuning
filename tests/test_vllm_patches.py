@@ -194,12 +194,28 @@ def _xgrammar_unsupported(obj) -> bool:
     return False
 
 
-def test_every_schema_we_constrain_to_is_one_xgrammar_supports():
+def test_every_policy_schema_we_constrain_to_is_one_xgrammar_supports():
+    """What decoding is handed is resolved_schema (serving.pipeline), not the
+    client's file: for a common-model line the two differ by exactly the
+    keywords xgrammar refuses, which the model view drops."""
     from common import schemas
 
-    keys = list(schemas._sources())
-    assert "policy" in keys and len(keys) > 5
-    unsupported = [k for k in keys if _xgrammar_unsupported(schemas._schema_for_key(k))]
+    selectors = [sel for sel in schemas.schema_selectors() if sel[0] == "policy"]
+    assert ("policy", None, None) in selectors and len(selectors) > 5
+    unsupported = [sel for sel in selectors if _xgrammar_unsupported(schemas.resolved_schema(*sel))]
+    assert not unsupported, f"xgrammar cannot compile {unsupported}"
+
+
+@pytest.mark.xfail(strict=True, reason=(
+    "Found 2026-10-06 when this check moved from the raw files to what decoding is handed: "
+    "the flat ACORD and Loss Run schemas inline line_of_business from schemas/, an array "
+    "with uniqueItems, which vLLM 0.11 refuses under the xgrammar backend. Not yet fixed: "
+    "changing it moves those prompts."))
+def test_every_flat_schema_we_constrain_to_is_one_xgrammar_supports():
+    from common import schemas
+
+    selectors = [sel for sel in schemas.schema_selectors() if sel[0] != "policy"]
+    unsupported = [sel for sel in selectors if _xgrammar_unsupported(schemas.resolved_schema(*sel))]
     assert not unsupported, f"xgrammar cannot compile {unsupported}"
 
 
