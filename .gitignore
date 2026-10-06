@@ -35,6 +35,7 @@ data/audit_report/
 # Delivered documents, their labels and redaction records hold client data:
 # they travel through Azure Blob (intake/), never through git.
 data/source data/
+data/source data split/
 data/training data/
 data/bundles/
 data/bundle_exclusions.csv
