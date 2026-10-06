@@ -30,8 +30,14 @@ across windows again (``serving.policy_merge``).
 Two sections are handled apart (Fideon SPEC_21): ``text_sections`` is never in
 a target - the section builder attaches it at inference - and each
 ``additional_fields`` entry (label, value, section_hint, page_ref) is placed by
-its own ``page_ref``, as a field value is. Both only reach a target through a
-schema that defines them; no schema in this repository does yet.
+its own pages, as a field value is.
+
+**A common-model line** (SPEC_21 overlays) links rows by id. Its ids, codes and
+types are bare values no page prints, so they travel only with a row that keeps
+a printed value on the window's pages; the target is narrowed to the window's
+own slice (a reference to a table another group reads is not in it); and its
+ids are renumbered from 1 in the window (common.structural_ids), so a window is
+taught the ids it can see and never a reference to a row it is not shown.
 """
 
 from __future__ import annotations
@@ -87,6 +93,10 @@ class TargetReport:
     #: Values with no recorded page that were given the one page whose OCR
     #: text prints them (:func:`with_inferred_pages`).
     inferred: list[str] = field(default_factory=list)
+    #: References a window target left out because they name a row that window
+    #: does not hold (common-model lines). Expected across windows; counted so a
+    #: line whose links mostly cross windows shows up at corpus build.
+    dangling: list[str] = field(default_factory=list)
 
 
 def routed_pages(
@@ -231,22 +241,37 @@ def window_target(
     report: TargetReport | None = None,
 ) -> dict[str, Any]:
     """The model-form target for one window: its sections, on its pages."""
-    from common.canonical import schema_label
+    from common.canonical import schema_label, within_schema
     from common.schema_sections import sections_for
-    from common.schemas import required_fields, resolved_schema
+    from common.schemas import is_common_model, required_fields, resolved_schema
+    from common.structural_ids import renumber_structural_ids
 
+    common_model = is_common_model("policy", None, lob)
     # A label written for another line's schema, moved into this line's block
     # (configs/label_mappings.yaml). Then narrowed to what the schema can hold: a key the grammar refuses must not
     # be taught (common.canonical.within_schema).
     label = schema_label(label, "policy", None, lob)
+    if common_model:
+        label = _without_single_part(label)
     pages = set(plan.pages)
     sliced = {
         name: (_additional_within if name == ADDITIONAL_FIELDS else _within)(
-            label[name], name, pages, plan, report)
+            label[name], name, pages, plan, report, lob=lob, common_model=common_model)
         for name in sections_for(plan.group, lob)
         if name in label and name not in EXCLUDED_FROM_TARGETS
     }
     sliced = {k: v for k, v in sliced.items() if v not in (None, {}, [])}
+    view = resolved_schema("policy", None, lob, plan.group)
+    if common_model:
+        target = to_model_target(
+            sliced, required=required_fields("policy", None, lob, plan.group), schema=view)
+        # Narrowed to this window's slice: a reference to a table another group
+        # reads is not in it (common.schemas._without_cross_group_references).
+        target, _ = within_schema(target, view)
+        target, ids = renumber_structural_ids(target, lob)
+        if report is not None:
+            report.dangling.extend(f"{plan.group}:{ref}" for ref in ids.dangling)
+        return in_schema_order(target, view)
     # Entries in SPEC_21's own shape (label, value, section_hint, page_ref), not
     # FieldValue envelopes: kept as they are rather than slimmed as envelopes.
     additional = sliced.pop(ADDITIONAL_FIELDS, None)
@@ -258,11 +283,38 @@ def window_target(
         ]
     # In the order the decoding grammar writes keys (in_schema_order): the
     # window's own schema slice, the one it is constrained to.
-    return in_schema_order(target, resolved_schema("policy", None, lob, plan.group))
+    return in_schema_order(target, view)
+
+
+def _without_single_part(label: dict[str, Any]) -> dict[str, Any]:
+    """A single-part policy's label without ``part``: the schema says it is
+    omitted then, and a window could not resolve it anyway (lob_parts is read
+    with the declarations)."""
+    parts = label.get("lob_parts")
+    if isinstance(parts, list) and len(parts) > 1:
+        return label
+
+    def strip(node: Any) -> Any:
+        if isinstance(node, dict):
+            return {k: strip(v) for k, v in node.items() if k != "part"}
+        if isinstance(node, list):
+            return [strip(v) for v in node]
+        return node
+
+    return strip(label)
+
+
+def _is_structural(value: Any) -> bool:
+    """A value no page prints: an id, a reference, a code or a type."""
+    if isinstance(value, (str, int, float, bool)):
+        return True
+    return isinstance(value, list) and bool(value) and all(
+        isinstance(v, (str, int, float, bool)) for v in value)
 
 
 def _within(
-    node: Any, path: str, pages: set[int], plan: PolicyWindowPlan, report: TargetReport | None
+    node: Any, path: str, pages: set[int], plan: PolicyWindowPlan, report: TargetReport | None,
+    *, lob: str | list[str] | None = None, common_model: bool = False,
 ) -> Any:
     if is_field_value(node):
         if node.get("raw") is None and node.get("parsed") is None:
@@ -271,15 +323,25 @@ def _within(
     if isinstance(node, dict):
         kept = {}
         for key, value in node.items():
-            child = _within(value, f"{path}.{key}", pages, plan, report)
+            if common_model and _is_structural(value):
+                continue
+            child = _within(value, f"{path}.{key}", pages, plan, report,
+                            lob=lob, common_model=common_model)
             if child not in (None, {}, []):
                 kept[key] = child
+        if common_model and kept:
+            # The row's ids, codes and types ride with what this window shows
+            # of it, in the label's own order; a row the window shows nothing
+            # of is not in its target at all.
+            return {key: (value if _is_structural(value) else kept[key])
+                    for key, value in node.items() if _is_structural(value) or key in kept}
         return kept
     if isinstance(node, list):
-        keys = _row_identifiers(node, path)
+        keys = _row_identifiers(node, path, lob=lob, common_model=common_model)
         rows = []
         for i, item in enumerate(node):
-            row = _within(item, f"{path}[{i}]", pages, plan, report)
+            row = _within(item, f"{path}[{i}]", pages, plan, report,
+                          lob=lob, common_model=common_model)
             if row in (None, {}, []):
                 continue
             # A fragment that kept none of its row's identifiers in this window
@@ -325,7 +387,8 @@ def _on_pages(
 
 
 def _additional_within(
-    node: Any, path: str, pages: set[int], plan: PolicyWindowPlan, report: TargetReport | None
+    node: Any, path: str, pages: set[int], plan: PolicyWindowPlan, report: TargetReport | None,
+    *, lob: str | list[str] | None = None, common_model: bool = False,
 ) -> list[Any]:
     """The ``additional_fields`` entries printed on this window's pages, page_ref trimmed."""
     if not isinstance(node, list):
@@ -334,13 +397,45 @@ def _additional_within(
     for index, entry in enumerate(node):
         if not isinstance(entry, dict) or entry.get("value") in (None, "", [], {}):
             continue
-        placed = _on_pages(entry, f"{path}[{index}]", pages, plan, report)
+        where = f"{path}[{index}]"
+        placed = (_entry_on_pages(entry, where, pages, plan, report) if common_model
+                  else _on_pages(entry, where, pages, plan, report))
         if placed is not None:
             kept.append(placed)
     return kept
 
 
-def _row_identifiers(rows: list[Any], path: str) -> list[str]:
+def _entry_on_pages(
+    entry: dict[str, Any], path: str, pages: set[int], plan: PolicyWindowPlan,
+    report: TargetReport | None,
+) -> dict[str, Any] | None:
+    """A SPEC_21 overflow entry as this window sees it. Placed by its own pages
+    and its value's, both trimmed to the window's: a value printed on pages 1
+    and 30 is cited as [1] by the window showing page 1."""
+    value = entry.get("value")
+    entry_refs = {int(p) for p in entry.get("page_ref") or []}
+    value_refs = {int(p) for p in (value.get("page_ref") if isinstance(value, dict) else None) or []}
+    refs = entry_refs | value_refs
+    if not refs:
+        if plan.single:
+            return entry
+        if report is not None and plan.window_index == 0:
+            report.unplaced.append(f"{plan.group}:{path}")
+        return None
+    seen = refs & pages
+    if not seen:
+        return None
+    placed = dict(entry)
+    if "page_ref" in entry:
+        placed["page_ref"] = sorted(entry_refs & pages) or sorted(seen)
+    if isinstance(value, dict):
+        placed["value"] = {**value, "page_ref": sorted(value_refs & pages) or sorted(seen)}
+    return placed
+
+
+def _row_identifiers(
+    rows: list[Any], path: str, *, lob: str | list[str] | None = None, common_model: bool = False,
+) -> list[str]:
     """The fields that identify this table's rows: the identifier scoring
     matches them on, plus a top-level section's declared key
     (``array_keys`` in configs/schema_sections.yaml), whose fields the merge
@@ -356,8 +451,14 @@ def _row_identifiers(rows: list[Any], path: str) -> list[str]:
     # Only a named identifier, never the all-fields fallback: every field
     # being "the key" would make every partial row an orphan.
     named = [k for k in keys if k in ROW_IDENTIFIERS or k == "building_number"]
-    declared = list(array_key(path)) if "." not in path and "[" not in path else []
-    return [*named, *(k for k in declared if k not in named)]
+    declared = list(array_key(path, lob)) if "." not in path and "[" not in path else []
+    found = [*named, *(k for k in declared if k not in named)]
+    if common_model:
+        # Only a value the page prints identifies a row here. A coverage code or
+        # an id rides with every fragment of its row, so counted as an
+        # identifier it would keep every fragment alive in every window.
+        found = [k for k in found if any(is_field_value(r.get(k)) for r in rows)]
+    return found
 
 
 def _holds_rows(row: Any) -> bool:

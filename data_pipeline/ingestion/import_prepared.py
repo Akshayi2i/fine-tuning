@@ -204,9 +204,12 @@ def import_document(
     except SchemaError as exc:
         raise ImportError_(f"{doc.directory.name}: no schema to validate against — {exc}") from exc
     if errors:
+        from common.schemas import old_shape_hint
+
+        hint = old_shape_hint(doc.golden, doc_type, acord_form, lob)
         raise ImportError_(
             f"{doc.directory.name}: golden.json does not satisfy the {doc_type} schema — "
-            f"{errors[0]}. A label that reaches golden-labels/ is a training target nobody "
+            f"{hint or errors[0]}. A label that reaches golden-labels/ is a training target nobody "
             "checked, and the first symptom is a model that learned the wrong shape."
         )
 

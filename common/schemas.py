@@ -671,6 +671,32 @@ def iter_validation_errors(
         yield f"{where}: {err.message}"
 
 
+def old_shape_hint(
+    label: Any, doc_type: str, acord_form: str | None = None, lob: str | list[str] | None = None,
+) -> str | None:
+    """Why a label fails a common-model line's schema, when the reason is its shape.
+
+    A gold written for the self-contained schema (a line block, ``terrorism``,
+    ``carrier.company_name``) fails a common-model line's schema on dozens of
+    paths. The real cause is one sentence; this is it, or ``None``.
+    """
+    if doc_type.lower() != "policy" or not isinstance(label, dict):
+        return None
+    if not is_common_model(doc_type, acord_form, lob):
+        return None
+    declared = set(load_schema(doc_type, acord_form, lob).get("properties") or {})
+    foreign = sorted(k for k in label if k not in declared and not str(k).startswith("fideon:"))
+    carrier = label.get("carrier")
+    if isinstance(carrier, dict) and "company_name" in carrier:
+        foreign.append("carrier.company_name")
+    if not foreign:
+        return None
+    return (
+        f"this gold is in the self-contained (pre-SPEC_21) shape ({', '.join(foreign[:4])}), but "
+        "this line's schema is a SPEC_21 overlay on the common model: it needs a SPEC_21 gold"
+    )
+
+
 def required_fields(
     doc_type: str,
     acord_form: str | None = None,

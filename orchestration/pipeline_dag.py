@@ -621,7 +621,8 @@ def _declared_carrier(label: dict[str, Any]) -> str | None:
     label = values_view(label)
     carrier = label.get("carrier")
     if isinstance(carrier, dict):
-        carrier = carrier.get("company_name")
+        # `company_name` on a self-contained schema, `name` on the common model.
+        carrier = carrier.get("company_name") or carrier.get("name")
     if isinstance(carrier, str) and carrier.strip():
         return normalize_carrier(carrier)
     insurers = label.get("insurers")

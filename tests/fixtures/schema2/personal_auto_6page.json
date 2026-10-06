@@ -1,0 +1,793 @@
+{
+ "document": {
+  "doc_type": "policy_check",
+  "modality": "native_pdf",
+  "title": {
+   "raw": "Personal Auto Policy Declarations",
+   "parsed": "Personal Auto Policy Declarations",
+   "confidence": {
+    "score": 1.0,
+    "source": "deterministic"
+   },
+   "page_ref": [
+    1
+   ],
+   "flagged": false
+  },
+  "page_count": 6,
+  "source_file_name": "auto_fixture.pdf"
+ },
+ "carrier": {
+  "name": {
+   "raw": "Granite Mutual Insurance Company",
+   "parsed": "Granite Mutual Insurance Company",
+   "confidence": {
+    "score": 1.0,
+    "source": "deterministic"
+   },
+   "page_ref": [
+    1
+   ],
+   "flagged": false
+  }
+ },
+ "producer": {
+  "agency_name": {
+   "raw": "Rivera Agency",
+   "parsed": "Rivera Agency",
+   "confidence": {
+    "score": 1.0,
+    "source": "deterministic"
+   },
+   "page_ref": [
+    1
+   ],
+   "flagged": false
+  }
+ },
+ "named_insured": {
+  "primary_name": {
+   "raw": "JANE RIVERA",
+   "parsed": "JANE RIVERA",
+   "confidence": {
+    "score": 1.0,
+    "source": "deterministic"
+   },
+   "page_ref": [
+    1
+   ],
+   "flagged": false
+  }
+ },
+ "policy": {
+  "policy_number": {
+   "raw": "PA-2026-0042",
+   "parsed": "PA-2026-0042",
+   "confidence": {
+    "score": 1.0,
+    "source": "deterministic"
+   },
+   "page_ref": [
+    1
+   ],
+   "flagged": false
+  },
+  "effective_date": {
+   "raw": "04/01/2026",
+   "parsed": "04/01/2026",
+   "confidence": {
+    "score": 1.0,
+    "source": "deterministic"
+   },
+   "page_ref": [
+    1
+   ],
+   "flagged": false
+  },
+  "expiration_date": {
+   "raw": "10/01/2026",
+   "parsed": "10/01/2026",
+   "confidence": {
+    "score": 1.0,
+    "source": "deterministic"
+   },
+   "page_ref": [
+    1
+   ],
+   "flagged": false
+  },
+  "rating_state": {
+   "raw": "NY",
+   "parsed": "NY",
+   "confidence": {
+    "score": 1.0,
+    "source": "deterministic"
+   },
+   "page_ref": [
+    1
+   ],
+   "flagged": false
+  }
+ },
+ "lob_parts": [
+  {
+   "part_id": "part_1",
+   "lob": "personal_auto",
+   "title": {
+    "raw": "Personal Auto Policy",
+    "parsed": "Personal Auto Policy",
+    "confidence": {
+     "score": 1.0,
+     "source": "deterministic"
+    },
+    "page_ref": [
+     1
+    ],
+    "flagged": false
+   }
+  }
+ ],
+ "premium": {
+  "total": {
+   "raw": "$1,665.00",
+   "parsed": 1665.0,
+   "confidence": {
+    "score": 1.0,
+    "source": "deterministic"
+   },
+   "page_ref": [
+    1
+   ],
+   "flagged": false
+  }
+ },
+ "locations": [
+  {
+   "unit_id": "loc_1",
+   "location_number": {
+    "raw": "1",
+    "parsed": 1,
+    "confidence": {
+     "score": 1.0,
+     "source": "deterministic"
+    },
+    "page_ref": [
+     2
+    ],
+    "flagged": false
+   },
+   "address": {
+    "street": {
+     "raw": "12 Elm St",
+     "parsed": "12 Elm St",
+     "confidence": {
+      "score": 1.0,
+      "source": "deterministic"
+     },
+     "page_ref": [
+      2
+     ],
+     "flagged": false
+    },
+    "city": {
+     "raw": "Troy",
+     "parsed": "Troy",
+     "confidence": {
+      "score": 1.0,
+      "source": "deterministic"
+     },
+     "page_ref": [
+      2
+     ],
+     "flagged": false
+    },
+    "state": {
+     "raw": "NY",
+     "parsed": "NY",
+     "confidence": {
+      "score": 1.0,
+      "source": "deterministic"
+     },
+     "page_ref": [
+      2
+     ],
+     "flagged": false
+    },
+    "postal_code": {
+     "raw": "12180",
+     "parsed": "12180",
+     "confidence": {
+      "score": 1.0,
+      "source": "deterministic"
+     },
+     "page_ref": [
+      2
+     ],
+     "flagged": false
+    }
+   }
+  }
+ ],
+ "vehicles": [
+  {
+   "unit_id": "veh_1",
+   "vehicle_number": {
+    "raw": "1",
+    "parsed": 1,
+    "confidence": {
+     "score": 1.0,
+     "source": "deterministic"
+    },
+    "page_ref": [
+     2
+    ],
+    "flagged": false
+   },
+   "year": {
+    "raw": "2019",
+    "parsed": 2019,
+    "confidence": {
+     "score": 1.0,
+     "source": "deterministic"
+    },
+    "page_ref": [
+     2
+    ],
+    "flagged": false
+   },
+   "make": {
+    "raw": "Honda",
+    "parsed": "Honda",
+    "confidence": {
+     "score": 1.0,
+     "source": "deterministic"
+    },
+    "page_ref": [
+     2
+    ],
+    "flagged": false
+   },
+   "model": {
+    "raw": "Accord",
+    "parsed": "Accord",
+    "confidence": {
+     "score": 1.0,
+     "source": "deterministic"
+    },
+    "page_ref": [
+     2
+    ],
+    "flagged": false
+   },
+   "vin": {
+    "raw": "1HGCV1F30KA000001",
+    "parsed": "1HGCV1F30KA000001",
+    "confidence": {
+     "score": 1.0,
+     "source": "deterministic"
+    },
+    "page_ref": [
+     2
+    ],
+    "flagged": false
+   },
+   "garaging_location_ref": "loc_1"
+  },
+  {
+   "unit_id": "veh_2",
+   "vehicle_number": {
+    "raw": "2",
+    "parsed": 2,
+    "confidence": {
+     "score": 1.0,
+     "source": "deterministic"
+    },
+    "page_ref": [
+     2
+    ],
+    "flagged": false
+   },
+   "year": {
+    "raw": "2021",
+    "parsed": 2021,
+    "confidence": {
+     "score": 1.0,
+     "source": "deterministic"
+    },
+    "page_ref": [
+     2
+    ],
+    "flagged": false
+   },
+   "make": {
+    "raw": "Toyota",
+    "parsed": "Toyota",
+    "confidence": {
+     "score": 1.0,
+     "source": "deterministic"
+    },
+    "page_ref": [
+     2
+    ],
+    "flagged": false
+   },
+   "model": {
+    "raw": "RAV4",
+    "parsed": "RAV4",
+    "confidence": {
+     "score": 1.0,
+     "source": "deterministic"
+    },
+    "page_ref": [
+     2
+    ],
+    "flagged": false
+   },
+   "vin": {
+    "raw": "2T3P1RFV5MC000002",
+    "parsed": "2T3P1RFV5MC000002",
+    "confidence": {
+     "score": 1.0,
+     "source": "deterministic"
+    },
+    "page_ref": [
+     2
+    ],
+    "flagged": false
+   },
+   "garaging_location_ref": "loc_1"
+  }
+ ],
+ "drivers": [
+  {
+   "unit_id": "drv_1",
+   "driver_number": {
+    "raw": "1",
+    "parsed": 1,
+    "confidence": {
+     "score": 1.0,
+     "source": "deterministic"
+    },
+    "page_ref": [
+     3
+    ],
+    "flagged": false
+   },
+   "name": {
+    "raw": "Jane Rivera",
+    "parsed": "Jane Rivera",
+    "confidence": {
+     "score": 1.0,
+     "source": "deterministic"
+    },
+    "page_ref": [
+     3
+    ],
+    "flagged": false
+   },
+   "license_number": {
+    "raw": "R123456789",
+    "parsed": "R123456789",
+    "confidence": {
+     "score": 1.0,
+     "source": "deterministic"
+    },
+    "page_ref": [
+     3
+    ],
+    "flagged": false
+   },
+   "status": {
+    "raw": "Rated",
+    "parsed": "rated",
+    "confidence": {
+     "score": 1.0,
+     "source": "deterministic"
+    },
+    "page_ref": [
+     3
+    ],
+    "flagged": false
+   }
+  },
+  {
+   "unit_id": "drv_2",
+   "driver_number": {
+    "raw": "2",
+    "parsed": 2,
+    "confidence": {
+     "score": 1.0,
+     "source": "deterministic"
+    },
+    "page_ref": [
+     3
+    ],
+    "flagged": false
+   },
+   "name": {
+    "raw": "Sam Rivera",
+    "parsed": "Sam Rivera",
+    "confidence": {
+     "score": 1.0,
+     "source": "deterministic"
+    },
+    "page_ref": [
+     3
+    ],
+    "flagged": false
+   },
+   "license_number": {
+    "raw": "R987654321",
+    "parsed": "R987654321",
+    "confidence": {
+     "score": 1.0,
+     "source": "deterministic"
+    },
+    "page_ref": [
+     3
+    ],
+    "flagged": false
+   },
+   "status": {
+    "raw": "Rated",
+    "parsed": "rated",
+    "confidence": {
+     "score": 1.0,
+     "source": "deterministic"
+    },
+    "page_ref": [
+     3
+    ],
+    "flagged": false
+   }
+  }
+ ],
+ "coverages": [
+  {
+   "coverage_id": "cov_1",
+   "coverage_code": "X_VEHICLE_LIABILITY",
+   "coverage_name": {
+    "raw": "Bodily Injury / Property Damage",
+    "parsed": "Bodily Injury / Property Damage",
+    "confidence": {
+     "score": 1.0,
+     "source": "deterministic"
+    },
+    "page_ref": [
+     4
+    ],
+    "flagged": false
+   },
+   "applies_to": [
+    "veh_1"
+   ],
+   "limits": [
+    {
+     "limit_type": "per_person",
+     "amount": {
+      "raw": "$100,000",
+      "parsed": 100000,
+      "confidence": {
+       "score": 1.0,
+       "source": "deterministic"
+      },
+      "page_ref": [
+       4
+      ],
+      "flagged": false
+     }
+    },
+    {
+     "limit_type": "per_accident",
+     "amount": {
+      "raw": "$300,000",
+      "parsed": 300000,
+      "confidence": {
+       "score": 1.0,
+       "source": "deterministic"
+      },
+      "page_ref": [
+       4
+      ],
+      "flagged": false
+     }
+    },
+    {
+     "limit_type": "property_damage",
+     "amount": {
+      "raw": "$50,000",
+      "parsed": 50000,
+      "confidence": {
+       "score": 1.0,
+       "source": "deterministic"
+      },
+      "page_ref": [
+       4
+      ],
+      "flagged": false
+     }
+    }
+   ],
+   "premium": {
+    "raw": "$410.00",
+    "parsed": 410.0,
+    "confidence": {
+     "score": 1.0,
+     "source": "deterministic"
+    },
+    "page_ref": [
+     4
+    ],
+    "flagged": false
+   }
+  },
+  {
+   "coverage_id": "cov_2",
+   "coverage_code": "X_COLLISION",
+   "coverage_name": {
+    "raw": "Collision",
+    "parsed": "Collision",
+    "confidence": {
+     "score": 1.0,
+     "source": "deterministic"
+    },
+    "page_ref": [
+     4
+    ],
+    "flagged": false
+   },
+   "applies_to": [
+    "veh_1"
+   ],
+   "deductibles": [
+    {
+     "deductible_type": "flat",
+     "amount": {
+      "raw": "$500",
+      "parsed": 500,
+      "confidence": {
+       "score": 1.0,
+       "source": "deterministic"
+      },
+      "page_ref": [
+       4
+      ],
+      "flagged": false
+     }
+    }
+   ],
+   "premium": {
+    "raw": "$380.00",
+    "parsed": 380.0,
+    "confidence": {
+     "score": 1.0,
+     "source": "deterministic"
+    },
+    "page_ref": [
+     4
+    ],
+    "flagged": false
+   }
+  },
+  {
+   "coverage_id": "cov_3",
+   "coverage_code": "X_VEHICLE_LIABILITY",
+   "coverage_name": {
+    "raw": "Bodily Injury / Property Damage",
+    "parsed": "Bodily Injury / Property Damage",
+    "confidence": {
+     "score": 1.0,
+     "source": "deterministic"
+    },
+    "page_ref": [
+     5
+    ],
+    "flagged": false
+   },
+   "applies_to": [
+    "veh_2"
+   ],
+   "limits": [
+    {
+     "limit_type": "per_person",
+     "amount": {
+      "raw": "$100,000",
+      "parsed": 100000,
+      "confidence": {
+       "score": 1.0,
+       "source": "deterministic"
+      },
+      "page_ref": [
+       5
+      ],
+      "flagged": false
+     }
+    },
+    {
+     "limit_type": "per_accident",
+     "amount": {
+      "raw": "$300,000",
+      "parsed": 300000,
+      "confidence": {
+       "score": 1.0,
+       "source": "deterministic"
+      },
+      "page_ref": [
+       5
+      ],
+      "flagged": false
+     }
+    },
+    {
+     "limit_type": "property_damage",
+     "amount": {
+      "raw": "$50,000",
+      "parsed": 50000,
+      "confidence": {
+       "score": 1.0,
+       "source": "deterministic"
+      },
+      "page_ref": [
+       5
+      ],
+      "flagged": false
+     }
+    }
+   ],
+   "premium": {
+    "raw": "$455.00",
+    "parsed": 455.0,
+    "confidence": {
+     "score": 1.0,
+     "source": "deterministic"
+    },
+    "page_ref": [
+     5
+    ],
+    "flagged": false
+   }
+  },
+  {
+   "coverage_id": "cov_4",
+   "coverage_code": "X_COLLISION",
+   "coverage_name": {
+    "raw": "Collision",
+    "parsed": "Collision",
+    "confidence": {
+     "score": 1.0,
+     "source": "deterministic"
+    },
+    "page_ref": [
+     5
+    ],
+    "flagged": false
+   },
+   "applies_to": [
+    "veh_2"
+   ],
+   "deductibles": [
+    {
+     "deductible_type": "flat",
+     "amount": {
+      "raw": "$1,000",
+      "parsed": 1000,
+      "confidence": {
+       "score": 1.0,
+       "source": "deterministic"
+      },
+      "page_ref": [
+       5
+      ],
+      "flagged": false
+     }
+    }
+   ],
+   "premium": {
+    "raw": "$420.00",
+    "parsed": 420.0,
+    "confidence": {
+     "score": 1.0,
+     "source": "deterministic"
+    },
+    "page_ref": [
+     5
+    ],
+    "flagged": false
+   }
+  }
+ ],
+ "interested_parties": [
+  {
+   "role": "lienholder",
+   "name": {
+    "raw": "First Auto Credit",
+    "parsed": "First Auto Credit",
+    "confidence": {
+     "score": 1.0,
+     "source": "deterministic"
+    },
+    "page_ref": [
+     6
+    ],
+    "flagged": false
+   },
+   "loan_number": {
+    "raw": "LN-778",
+    "parsed": "LN-778",
+    "confidence": {
+     "score": 1.0,
+     "source": "deterministic"
+    },
+    "page_ref": [
+     6
+    ],
+    "flagged": false
+   },
+   "applies_to": [
+    "veh_2"
+   ]
+  }
+ ],
+ "forms_and_endorsements": [
+  {
+   "form_number": {
+    "raw": "PP 00 01",
+    "parsed": "PP 00 01",
+    "confidence": {
+     "score": 1.0,
+     "source": "deterministic"
+    },
+    "page_ref": [
+     6
+    ],
+    "flagged": false
+   },
+   "edition_date": {
+    "raw": "09 18",
+    "parsed": "09 18",
+    "confidence": {
+     "score": 1.0,
+     "source": "deterministic"
+    },
+    "page_ref": [
+     6
+    ],
+    "flagged": false
+   },
+   "title": {
+    "raw": "Personal Auto Policy",
+    "parsed": "Personal Auto Policy",
+    "confidence": {
+     "score": 1.0,
+     "source": "deterministic"
+    },
+    "page_ref": [
+     6
+    ],
+    "flagged": false
+   },
+   "form_type": "coverage_form"
+  }
+ ],
+ "additional_fields": [
+  {
+   "label": "Good Student Discount",
+   "value": {
+    "raw": "Applied",
+    "parsed": "Applied",
+    "confidence": {
+     "score": 1.0,
+     "source": "deterministic"
+    },
+    "page_ref": [
+     6
+    ],
+    "flagged": false
+   },
+   "section_hint": "discounts",
+   "page_ref": [
+    6
+   ]
+  }
+ ]
+}

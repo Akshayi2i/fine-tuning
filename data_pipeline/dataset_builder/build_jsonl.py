@@ -313,6 +313,14 @@ def _policy_window_rows(
     # Row fragments left out because their window shows none of the row's
     # identifiers and no table of their own: not taught, so said.
     notes += [f"window {mode}: orphaned {path}" for path in sorted(set(report.orphaned))]
+    if report.dangling:
+        # A common-model row's link to a row another window reads: left out of
+        # the window that cannot see the row it names, by design. Counted, not
+        # listed per value, so a line whose links mostly cross windows shows.
+        details.append(
+            f"window {mode}: {len(set(report.dangling))} reference(s) left out of a window "
+            "that does not hold the row they name"
+        )
     if checked.dropped or checked.repaged or checked.unverifiable:
         details.append(
             f"window {mode}: of {checked.checked} rule-added label value(s), "
@@ -336,6 +344,7 @@ def build_corpus(
     *,
     seed: int = 42,
     mode_assignment: ModeAssignment | None = None,
+    max_expansion_failures: int = 0,
 ) -> BuildResult:
     """Compile every document into its split's rows, then assert no leakage.
 
@@ -343,8 +352,17 @@ def build_corpus(
     (arch v2.1 §6.1). Without one, it is drawn here over the **train** documents
     with the same seed. Train always gets one row per epoch; there is no path
     that expands a train document into all three regimes.
+
+    A document that fails to expand is set aside - except on a common-model
+    line, where more than ``max_expansion_failures`` such documents fail the
+    build. Those labels are new (SPEC_21) and their target builder is new: a
+    systematic error there would otherwise shrink the corpus quietly, one
+    "expansion" set-aside at a time, and train on whatever survived.
     """
+    from common.schemas import is_common_model
+
     result = BuildResult(rows_by_split={"train": [], "val": [], "test": []})
+    common_model_failures: list[tuple[str, str]] = []
     if mode_assignment is None:
         mode_assignment = sample_modes(train_source_ids(documents, assignment), seed=seed)
 
@@ -372,6 +390,14 @@ def build_corpus(
             result.skipped.append((document.source_id, f"expansion failed: {exc}"))
             result.set_aside["expansion"] += 1
             log.warning("skipping %s: %s", document.source_id, exc)
+            if document.doc_type == "policy" and is_common_model("policy", None, document.lob):
+                common_model_failures.append((document.source_id, str(exc)))
+                if len(common_model_failures) > max_expansion_failures:
+                    shown = "; ".join(f"{sid}: {err[:160]}" for sid, err in common_model_failures[:3])
+                    raise CorpusBuildError(
+                        f"{len(common_model_failures)} common-model document(s) failed to expand "
+                        f"(allowed {max_expansion_failures}): {shown}"
+                    ) from exc
             continue
 
         # Reject, never truncate. A row over its task budget would be clipped on

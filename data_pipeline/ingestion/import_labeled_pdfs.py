@@ -41,7 +41,7 @@ from typing import Any
 from artifact_registry import paths
 from artifact_registry.blob_client import BlobClient
 from common.constants import ACTIVE_DOC_TYPES
-from common.schemas import SchemaError, iter_validation_errors
+from common.schemas import SchemaError, iter_validation_errors, old_shape_hint
 
 log = logging.getLogger(__name__)
 
@@ -165,6 +165,9 @@ def check_bundle(bundle: LabeledPdf, doc_type: str) -> DocumentCheck:
         check.errors.append(f"no schema to validate against — {exc}")
         return check
 
+    hint = old_shape_hint(bundle.golden, doc_type, bundle.acord_form, bundle.lob) if errors else None
+    if hint:
+        check.errors.append(hint)
     check.errors.extend(errors[:MAX_ERRORS_REPORTED])
     if len(errors) > MAX_ERRORS_REPORTED:
         check.errors.append(f"... and {len(errors) - MAX_ERRORS_REPORTED} more")

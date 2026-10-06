@@ -404,7 +404,7 @@ class DeliveryReport:
 
 def fill_delivery(delivery: Path, reviewed: Path, *, lines: frozenset[str] | None = None,
                   apply: bool = False) -> DeliveryReport:
-    from common.schemas import iter_validation_errors
+    from common.schemas import is_common_model, iter_validation_errors
 
     report = DeliveryReport()
     with (delivery / "manifest.csv").open(encoding="utf-8", newline="") as fh:
@@ -416,6 +416,12 @@ def fill_delivery(delivery: Path, reviewed: Path, *, lines: frozenset[str] | Non
         if not gold_path.is_file():
             continue
         report.documents += 1
+        if is_common_model("policy", None, row["lob"]):
+            # SPEC_21 twins are written complete by their generator (its check
+            # C3). Copying a seed's values in would put the seed's ids and
+            # values into a twin whose own differ.
+            report.refused["common-model line: its twins are complete"] += 1
+            continue
         source_gold = reviewed / Path(row["source"]).with_suffix(".json")
         if not source_gold.is_file():
             report.refused["no reviewed gold for the source"] += 1

@@ -89,9 +89,16 @@ def _join(prefix: str, key: str) -> str:
 #: values it cannot see - and scored as wrong on both in every document. They are
 #: kept out of training targets and out of scoring, and serving fills them in
 #: (with_system_fields).
+#:
+#: The common-model lines add three more the pipeline knows and no page prints:
+#: the document's type and modality, and whether the policy is a package (it is
+#: when it has more than one part). No self-contained schema has them.
 SYSTEM_SUPPLIED_FIELDS: tuple[tuple[str, str], ...] = (
     ("document", "source_file_name"),
     ("document", "page_count"),
+    ("document", "doc_type"),
+    ("document", "modality"),
+    ("policy", "is_package"),
 )
 
 
@@ -134,7 +141,9 @@ def with_system_fields(
     return filled
 
 
-def to_model_target(label: dict[str, Any], *, required: Iterable[str] = ()) -> dict[str, Any]:
+def to_model_target(
+    label: dict[str, Any], *, required: Iterable[str] = (), schema: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     """The training target for a canonical golden label.
 
     Narrows every envelope to ``raw``/``parsed``/``page_ref``, writes dates in
@@ -145,6 +154,11 @@ def to_model_target(label: dict[str, Any], *, required: Iterable[str] = ()) -> d
     emitted, as ``{}`` when empty, because the canonical schema requires them and
     a target that omitted them would teach an output that fails validation.
 
+    ``schema`` - the model view the target is written against - is given for a
+    common-model line. Its ids, references, codes and types are bare strings the
+    schema declares, and are kept; only a ``DateValue`` is reformatted, so a form
+    edition printed ``05 11`` is never read as a date because of its name.
+
     Raises :class:`CanonicalLabelError` for a label with a bare value where an
     envelope belongs — a flat, pre-canonical label. Training on one under a
     canonical prompt would teach the model the wrong shape, silently.
@@ -152,7 +166,8 @@ def to_model_target(label: dict[str, Any], *, required: Iterable[str] = ()) -> d
     if not isinstance(label, dict):
         raise CanonicalLabelError(f"a canonical label is a JSON object, not {type(label).__name__}")
     # Never taught: the system supplies them (SYSTEM_SUPPLIED_FIELDS).
-    target = _slim(without_system_fields(label), "") or {}
+    stripped = without_system_fields(label)
+    target = (_slim(stripped, "") if schema is None else _slim_against(stripped, schema)) or {}
     for key in required:
         target.setdefault(key, {})
     return target
@@ -186,6 +201,80 @@ def _slim(node: Any, path: str) -> Any:
     )
 
 
+def _is_value_schema(node: Any) -> bool:
+    return isinstance(node, dict) and {"raw", "parsed", "page_ref"} <= set(node.get("properties") or {})
+
+
+def _schema_branch(
+    sub: Any, value: Any, defs: dict[str, Any], seen: str | None = None
+) -> tuple[dict[str, Any], str | None]:
+    """The schema ``value`` is written against, with the name of the definition
+    it came from: ``$ref`` followed, and of ``anyOf`` variants the one whose
+    properties hold every key ``value`` has (else the one holding most)."""
+    name = seen
+    while isinstance(sub, dict) and isinstance(sub.get("$ref"), str):
+        ref = sub["$ref"]
+        if not ref.startswith("#/$defs/"):
+            return {}, name
+        name = ref.rsplit("/", 1)[-1]
+        sub = defs.get(name)
+    if not isinstance(sub, dict):
+        return {}, name
+    branches = sub.get("anyOf") or sub.get("oneOf")
+    if branches and "properties" not in sub and "items" not in sub:
+        keys = set(value) if isinstance(value, dict) else set()
+        best: tuple[dict[str, Any], str | None] = ({}, name)
+        best_score = -1
+        for branch in branches:
+            resolved, _ = _schema_branch(branch, value, defs, name)
+            props = set(resolved.get("properties") or {})
+            if isinstance(value, dict) and keys <= props:
+                return resolved, name
+            score = len(keys & props) if isinstance(value, dict) else (
+                1 if isinstance(value, list) and "items" in resolved else 0)
+            if score > best_score:
+                best, best_score = (resolved, name), score
+        return best
+    return sub, name
+
+
+def _slim_against(node: Any, schema: dict[str, Any]) -> Any:
+    """:func:`_slim`, read against a common-model view."""
+    defs = schema.get("$defs") or {}
+
+    def walk(value: Any, sub: Any, path: str) -> Any:
+        resolved, name = _schema_branch(sub, value, defs)
+        if is_field_value(value):
+            if value.get("raw") is None and value.get("parsed") is None:
+                return None
+            parsed = value.get("parsed")
+            if name == "DateValue" and parsed is not None:
+                parsed = format_output_date(parsed) or parsed
+            return {"raw": value.get("raw"), "parsed": parsed,
+                    "page_ref": [int(p) for p in (value.get("page_ref") or [])]}
+        if isinstance(value, dict):
+            props = resolved.get("properties") or {}
+            out = {}
+            for key, item in value.items():
+                slim = walk(item, props.get(key), _join(path, key))
+                if slim not in (None, {}, []):
+                    out[key] = slim
+            return out
+        if isinstance(value, list):
+            rows = [walk(item, resolved.get("items"), f"{path}[{i}]") for i, item in enumerate(value)]
+            return [row for row in rows if row not in (None, {}, [])]
+        if value is None:
+            return None
+        if resolved and not _is_value_schema(resolved):
+            return value  # an id, a reference, a code or a type: the schema's own bare value
+        raise CanonicalLabelError(
+            f"{path or '<root>'} holds a bare value ({value!r}) where the schema puts a "
+            "value envelope."
+        )
+
+    return walk(node, schema, "")
+
+
 def in_schema_order(node: Any, schema: dict[str, Any]) -> Any:
     """``node`` with every object's keys in the order its schema declares them.
 
@@ -202,14 +291,10 @@ def in_schema_order(node: Any, schema: dict[str, Any]) -> Any:
     """
     defs = schema.get("$defs") or {}
 
-    def resolve(sub: Any) -> dict[str, Any]:
-        while isinstance(sub, dict) and "$ref" in sub:
-            ref = sub["$ref"]
-            sub = defs.get(ref.rsplit("/", 1)[-1]) if ref.startswith("#/$defs/") else None
-        return sub if isinstance(sub, dict) else {}
-
     def walk(value: Any, sub: Any) -> Any:
-        sub = resolve(sub)
+        # A row with variants (a limit, a deductible) is ordered by the variant
+        # it is written against: every variant lists its fields in one order.
+        sub, _ = _schema_branch(sub, value, defs)
         if isinstance(value, dict):
             props = sub.get("properties") or {}
             ordered = {key: walk(value[key], props[key]) for key in props if key in value}
