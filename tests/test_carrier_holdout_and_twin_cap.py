@@ -146,11 +146,17 @@ def test_every_row_carries_carrier_and_twin_index():
 
     docs = _documents(6)
     for index, doc in enumerate(docs):
-        doc.carrier, doc.twin_index = f"carrier-{index % 2}", None
+        doc.carrier = f"carrier-{index % 2}"
+        doc.synthetic, doc.twin_index = (True, index) if index in (1, 2) else (False, None)   # train twins
     assignment = GroupSplitAssignment(assignment={d.family: "train" for d in docs[:4]}
                                       | {docs[4].family: "val", docs[5].family: "test"})
     rows = [row for split_rows in build_corpus(docs, assignment).rows_by_split.values() for row in split_rows]
-    assert rows and all("carrier" in row and "twin_index" in row for row in rows)
+    by_id = {doc.source_id: doc for doc in docs}
+    assert rows
+    for row in rows:
+        doc = by_id[row["source_id"]]
+        assert row["carrier"] == doc.carrier and row["twin_index"] == doc.twin_index
+    assert {row["twin_index"] for row in rows if not by_id[row["source_id"]].synthetic} == {None}
 
 
 def test_the_run_manifest_records_the_split_policy():
