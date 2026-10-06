@@ -255,8 +255,9 @@ def calibration_samples(
     the calibrator has already been pulled toward.
     """
     from calibration.features import build_document_features
-    from common.canonical import values_view
+    from common.canonical import values_view, without_bare_values
     from common.normalize import values_match
+    from common.schemas import is_common_model
     from evaluation.metrics.field_accuracy import flatten_scalars, rows_aligned_to
 
     halves: dict[str, list[tuple[Any, bool]]] = {"calibration": [], "threshold": []}
@@ -277,10 +278,18 @@ def calibration_samples(
         expected = flatten_scalars(rows_aligned_to(
             values_view(generation.golden), values_view(generation.extraction or {})
         ))
+        # Fitted as serving calibrates (serving.pipeline._feature_calibrated): on
+        # a common-model line, typed as its schema declares and without its ids,
+        # codes and links, which serving never calibrates. Otherwise a calibrator
+        # is fitted on fields, and under types, it is never asked about.
+        common_model = generation.row.get("doc_type") == "policy" and is_common_model(
+            "policy", None, generation.row.get("lob"))
+        extraction = generation.extraction or {}
         for features in build_document_features(
-            extraction=generation.extraction or {},
+            extraction=without_bare_values(extraction) if common_model else extraction,
             spans=generation.logprobs_by_path,
             page_text=generation.page_text,
+            common_model=common_model,
         ):
             correct = values_match(
                 expected.get(features.field_path), features.value, field_path=features.field_path

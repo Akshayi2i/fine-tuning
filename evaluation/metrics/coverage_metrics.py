@@ -159,6 +159,13 @@ def score_schema_validity(
     and is enveloped first, exactly as serving does before its own audit: the
     question is whether the model produced the client's tree, not whether it
     wrote fields the pipeline adds.
+
+    One window of a common-model line (an output with ``sections``) is checked
+    against that slice's model view (``resolved_schema``), as written: the model
+    is never asked for what the pipeline fills in after the merge - a coverage's
+    ``coverage_id``, the numbering of every row - and the client's slice
+    requires it. A whole common-model document is checked against the client's
+    schema like any other.
     """
     from common.canonical import envelope
     from common.schemas import is_canonical, validator_for
@@ -168,13 +175,34 @@ def score_schema_validity(
         lob = rest[0] if rest else None
         sections = rest[1] if len(rest) > 1 else None
         report.total += 1
-        if is_canonical(doc_type, acord_form, lob):
-            output = envelope(output, {})
-        if validator_for(doc_type, acord_form, lob, sections).is_valid(output):
+        if sections and _is_common_model(doc_type, acord_form, lob):
+            validator = _model_view_validator(doc_type, acord_form, lob, sections)
+        else:
+            if is_canonical(doc_type, acord_form, lob):
+                output = envelope(output, {})
+            validator = validator_for(doc_type, acord_form, lob, sections)
+        if validator.is_valid(output):
             report.valid += 1
         else:
             report.invalid_source_ids.append(source_id)
     return report
+
+
+def _is_common_model(doc_type: str, acord_form: str | None, lob: Any) -> bool:
+    from common.schemas import SchemaError, is_common_model
+
+    try:
+        return doc_type == "policy" and is_common_model(doc_type, acord_form, lob)
+    except SchemaError:
+        return False
+
+
+def _model_view_validator(doc_type: str, acord_form: str | None, lob: Any, sections: str) -> Any:
+    from jsonschema import Draft202012Validator
+
+    from common.schemas import resolved_schema
+
+    return Draft202012Validator(resolved_schema(doc_type, acord_form, lob, sections))
 
 
 # --------------------------------------------------------------------------

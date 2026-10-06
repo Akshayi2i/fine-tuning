@@ -19,7 +19,9 @@ delivered:
 * **Table rows** are matched to the label's rows by their identifiers (VIN, form
   number, claim number ... the same matching as list recall), never by
   position: a reordered row is not wrong, and a row the label does not hold is
-  invented in every value.
+  invented in every value. A common-model document's rows pair as its field
+  match pairs them (``field_accuracy._pair_rows``): a coverage with a wrong code
+  or a lost link is still the coverage it read.
 
 Not counted: values the model left out. An omission reaches nobody as an
 accepted value; recall and ``false_null_rate`` measure it.
@@ -54,17 +56,19 @@ class AutoAcceptTally:
         return self.wrong / self.accepted if self.accepted else 0.0
 
 
-def score_auto_accept(expected: Any, got: Any) -> AutoAcceptTally:
+def score_auto_accept(expected: Any, got: Any, *, common_model: bool = False) -> AutoAcceptTally:
     """Tally one document: ``expected`` the golden label (either form),
-    ``got`` the served extraction with its envelopes."""
+    ``got`` the served extraction with its envelopes. ``common_model``: the
+    document is on a common-model line, and its rows pair as field match pairs
+    them."""
     from common.canonical import values_view
 
     tally = AutoAcceptTally()
-    _walk(values_view(expected), got, "", tally)
+    _walk(values_view(expected), got, "", tally, common_model)
     return tally
 
 
-def _walk(expected: Any, got: Any, path: str, tally: AutoAcceptTally) -> None:
+def _walk(expected: Any, got: Any, path: str, tally: AutoAcceptTally, common_model: bool) -> None:
     from common.canonical import is_field_value
 
     if is_field_value(got):
@@ -74,10 +78,10 @@ def _walk(expected: Any, got: Any, path: str, tally: AutoAcceptTally) -> None:
     elif isinstance(got, dict):
         sub = expected if isinstance(expected, dict) else {}
         for key, value in got.items():
-            _walk(sub.get(key), value, f"{path}.{key}" if path else key, tally)
+            _walk(sub.get(key), value, f"{path}.{key}" if path else key, tally, common_model)
     elif isinstance(got, list):
-        for index, (row, match) in enumerate(_match_rows(expected, got)):
-            _walk(match, row, f"{path}[{index}]", tally)
+        for index, (row, match) in enumerate(_match_rows(expected, got, common_model=common_model)):
+            _walk(match, row, f"{path}[{index}]", tally, common_model)
 
 
 def _count(expected: Any, node: Any, envelopes: list[dict[str, Any]], path: str,
@@ -100,13 +104,17 @@ def _count(expected: Any, node: Any, envelopes: list[dict[str, Any]], path: str,
         tally.wrong += 1
 
 
-def _match_rows(expected: Any, got_rows: list[Any]) -> list[tuple[Any, Any]]:
+def _match_rows(expected: Any, got_rows: list[Any], *, common_model: bool = False) -> list[tuple[Any, Any]]:
     """Each served row with the label row it reads (``None`` when the label
-    holds no such row), matched on identifiers as list recall matches them."""
+    holds no such row), matched on identifiers as list recall matches them -
+    on a common-model line as its field match pairs them."""
     from common.canonical import values_view
-    from evaluation.metrics.field_accuracy import _infer_key_fields, _row_key
+    from evaluation.metrics.field_accuracy import _infer_key_fields, _pair_rows, _row_key
 
     expected_rows = expected if isinstance(expected, list) else []
+    if common_model:
+        mates, _unpaired = _pair_rows(expected_rows, got_rows)
+        return list(zip(got_rows, mates, strict=True))
     keys = _infer_key_fields(expected_rows) if expected_rows else []
     pool: dict[tuple, list[Any]] = {}
     for row in expected_rows:

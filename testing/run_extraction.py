@@ -101,16 +101,38 @@ def score_against_ground_truth(
     golden, extraction = without_system_fields(golden), without_system_fields(result.extraction)
     # Scored on what the line's schema can hold, as run_eval scores it.
     golden = schema_label(golden, result.doc_type, acord_form, lob)
+    common_model = _is_common_model(result.doc_type, acord_form, lob)
+    if common_model:
+        # Both sides, as run_eval.build_report narrows them: what serving adds
+        # after the merge is not a value the model read.
+        extraction = schema_label(extraction, result.doc_type, acord_form, lob)
     # A common-model line's ids are each writer's own numbering: compared by
     # what its links name, never by id (common.structural_ids.comparable_view).
     from common.structural_ids import comparable_for
 
     golden = comparable_for(golden, result.doc_type, acord_form, lob)
     extraction = comparable_for(extraction, result.doc_type, acord_form, lob)
-    accuracy = score_fields(golden, extraction)
-    list_reports = score_all_list_fields(golden, extraction)
+    model_metrics: dict[str, Any] = {}
+    if common_model:
+        # Scored as run_eval.score_subset scores the line: nearly every value of
+        # it lives in a table (a limit inside its coverage), and skipping table
+        # paths scored a policy with every premium and limit wrong as perfect.
+        # Links, codes and overflow have their own numbers, as there.
+        from common.lob import merge_line
+        from evaluation.metrics.common_model import CommonModelTally, core_for_scoring, without_overflow
+
+        line = merge_line(lob)
+        accuracy = score_fields(*core_for_scoring(golden, extraction, line), skip_lists=False)
+        list_reports = score_all_list_fields(without_overflow(golden), without_overflow(extraction))
+        tally = CommonModelTally()
+        tally.add(golden, extraction, line)
+        model_metrics = {k: v for k, v in tally.metrics().items() if v is not None}
+    else:
+        accuracy = score_fields(golden, extraction)
+        list_reports = score_all_list_fields(golden, extraction)
 
     return {
+        **model_metrics,
         "field_exact_match_rate": round(accuracy.exact_match, 4),
         "field_normalized_match_rate": round(accuracy.normalized_match, 4),
         "field_accuracy_by_field": accuracy.by_field(),
@@ -122,6 +144,16 @@ def score_against_ground_truth(
             for f in accuracy.failures()
         ],
     }
+
+
+def _is_common_model(doc_type: str, acord_form: str | None, lob: Any) -> bool:
+    """Whether this is a common-model policy, the test ``comparable_for`` makes."""
+    from common.schemas import SchemaError, is_common_model
+
+    try:
+        return doc_type == "policy" and is_common_model(doc_type, acord_form, lob)
+    except SchemaError:
+        return False
 
 
 def run_document(

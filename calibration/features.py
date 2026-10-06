@@ -216,16 +216,21 @@ def _collect_typed(node: Any, defs: dict[str, Any], path: str, out: dict[str, st
                     _collect_typed(child, defs, here, out, seen | ({target} if target else set()))
 
 
-def infer_field_type(field_path: str, value: Any = None) -> str:
+def infer_field_type(field_path: str, value: Any = None, *, common_model: bool = False) -> str:
     """Which calibrator this field belongs to.
 
-    The reviewed table first (configs/field_types.yaml); then, for a
-    common-model field, the type its schema declares (a MoneyValue is money); a
-    common-model overflow value by what was parsed. Otherwise name-based,
+    The reviewed table first (configs/field_types.yaml); then, for a field of a
+    ``common_model`` document, the type its schema declares (a MoneyValue is
+    money) and an overflow value by what was parsed. Otherwise name-based,
     reusing ``common.normalize``'s inference so a field is *normalised* and
     *calibrated* under the same notion of what it is. Two different answers to
     "what kind of field is this" is how a money field gets compared as text and
     calibrated as a number.
+
+    Only for a common-model document: the self-contained lines and ACORD 140
+    share many of its paths (``billing.amount_due``, ``*.address.state``,
+    ``buildings.year_built``), and read through its table those fields moved
+    to another calibrator and another error target.
     """
     from common.normalize import infer_field_kind
 
@@ -233,11 +238,13 @@ def infer_field_type(field_path: str, value: Any = None) -> str:
     reviewed = field_type_table().get(bare)
     if reviewed:
         return reviewed
-    declared = common_model_field_types().get(bare)
-    if declared:
-        return declared
-    if bare == "additional_fields.value" and isinstance(value, (int, float)) and not isinstance(value, bool):
-        return "number"
+    if common_model:
+        declared = common_model_field_types().get(bare)
+        if declared:
+            return declared
+        if (bare == "additional_fields.value" and isinstance(value, (int, float))
+                and not isinstance(value, bool)):
+            return "number"
     kind = infer_field_kind(field_path)
     mapping = {
         "identifier": "identifier",
@@ -330,6 +337,7 @@ def build_features(
     mapped: bool = True,
     reason: str | None = None,
     printed_value: Any = None,
+    common_model: bool = False,
 ) -> FieldFeatures:
     """Assemble one field's feature vector.
 
@@ -338,6 +346,9 @@ def build_features(
     are calibrated as their own class: there is no span to be uncertain about,
     and treating the absence as maximum confidence is how a false null ships
     unreviewed.
+
+    ``common_model``: the document is on a common-model line, so its fields are
+    typed as its schema declares them (:func:`infer_field_type`).
     """
     is_null = (
         value is None
@@ -351,7 +362,7 @@ def build_features(
 
     features = FieldFeatures(
         field_path=field_path,
-        field_type=infer_field_type(field_path, value),
+        field_type=infer_field_type(field_path, value, common_model=common_model),
         value=value,
         token_count=len(spans),
         is_null=is_null,
@@ -382,12 +393,17 @@ def build_document_features(
     spans: dict[str, list[float]],
     page_text: str | None = None,
     cross_mode: dict[str, Any] | None = None,
+    common_model: bool = False,
 ) -> list[FieldFeatures]:
     """Feature vectors for every scalar field in one extraction.
 
     Fields the span mapper could not locate are included with ``mapped=False``,
     not dropped: a field that silently vanishes between generation and
     confidence is one nobody reviews and nobody counts.
+
+    ``common_model`` says the extraction is on a common-model line. Serving and
+    calibration fitting both pass it for the document's own line, so a field is
+    fitted and served under one calibrator.
     """
     from common.canonical import printed_view, values_view
     from evaluation.metrics.field_accuracy import flatten_scalars
@@ -412,6 +428,7 @@ def build_document_features(
             mapped=located or empty,
             reason=None if located or empty else "no span located in the generation",
             printed_value=printed.get(path),
+            common_model=common_model,
         ))
     return out
 

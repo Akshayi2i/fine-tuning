@@ -675,6 +675,7 @@ def _feature_calibrated(
     calibrators: Any,
     thresholds: Any,
     page_text: str | None,
+    common_model: bool = False,
 ) -> CalibratedResult:
     """Per-field-type feature calibration (arch v2.1 §5.1-5.4).
 
@@ -708,8 +709,11 @@ def _feature_calibrated(
         for path, span in spans.items()
         if getattr(span, "mapped", False)
     }
+    # A common-model line's fields are typed as its schema declares them, as
+    # calibration fitting types them (validation_generation.calibration_samples).
     for features in build_document_features(
-        extraction=extraction, spans=logprobs_by_path, page_text=page_text
+        extraction=extraction, spans=logprobs_by_path, page_text=page_text,
+        common_model=common_model,
     ):
         confidence = calibrators.predict(features) if calibrators else None
         needs_review = (
@@ -998,6 +1002,7 @@ def extract(
                 [request.page_texts.get(page) for page in pages_used]
                 if request.page_texts else [request.ocr_text]
             ),
+            common_model=common_model,
         )
     else:
         log.warning(

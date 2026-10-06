@@ -95,6 +95,12 @@ def label_split(
     out: dict[str, list[bool]] = {"seen": [], "unseen": []}
     for result in results:
         path = re.sub(r"\[\d*\]", "", getattr(result, "field_path", ""))
+        # A coverage code's labels are its own (``coverages.coverage_code=<CODE>``),
+        # read for the code the label holds: that is the coverage the page prints,
+        # where the model's code may be wrong.
+        expected = getattr(result, "expected", None)
+        if path == "coverages.coverage_code" and isinstance(expected, str):
+            path = f"{path}={expected}"
         on_page = [label for label in aliases.get(path, []) if printed(label, text)]
         if not on_page:
             continue

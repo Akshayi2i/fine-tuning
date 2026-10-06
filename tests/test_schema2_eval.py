@@ -136,14 +136,14 @@ def _envelopes(node):
 def test_a_common_model_field_is_calibrated_as_its_value_type(path, kind):
     from calibration.features import infer_field_type
 
-    assert infer_field_type(path) == kind
+    assert infer_field_type(path, common_model=True) == kind
 
 
 def test_an_overflow_value_is_typed_by_what_was_parsed():
     from calibration.features import infer_field_type
 
-    assert infer_field_type("additional_fields[0].value", 12.0) == "number"
-    assert infer_field_type("additional_fields[0].value", "Applied") == "free_text"
+    assert infer_field_type("additional_fields[0].value", 12.0, common_model=True) == "number"
+    assert infer_field_type("additional_fields[0].value", "Applied", common_model=True) == "free_text"
 
 
 def test_labels_split_into_seen_and_unseen_by_what_the_page_prints():

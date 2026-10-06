@@ -307,7 +307,9 @@ def score_subset(
     scored: Sequence[tuple[dict[str, Any], dict[str, Any], dict[str, Any]]],
 ) -> SubsetReport:
     """Score one doc type × subset from ``(expected, got, metadata)`` triples."""
+    from common.lob import merge_line
     from evaluation.metrics.auto_accept import AutoAcceptTally, score_auto_accept
+    from evaluation.metrics.common_model import CommonModelTally, core_for_scoring, without_overflow
     from evaluation.metrics.confusable import aggregate_misattribution, score_misattribution
     from evaluation.metrics.coverage_metrics import (
         expected_calibration_error,
@@ -320,8 +322,6 @@ def score_subset(
         score_hallucinations,
         score_page_selection,
     )
-    from common.canonical import without_bare_values
-    from evaluation.metrics.common_model import CommonModelTally, core_for_scoring, without_overflow
     from evaluation.metrics.field_accuracy import score_all_list_fields, score_fields
     from training.vit_gate import classify_error
 
@@ -333,6 +333,11 @@ def score_subset(
     # overflow are scored apart, and no id is ever a value (build_report has
     # already put both sides through comparable_view).
     common_model = [_is_common_model_document(doc_type, m) for _e, _g, m in scored]
+    # Each common-model document's line, read once: classic auto is personal
+    # auto (common.lob.merge_line) - one row of the report, one alias table.
+    # Every other document keeps the line its metadata names, as before.
+    lines = [merge_line(m.get("lob")) if cm else m.get("lob")
+             for (_e, _g, m), cm in zip(scored, common_model, strict=True)]
     model_tally = CommonModelTally()
     # Field accuracy on printed labels training showed vs never showed, where the
     # eval metadata carries the training set's seen labels and the page text.
@@ -369,14 +374,14 @@ def score_subset(
     pooled: dict[Any, list[int]] = {}
     for index, (expected, got, metadata) in enumerate(scored):
         if common_model[index]:
-            model_tally.add(expected, got, metadata.get("lob"))
-            accuracy = score_fields(*core_for_scoring(expected, got, metadata.get("lob")),
+            model_tally.add(expected, got, lines[index])
+            accuracy = score_fields(*core_for_scoring(expected, got, lines[index]),
                                     skip_lists=False)
             if metadata.get("seen_labels") is not None and metadata.get("ocr_text"):
                 from evaluation.metrics.unseen_labels import common_model_aliases, label_split
 
                 split = label_split(accuracy.results, str(metadata["ocr_text"]),
-                                    common_model_aliases(str(metadata.get("lob"))),
+                                    common_model_aliases(_line_name(lines[index])),
                                     set(metadata["seen_labels"]))
                 for bucket, outcomes in split.items():
                     by_label[bucket].extend(outcomes)
@@ -387,9 +392,7 @@ def score_subset(
         tally[0] += sum(r.correct for r in accuracy.results)
         tally[1] += sum(r.exact for r in accuracy.results)
         tally[2] += accuracy.total
-        line = metadata.get("lob")
-        line = ", ".join(line) if isinstance(line, list) else (line or "unknown")
-        lob_tally = by_lob.setdefault(str(line), [0, 0])
+        lob_tally = by_lob.setdefault(_line_name(lines[index]), [0, 0])
         lob_tally[0] += sum(r.correct for r in accuracy.results)
         lob_tally[1] += accuracy.total
         for result in accuracy.results:
@@ -402,7 +405,7 @@ def score_subset(
             field_tally[0] += bool(result.correct)
             field_tally[1] += 1
 
-        auto_accept.add(score_auto_accept(expected, got))
+        auto_accept.add(score_auto_accept(expected, got, common_model=common_model[index]))
         misattributions.append(
             score_misattribution(
                 expected, got, doc_type, source_id=metadata.get("source_id", "")
@@ -455,7 +458,9 @@ def score_subset(
             unselectable.append(meta.get("source_id", ""))
         else:
             validatable.append((
-                meta.get("source_id", ""), got, doc_type, form,
+                # A common-model document as it was produced (build_report), not
+                # the scored copy, which no schema of the client's describes.
+                meta.get("source_id", ""), meta.get(_PRODUCED, got), doc_type, form,
                 meta.get("lob"), meta.get("sections"),
             ))
 
@@ -561,7 +566,7 @@ def score_subset(
         "table_f1": _table_f1(scored),
         # The weakest common-model line's field match: gated (a conditional
         # metric), so one line cannot hide behind the others' volume.
-        "worst_line_field_match": _worst_line(by_lob, scored, common_model),
+        "worst_line_field_match": _worst_line(by_lob, lines, common_model),
         **(model_tally.metrics() if any(common_model) else {}),
         "seen_label_field_match": (
             round(sum(by_label["seen"]) / len(by_label["seen"]), 4) if by_label["seen"] else None),
@@ -583,12 +588,34 @@ def _is_common_model_document(doc_type: str, metadata: dict[str, Any]) -> bool:
         return False
 
 
+#: Where :func:`build_report` keeps a common-model document as it was produced,
+#: on its own copy of the metadata: the document schema validity is asked of.
+_PRODUCED = "_produced_output"
+
+
 def _read_values(expected: Any, got: Any, common_model: bool) -> tuple[Any, Any]:
     """What was READ: a common-model document without its codes and links,
-    which no page prints, so neither can be a false null or a hallucination."""
+    which no page prints, so neither can be a false null or a hallucination.
+
+    Its rows are paired by identity first (``aligned_for_scoring``), as field
+    match pairs them: these metrics compare by path, and a coverage table in
+    another order put a liability row's limits against a collision row with
+    none. Paired on the whole documents, then stripped: the codes and links
+    that pair the rows are themselves bare values.
+    """
     from common.canonical import without_bare_values
 
-    return (without_bare_values(expected), without_bare_values(got)) if common_model else (expected, got)
+    if not common_model:
+        return expected, got
+    from evaluation.metrics.field_accuracy import aligned_for_scoring
+
+    expected, got = aligned_for_scoring(expected, got)
+    return without_bare_values(expected), without_bare_values(got)
+
+
+def _line_name(line: Any) -> str:
+    """A line as a report row names it: several lines joined, none "unknown"."""
+    return str(", ".join(line) if isinstance(line, list) else (line or "unknown"))
 
 
 #: A line's field match is gated only once it has this many values scored: below
@@ -596,13 +623,12 @@ def _read_values(expected: Any, got: Any, common_model: bool) -> tuple[Any, Any]
 WORST_LINE_MIN_VALUES = 200
 
 
-def _worst_line(by_lob: dict[str, list[int]], scored: Sequence[Any], common_model: list[bool]) -> float | None:
-    lines = {
-        ", ".join(m.get("lob")) if isinstance(m.get("lob"), list) else str(m.get("lob"))
-        for (_e, _g, m), cm in zip(scored, common_model, strict=True) if cm
-    }
+def _worst_line(by_lob: dict[str, list[int]], lines: Sequence[Any], common_model: list[bool]) -> float | None:
+    """The lowest field match among the common-model lines in ``by_lob``, each
+    named as ``by_lob`` names it (:func:`_line_name`)."""
+    names = {_line_name(line) for line, cm in zip(lines, common_model, strict=True) if cm}
     rates = [correct / total for line, (correct, total) in by_lob.items()
-             if line in lines and total >= WORST_LINE_MIN_VALUES]
+             if line in names and total >= WORST_LINE_MIN_VALUES]
     return round(min(rates), 4) if rates else None
 
 
@@ -647,6 +673,14 @@ def build_report(
 
     buckets: dict[tuple[str, str], list[Any]] = {}
     for expected, got, metadata in documents:
+        doc_type = metadata.get("doc_type", "unknown")
+        common_model = _is_common_model_document(doc_type, metadata)
+        if common_model:
+            # Validity is asked of what the model or serving produced. The scored
+            # copy below is narrowed to the model view and stripped of its ids, so
+            # against the client's schema even a perfect answer was invalid.
+            # Kept on a copy: the caller's metadata is not ours to change.
+            metadata = {**metadata, _PRODUCED: got}
         # Not scored: the system supplies them, the model is never asked
         # (common.canonical.SYSTEM_SUPPLIED_FIELDS). Stripped from both sides, so a
         # gold label or frozen eval set that still carries them counts nothing.
@@ -659,17 +693,18 @@ def build_report(
         # Both sides: a key outside the schema is not a field this report
         # measures. The constrained model cannot write one; an unconstrained
         # output that does fails schema_validity_rate, which is where it counts.
-        doc_type = metadata.get("doc_type", "unknown")
         selectors = (doc_type, metadata.get("acord_form"), metadata.get("lob"))
         expected = schema_label(expected, *selectors)
         got = schema_label(got, *selectors)
-        if _is_common_model_document(doc_type, metadata):
+        if common_model:
             # Ids are the writer's numbering, never right or wrong: links are
             # compared by what they name (common.structural_ids).
+            from common.lob import merge_line
             from common.structural_ids import comparable_view
 
-            expected = comparable_view(expected, metadata.get("lob"))
-            got = comparable_view(got, metadata.get("lob"))
+            line = merge_line(metadata.get("lob"))
+            expected = comparable_view(expected, line)
+            got = comparable_view(got, line)
         for subset in subset_of(metadata):
             buckets.setdefault((doc_type, subset), []).append((expected, got, metadata))
 
