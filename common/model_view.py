@@ -11,11 +11,14 @@ held to, something narrower:
 * no field the pipeline fills itself (the document's type, modality, page count
   and file name, whether the policy is a package, a form's page range, a
   coverage's id) and no full-text tier;
-* the rules the decoder cannot enforce (``if``/``then``, ``dependentRequired``)
-  rewritten as ``anyOf`` variants it can, and the keywords xgrammar refuses
-  (``minProperties``, ``uniqueItems``, ...) dropped;
+* ``dependentRequired`` (a percentage limit names the coverage it is a
+  percentage of) rewritten as ``anyOf`` variants the decoder can enforce; the
+  client's ``if``/``then`` rules (a flat deductible has an amount, a sublimit a
+  description) dropped, since a window can hold such a row without the printed
+  value they require; and the keywords xgrammar refuses (``minProperties``,
+  ``uniqueItems``, ...) dropped;
 * the line's coverage codes, each with its meaning, as the only values a code
-  field takes;
+  field of the line's own coverages takes;
 * descriptions written for the model where the client's are written for schema
   authors (``configs/model_view.yaml``).
 
@@ -45,21 +48,25 @@ PIPELINE_FILLED: dict[str, tuple[str, ...]] = {
     "Coverage": ("coverage_id",),
 }
 
-#: Fields that hold a coverage code, per definition. Each is held to the line's
-#: list (``CoverageCode``).
+#: Fields that hold one of the line's coverage codes, per definition. Each is
+#: held to the line's list (``CoverageCode``). An underlying policy's
+#: ``coverage_code`` is not one: it codes a coverage of the policy an umbrella
+#: sits over (an auto or home liability), another line's, which the umbrella's
+#: own list cannot name. It keeps the client's plain string.
 CODE_FIELDS: dict[str, tuple[str, ...]] = {
     "Coverage": ("coverage_code",),
     "Limit": ("basis_coverage_code",),
     "PremiumItem": ("coverage_code",),
-    "UnderlyingPolicy": ("coverage_code",),
 }
 CODE_LIST_FIELDS: dict[str, tuple[str, ...]] = {"Deductible": ("applies_to_coverages",)}
 
 COVERAGE_CODE_DEF = "CoverageCode"
 
 #: Keywords the decoder cannot use: xgrammar refuses the first four outright
-#: (vLLM's has_xgrammar_unsupported_json_features), and the rest are either
-#: rewritten as variants first or carry nothing the model acts on.
+#: (vLLM's has_xgrammar_unsupported_json_features), and of the rest
+#: ``dependentRequired`` is rewritten as variants first (:func:`_as_variants`),
+#: the client's ``if``/``then`` rules are dropped as rules a window cannot always
+#: satisfy, and the others carry nothing the model acts on.
 _DROPPED_KEYWORDS = frozenset({
     "minProperties", "maxProperties", "uniqueItems", "propertyNames", "patternProperties",
     "format", "default", "allOf", "if", "then", "else", "dependentRequired",
@@ -98,7 +105,7 @@ def model_view(bundle: dict[str, Any]) -> dict[str, Any]:
     if lob:
         _apply_id_patterns(schema, defs, lob)
     for name, defn in list(defs.items()):
-        variants = _as_variants(defn, defs)
+        variants = _as_variants(defn)
         if variants is not None:
             defs[name] = variants
     if isinstance(schema.get("required"), list):
@@ -230,18 +237,24 @@ def _apply_id_patterns(schema: dict[str, Any], defs: dict[str, Any], lob: str) -
             field["pattern"] = f"^{spec['prefix']}_[0-9]+$"
 
 
-def _as_variants(defn: Any, defs: dict[str, Any]) -> dict[str, Any] | None:
-    """A definition whose rules the decoder cannot enforce, as ``anyOf`` variants.
+def _as_variants(defn: Any) -> dict[str, Any] | None:
+    """A definition with a ``dependentRequired`` rule, as ``anyOf`` variants.
 
-    Two shapes occur in the common model, and both are rewritten:
+    One occurs in the common model (Limit: a percentage names the coverage it is
+    a percentage of). Each dependency splits every variant in two: the property
+    present with its dependants required, or absent altogether. A window can
+    always satisfy it, because the dependant is a bare code that rides with its
+    row into every window that shows any of it.
 
-    * ``if <field> == V then require R`` (Limit: a sublimit names what it limits;
-      Deductible: a flat one has an amount, a percentage one a percentage) - one
-      variant per value named, with that value as a ``const`` and R required, and
-      one for every other value;
-    * ``dependentRequired`` (Limit: a percentage names the coverage it is a
-      percentage of) - each variant split in two, the property present with its
-      dependants required, or absent altogether.
+    The client's ``if``/``then`` rules are not rewritten (Limit: a sublimit
+    names what it limits; Deductible: a flat one has an amount, a percentage
+    one a percentage). Each requires a printed value, and a window can hold the
+    row without it - the amount printed on another page, or not stated at all -
+    so a variant requiring it would be a grammar that window's target cannot
+    fit. The field they switch on keeps its plain list of values, and the rules
+    are dropped with the other keywords the decoder cannot use, like the other
+    client rules a window cannot satisfy. Validation still judges an answer
+    against the client's own schema.
 
     Every object is closed (``additionalProperties: false``), so a property left
     out of a variant cannot be written in it. Descriptions are kept on the first
@@ -249,62 +262,32 @@ def _as_variants(defn: Any, defs: dict[str, Any]) -> dict[str, Any] | None:
     """
     if not isinstance(defn, dict) or "properties" not in defn:
         return None
-    rules = [r for r in defn.get("allOf") or [] if isinstance(r, dict) and "if" in r]
     dependents: dict[str, list[str]] = dict(defn.get("dependentRequired") or {})
-    if not rules and not dependents:
+    if not dependents:
         return None
 
     properties: dict[str, Any] = defn["properties"]
-    branches: list[tuple[dict[str, Any], list[str]]] = [({}, [])]
-    if rules:
-        cases = []
-        for rule in rules:
-            condition = (rule["if"].get("properties") or {})
-            if len(condition) != 1:
-                raise ModelViewError(f"cannot rewrite a rule on {sorted(condition)} as variants")
-            ((field, spec),) = condition.items()
-            if "const" not in spec:
-                raise ModelViewError(f"cannot rewrite a rule on {field} that is not a const")
-            cases.append((field, spec["const"], list((rule.get("then") or {}).get("required") or [])))
-        fields = {field for field, _, _ in cases}
-        if len(fields) != 1:
-            raise ModelViewError(f"rules switch on several fields {sorted(fields)}")
-        (field,) = fields
-        values = _enum_values(properties[field], defs)
-        description = _described(_resolved(properties[field], defs))
-        branches = [({field: {"const": value, **description}}, extra) for _, value, extra in cases]
-        rest = [v for v in values if v not in {value for _, value, _ in cases}]
-        if rest:
-            branches.append(({field: {"enum": rest, **description}}, []))
+    # Per variant: the properties it leaves out, and the ones it requires.
+    branches: list[tuple[frozenset[str], list[str]]] = [(frozenset(), [])]
     for prop, needs in dependents.items():
-        split: list[tuple[dict[str, Any], list[str]]] = []
-        for override, extra in branches:
-            split.append((dict(override), [*extra, prop, *needs]))
-            split.append(({**override, prop: None}, list(extra)))
+        split: list[tuple[frozenset[str], list[str]]] = []
+        for absent, extra in branches:
+            split.append((absent, [*extra, prop, *needs]))
+            split.append((absent | {prop}, list(extra)))
         branches = split
 
     base_required = list(defn.get("required") or [])
     variants = []
-    for index, (override, extra) in enumerate(branches):
-        shown: dict[str, Any] = {}
-        for name, sub in properties.items():
-            if name in override:
-                if override[name] is None:
-                    continue
-                sub = override[name]
-            shown[name] = sub if index == 0 else {k: v for k, v in sub.items() if k != "description"}
+    for index, (absent, extra) in enumerate(branches):
+        shown = {
+            name: sub if index == 0 else {k: v for k, v in sub.items() if k != "description"}
+            for name, sub in properties.items() if name not in absent
+        }
         required = list(dict.fromkeys(r for r in [*base_required, *extra] if r in shown))
         variants.append({"type": "object", "additionalProperties": False,
                          "properties": shown, "required": required})
     kept = {k: v for k, v in defn.items() if k in ("description",)}
     return {**kept, "anyOf": variants}
-
-
-def _enum_values(node: Any, defs: dict[str, Any]) -> list[Any]:
-    values = _resolved(node, defs).get("enum")
-    if not isinstance(values, list):
-        raise ModelViewError("a rule's field must take a fixed list of values")
-    return values
 
 
 def _resolved(node: Any, defs: dict[str, Any]) -> dict[str, Any]:

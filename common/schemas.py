@@ -528,31 +528,44 @@ def _schema_for_key(key: str) -> dict[str, Any]:
     # its own sections reach, or each window's prompt would describe the whole
     # common model. The self-contained files keep their $defs whole, as before.
     lob = key.split(":", 1)[1].split(SLICE_SEPARATOR)[0]
-    return _prune_definitions(_without_cross_group_references(sliced, lob))
+    return _prune_definitions(_without_cross_group_references(sliced, lob, name))
 
 
-def _without_cross_group_references(sliced: dict[str, Any], lob: str) -> dict[str, Any]:
-    """A slice without the reference fields whose tables another group reads.
+def cross_group_references(lob: str | list[str] | None, group: str) -> frozenset[str]:
+    """The reference fields a common-model line's ``group`` leaves out: those
+    whose tables are all read by another group.
 
     A window could only guess at the id of a row it was not asked for: a
     premium item's vehicle in the declarations window, a form's unit in the
-    forms window. The field is left out of that window's schema, so the model is
-    neither shown it nor able to write it, and the target builder leaves it out
-    the same way (the reference dangles in that window).
+    forms window. The field is left out of that window's schema slice, so the
+    model is neither shown it nor able to write it, and out of the window's
+    training target (``policy_windows.window_target``), where each value left
+    out counts as a dangling reference. One set for both: a field the slice
+    drops and the target keeps is a target the slice cannot hold.
+
+    Empty for a self-contained line, which has no references.
     """
+    from common.schema_sections import references, sections_for
+
+    present = set(sections_for(group, lob))
+    return frozenset(
+        field for field, tables in references(lob).items() if not present & set(tables)
+    )
+
+
+def _without_cross_group_references(
+    sliced: dict[str, Any], lob: str, group: str
+) -> dict[str, Any]:
+    """A slice without the reference fields whose tables another group reads
+    (:func:`cross_group_references`), wherever a definition declares one."""
     import copy
 
-    from common.schema_sections import references
-
-    present = set(sliced.get("properties") or {})
-    dropped = {
-        field for field, tables in references(lob).items() if not present & set(tables)
-    }
+    dropped = cross_group_references(lob, group)
     if not dropped:
         return sliced
     definitions = copy.deepcopy(sliced.get("$defs") or {})
     for definition in definitions.values():
-        _drop_properties(definition, dropped)
+        _drop_properties(definition, set(dropped))
     return {**sliced, "$defs": definitions}
 
 

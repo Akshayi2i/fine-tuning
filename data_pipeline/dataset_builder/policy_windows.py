@@ -34,19 +34,26 @@ its own pages, as a field value is.
 
 **A common-model line** (SPEC_21 overlays) links rows by id. Its ids, codes and
 types are bare values no page prints, so they travel only with a row that keeps
-a printed value on the window's pages; the target is narrowed to the window's
-own slice (a reference to a table another group reads is not in it); and its
-ids are renumbered from 1 in the window (common.structural_ids), so a window is
-taught the ids it can see and never a reference to a row it is not shown.
+a printed value on the window's pages, and only a printed value identifies a
+row for the orphan rule; the target is narrowed to the window's own slice (a
+reference to a table another group reads is not in it); and its ids are
+renumbered from 1 in the window (common.structural_ids), so a window is taught
+the ids it can see and never a reference to a row it is not shown. Its label
+holds one part, of the line itself. Every finished target is checked against
+the window's slice of the model view, the grammar its decoder is held to: a
+target that grammar cannot write is refused, never taught.
 """
 
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
+from functools import cache
 from typing import Any
 
-from common.canonical import in_schema_order, is_field_value, to_model_target
+from jsonschema import Draft202012Validator
+
+from common.canonical import CanonicalLabelError, in_schema_order, is_field_value, to_model_target
 from common.constants import DEFAULT_LONG_DOC_PAGE_THRESHOLD
 
 #: Never in an assistant target: attached at inference by the section builder
@@ -94,8 +101,9 @@ class TargetReport:
     #: text prints them (:func:`with_inferred_pages`).
     inferred: list[str] = field(default_factory=list)
     #: References a window target left out because they name a row that window
-    #: does not hold (common-model lines). Expected across windows; counted so a
-    #: line whose links mostly cross windows shows up at corpus build.
+    #: does not hold, or a table its slice leaves to another group (common-model
+    #: lines), as ``group:path=id``. Expected across windows; counted so a line
+    #: whose links mostly cross windows shows up at corpus build.
     dangling: list[str] = field(default_factory=list)
 
 
@@ -240,10 +248,20 @@ def window_target(
     plan: PolicyWindowPlan,
     report: TargetReport | None = None,
 ) -> dict[str, Any]:
-    """The model-form target for one window: its sections, on its pages."""
+    """The model-form target for one window: its sections, on its pages.
+
+    On a common-model line, raises :class:`CanonicalLabelError` for a label
+    with more than one part or a part of another line (:func:`_with_own_part`),
+    and for a target the window's decoder could not write (:func:`_check_writable`).
+    """
     from common.canonical import schema_label, within_schema
     from common.schema_sections import sections_for
-    from common.schemas import is_common_model, required_fields, resolved_schema
+    from common.schemas import (
+        cross_group_references,
+        is_common_model,
+        required_fields,
+        resolved_schema,
+    )
     from common.structural_ids import renumber_structural_ids
 
     common_model = is_common_model("policy", None, lob)
@@ -252,7 +270,7 @@ def window_target(
     # be taught (common.canonical.within_schema).
     label = schema_label(label, "policy", None, lob)
     if common_model:
-        label = _without_single_part(label)
+        label = _without_single_part(_with_own_part(label, lob))
     pages = set(plan.pages)
     sliced = {
         name: (_additional_within if name == ADDITIONAL_FIELDS else _within)(
@@ -263,15 +281,23 @@ def window_target(
     sliced = {k: v for k, v in sliced.items() if v not in (None, {}, [])}
     view = resolved_schema("policy", None, lob, plan.group)
     if common_model:
+        # A reference to a table another group reads is not in this window's
+        # slice (common.schemas.cross_group_references), so it is left out of
+        # the target before the target is written against the slice - which
+        # has no place for it - and dangles in this window.
+        left_out: list[str] = []
+        sliced = _without_fields(sliced, cross_group_references(lob, plan.group), "", left_out)
         target = to_model_target(
             sliced, required=required_fields("policy", None, lob, plan.group), schema=view)
-        # Narrowed to this window's slice: a reference to a table another group
-        # reads is not in it (common.schemas._without_cross_group_references).
+        # Narrowed to this window's slice: a key it does not declare is not
+        # taught (common.canonical.within_schema).
         target, _ = within_schema(target, view)
         target, ids = renumber_structural_ids(target, lob)
         if report is not None:
-            report.dangling.extend(f"{plan.group}:{ref}" for ref in ids.dangling)
-        return in_schema_order(target, view)
+            report.dangling.extend(f"{plan.group}:{ref}" for ref in [*left_out, *ids.dangling])
+        target = in_schema_order(target, view)
+        _check_writable(target, lob, plan)
+        return target
     # Entries in SPEC_21's own shape (label, value, section_hint, page_ref), not
     # FieldValue envelopes: kept as they are rather than slimmed as envelopes.
     additional = sliced.pop(ADDITIONAL_FIELDS, None)
@@ -302,6 +328,98 @@ def _without_single_part(label: dict[str, Any]) -> dict[str, Any]:
         return node
 
     return strip(label)
+
+
+def _with_own_part(label: dict[str, Any], lob: str | list[str] | None) -> dict[str, Any]:
+    """A common-model label whose one part is written as the line itself, or refused.
+
+    A common-model line's schema holds one part, of that line: the model view
+    holds ``lob_parts[].lob`` to it. A package policy lists each of its lines
+    in its lob and is read against the fallback schema
+    (common.schemas.schema_key), so a label filed under one common-model line
+    with two parts, or with a part of another line, is a mislabel - and its
+    declarations target would fail the part's line anyway. A part whose line
+    is read as this one (classic_auto, common.lob.merge_line) is written as
+    this line, which is what the schema accepts. A copy when the part is
+    rewritten; ``label`` itself otherwise.
+    """
+    from common.lob import merge_line
+    from common.schemas import schema_key
+
+    parts = label.get("lob_parts")
+    if not isinstance(parts, list) or not parts:
+        return label
+    line = schema_key("policy", None, lob).split(":", 1)[1]
+    named = [part.get("lob") if isinstance(part, dict) else None for part in parts]
+    foreign = [name for name in named
+               if name is not None and merge_line(str(name).strip().lower()) != line]
+    if len(parts) > 1 or foreign:
+        raise CanonicalLabelError(
+            f"lob_parts lists {len(parts)} part(s) ({', '.join(map(str, named))}), but a {line} "
+            f"label holds one part, of {line} itself. A package policy lists every line in its "
+            "lob and is read against the fallback schema, so a two-part or foreign-line label "
+            "filed under one common-model line is a mislabel: its declarations target would "
+            f"fail the part's line, which this line's schema holds to {line!r}."
+        )
+    if named[0] is None or named[0] == line:
+        return label
+    return {**label, "lob_parts": [{**parts[0], "lob": line}]}
+
+
+def _without_fields(node: Any, names: frozenset[str], path: str, left_out: list[str]) -> Any:
+    """``node`` without the fields ``names``, at any depth, as a copy: every
+    window reads the same label. Each id a removed field held is added to
+    ``left_out`` as ``path=id``, as renumbering records a dangling reference
+    (common.structural_ids)."""
+    if not names:
+        return node
+    if isinstance(node, dict):
+        kept = {}
+        for key, value in node.items():
+            where = f"{path}.{key}" if path else key
+            if key in names:
+                left_out.extend(f"{where}={item}" for item in (value if isinstance(value, list) else [value])
+                                if _is_structural(item))
+            else:
+                kept[key] = _without_fields(value, names, where, left_out)
+        return kept
+    if isinstance(node, list):
+        return [_without_fields(item, names, f"{path}[{index}]", left_out) for index, item in enumerate(node)]
+    return node
+
+
+def _check_writable(target: dict[str, Any], lob: str | list[str] | None, plan: PolicyWindowPlan) -> None:
+    """Refuse a common-model target the window's decoder could not write.
+
+    Structured decoding holds a window to its slice of the model view. A target
+    outside it teaches output the grammar never lets the model produce, and at
+    serving the grammar forces something else in its place - a type changed, a
+    value invented. So it is raised, never taught around: the label, or the
+    view, is wrong. The first failing path is named.
+    """
+    from common.schemas import schema_key
+
+    line = schema_key("policy", None, lob).split(":", 1)[1]
+    errors = list(_view_validator(line, plan.group).iter_errors(target))
+    if not errors:
+        return
+    first = min(errors, key=lambda e: [(isinstance(p, str), p) for p in e.absolute_path])
+    where = "".join(f"[{p}]" if isinstance(p, int) else f".{p}" for p in first.absolute_path)
+    raise CanonicalLabelError(
+        f"{plan.group} window {list(plan.pages)}: {where.lstrip('.') or '<root>'} is not what the "
+        f"window's decoder can write ({first.message[:200]}); a target outside the model view is "
+        "never taught"
+    )
+
+
+@cache
+def _view_validator(line: str, group: str) -> Draft202012Validator:
+    """A common-model line's slice of the model view, as a validator: the schema
+    a window of ``group`` is decoded against (common.schemas.resolved_schema).
+    Cached: every window of every document of the line asks for it."""
+    from common.schemas import resolved_schema
+
+    return Draft202012Validator(resolved_schema("policy", None, line, group))
 
 
 def _is_structural(value: Any) -> bool:
@@ -355,9 +473,13 @@ def _within(
             # vehicle whose VIN is on page 6 and whose coverages table is on
             # page 7 is real content of the page-7 window. Dropping it taught
             # those coverages in no window at all. The serving merge joins such
-            # a fragment to its row when only one row can own it.
-            if (keys and _identified(item, keys) and not _identified(row, keys)
-                    and not _holds_rows(row)):
+            # a fragment to its row when only one row can own it. On a
+            # common-model line only a table identified here spares it: a
+            # coverage's limits carry no printed identifier of their own, so a
+            # limit amount alone would keep a nameless coverage in the window.
+            spared = (_holds_identified_rows(item, row, f"{path}[{i}]", lob) if common_model
+                      else _holds_rows(row))
+            if keys and _identified(item, keys) and not _identified(row, keys) and not spared:
                 if report is not None:
                     report.orphaned.append(f"{plan.group}:{path}[{i}]")
                 continue
@@ -440,25 +562,55 @@ def _row_identifiers(
     matches them on, plus a top-level section's declared key
     (``array_keys`` in configs/schema_sections.yaml), whose fields the merge
     joins on - a location's address on the page after its number is a half the
-    merge can place."""
+    merge can place.
+
+    On a common-model line only a printed value identifies a row
+    (:func:`_printed_identifiers`)."""
     from common.canonical import values_view
     from common.schema_sections import array_key
     from evaluation.metrics.field_accuracy import ROW_IDENTIFIERS, _infer_key_fields
 
     if not rows or not all(isinstance(r, dict) for r in rows):
         return []
+    declared = list(array_key(path, lob)) if "." not in path and "[" not in path else []
+    if common_model:
+        return _printed_identifiers(rows, declared)
     keys = _infer_key_fields(values_view(rows))
     # Only a named identifier, never the all-fields fallback: every field
     # being "the key" would make every partial row an orphan.
     named = [k for k in keys if k in ROW_IDENTIFIERS or k == "building_number"]
-    declared = list(array_key(path, lob)) if "." not in path and "[" not in path else []
-    found = [*named, *(k for k in declared if k not in named)]
-    if common_model:
-        # Only a value the page prints identifies a row here. A coverage code or
-        # an id rides with every fragment of its row, so counted as an
-        # identifier it would keep every fragment alive in every window.
-        found = [k for k in found if any(is_field_value(r.get(k)) for r in rows)]
-    return found
+    return [*named, *(k for k in declared if k not in named)]
+
+
+def _printed_identifiers(rows: list[dict[str, Any]], declared: list[str]) -> list[str]:
+    """A common-model table's identifiers, chosen among the values its pages print.
+
+    A coverage code or an id rides with every fragment of its row, so counted as
+    an identifier it would keep every fragment alive in every window; and picked
+    first, as scoring picks it (a coverage's code comes before its name), it
+    would hide the printed identifier behind it and leave the table with none.
+    So the walk is over :data:`ROW_IDENTIFIERS`, then the declared key, keeping
+    only fields that hold a value envelope: the first stated in at least half
+    the rows wins, with a companion only if that is printed too (for coverages,
+    ``coverage_name``). A declared key field printed in any row is added, as on
+    a self-contained line.
+    """
+    from evaluation.metrics.field_accuracy import _COMPANIONS, ROW_IDENTIFIERS
+
+    def stated(row: dict[str, Any], key: str) -> bool:
+        value = row.get(key)
+        return is_field_value(value) and (value.get("raw") is not None or value.get("parsed") is not None)
+
+    def printed(key: str) -> bool:
+        return sum(1 for row in rows if stated(row, key)) >= len(rows) / 2
+
+    named: list[str] = []
+    for key in dict.fromkeys((*ROW_IDENTIFIERS, *declared)):
+        if printed(key):
+            named = [key, *(c for c in _COMPANIONS.get(key, ()) if printed(c))]
+            break
+    return [*named, *(k for k in declared
+                      if k not in named and any(is_field_value(r.get(k)) for r in rows))]
 
 
 def _holds_rows(row: Any) -> bool:
@@ -469,6 +621,22 @@ def _holds_rows(row: Any) -> bool:
         isinstance(value, list) and value and all(isinstance(r, dict) and not is_field_value(r) for r in value)
         for value in row.values()
     )
+
+
+def _holds_identified_rows(item: dict[str, Any], row: dict[str, Any], path: str,
+                           lob: str | list[str] | None) -> bool:
+    """Whether a common-model fragment still carries a table of its own whose
+    rows are identified on these pages - read against the label's whole table
+    (``item``), as the fragment's own rows are. A nested table with no printed
+    identifier (a coverage's limits: their types are bare) spares nothing."""
+    for key, value in row.items():
+        if not (isinstance(value, list) and value
+                and all(isinstance(r, dict) and not is_field_value(r) for r in value)):
+            continue
+        keys = _row_identifiers(item.get(key) or [], f"{path}.{key}", lob=lob, common_model=True)
+        if keys and any(_identified(r, keys) for r in value):
+            return True
+    return False
 
 
 def _identified(row: Any, keys: list[str]) -> bool:

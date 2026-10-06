@@ -96,11 +96,15 @@ def _v(raw, parsed=None):
     return {"raw": raw, "parsed": raw if parsed is None else parsed, "page_ref": [1]}
 
 
-def test_a_sublimit_names_what_it_limits():
+def test_a_sublimit_need_not_name_what_it_limits_in_a_window():
+    """The client's rule (a sublimit has a description) is not the decoder's: a
+    window can hold the sublimit without its description - printed on another
+    page, or not stated - and a grammar requiring it would force one in."""
     bare = {"limit_type": "sublimit", "amount": _v("$1,500", 1500)}
-    assert not _validates("homeowners", "Limit", bare)
+    assert _validates("homeowners", "Limit", bare)
     assert _validates("homeowners", "Limit", {**bare, "description": _v("Theft of jewelry")})
     assert _validates("homeowners", "Limit", {"limit_type": "per_occurrence", "amount": _v("$1", 1)})
+    assert not _validates("homeowners", "Limit", {**bare, "limit_type": "not_a_type"})
 
 
 def test_a_percentage_limit_names_the_coverage_it_is_a_percentage_of():
@@ -110,13 +114,16 @@ def test_a_percentage_limit_names_the_coverage_it_is_a_percentage_of():
     assert not _validates("homeowners", "Limit", {**row, "basis_coverage_code": "NOT_A_CODE"})
 
 
-def test_a_flat_deductible_has_an_amount_and_a_percentage_one_a_percentage():
-    assert not _validates("homeowners", "Deductible", {"deductible_type": "flat"})
+def test_a_deductible_holds_whatever_its_window_shows_of_it():
+    """Likewise a flat deductible's amount and a percentage one's percentage:
+    either can be on another page than the row's type. The type keeps its list
+    of values, and an unknown field is still refused."""
+    assert _validates("homeowners", "Deductible", {"deductible_type": "flat"})
     assert _validates("homeowners", "Deductible", {"deductible_type": "flat", "amount": _v("$1,000", 1000)})
-    assert not _validates("homeowners", "Deductible", {"deductible_type": "percentage",
-                                                        "amount": _v("$1,000", 1000)})
     assert _validates("homeowners", "Deductible", {"deductible_type": "percentage", "percentage": _v("2%", 2)})
     assert _validates("homeowners", "Deductible", {"deductible_type": "sir"})
+    assert not _validates("homeowners", "Deductible", {"deductible_type": "not_a_type"})
+    assert not _validates("homeowners", "Deductible", {"deductible_type": "flat", "note": _v("x")})
 
 
 def _model_form(gold):
