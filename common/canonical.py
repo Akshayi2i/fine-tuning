@@ -118,13 +118,25 @@ def without_system_fields(document: Any) -> Any:
 
 def with_system_fields(
     output: dict[str, Any], *, page_count: int | None, source_file_name: str | None = None,
+    lob: str | list[str] | None = None, modality: str | None = None,
 ) -> dict[str, Any]:
     """Fill :data:`SYSTEM_SUPPLIED_FIELDS` into a canonical (enveloped) output.
 
     From the request, at full confidence with source ``deterministic`` - what the
     schema's confidence source means for a value no model produced. A value the
     request does not know is left out, as the schema allows.
+
+    A common-model line (``lob``) declares these as plain values, not envelopes,
+    and gets the rest of what the pipeline supplies with them: the document's
+    type and modality, a part when the model read none, whether the policy is a
+    package, and the lists the schema requires.
     """
+    from common.schemas import is_common_model
+
+    if lob is not None and is_common_model("policy", None, lob):
+        return _with_common_model_system_fields(
+            output, page_count=page_count, source_file_name=source_file_name, lob=lob,
+            modality=modality)
     known = {"source_file_name": source_file_name, "page_count": page_count}
     filled = dict(output)
     for section, name in SYSTEM_SUPPLIED_FIELDS:
@@ -139,6 +151,63 @@ def with_system_fields(
         }
         filled[section] = part
     return filled
+
+
+#: The modalities a common-model document records (SPEC_01 step 0), as the OCR
+#: stage names them (data_pipeline.ocr.modality).
+DOCUMENT_MODALITIES = ("native_pdf", "scanned_pdf")
+
+
+def _with_common_model_system_fields(
+    output: dict[str, Any], *, page_count: int | None, source_file_name: str | None,
+    lob: str | list[str], modality: str | None,
+) -> dict[str, Any]:
+    from common.schemas import load_schema, schema_key
+
+    filled = dict(output)
+    document = dict(filled.get("document") or {})
+    document["doc_type"] = "policy_check"
+    if modality in DOCUMENT_MODALITIES:
+        document["modality"] = modality
+    if page_count:
+        document["page_count"] = int(page_count)
+    if source_file_name:
+        document["source_file_name"] = source_file_name
+    filled["document"] = document
+    if not filled.get("lob_parts"):
+        # A single-line policy has one part, and the model is never asked for it
+        # outside the declarations window. The schema requires at least one.
+        line = schema_key("policy", None, lob).split(":", 1)[1]
+        filled["lob_parts"] = [{"part_id": "part_1", "lob": line}]
+    filled["policy"] = {**(filled.get("policy") or {}), "is_package": len(filled["lob_parts"]) > 1}
+    for name in load_schema("policy", None, lob).get("required") or []:
+        if name not in filled:
+            filled[name] = [] if name in ("lob_parts", "coverages") else {}
+    return filled
+
+
+def without_bare_values(node: Any) -> Any:
+    """``node`` with only its envelopes: no common-model id, reference, code or type.
+
+    Calibration scores what a model READ, from the tokens it read it with. A bare
+    value is the model's bookkeeping - which vehicle a coverage applies to, its
+    code - with no printed span to measure, and scored it would be flagged on
+    every field of every document for having no confidence.
+    """
+    if is_field_value(node):
+        return node
+    if isinstance(node, dict):
+        return {k: without_bare_values(v) for k, v in node.items() if _holds_readings(v)}
+    if isinstance(node, list):
+        return [without_bare_values(v) for v in node if isinstance(v, (dict, list))]
+    return node
+
+
+def _holds_readings(value: Any) -> bool:
+    """An object, or a list with an object in it: not a bare value, nor a list of them."""
+    if isinstance(value, dict):
+        return True
+    return isinstance(value, list) and any(isinstance(v, (dict, list)) for v in value)
 
 
 def to_model_target(
@@ -548,7 +617,9 @@ def _envelope(node: Any, path: str, confidence: Mapping[str, tuple[float, bool]]
             "raw": node.get("raw"),
             "parsed": node.get("parsed"),
             "confidence": {"score": round(float(score), 4), "source": CONFIDENCE_SOURCE},
-            "page_ref": [int(p) for p in (node.get("page_ref") or [])],
+            # Once each, in order: the client's schema holds page_ref to unique
+            # items, and a value a merge joined across windows can cite one twice.
+            "page_ref": sorted({int(p) for p in (node.get("page_ref") or [])}),
             "flagged": bool(flagged),
         }
     if isinstance(node, dict):

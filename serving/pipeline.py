@@ -44,10 +44,12 @@ from common.canonical import (
     values_view,
     with_output_dates,
     with_system_fields,
+    without_bare_values,
 )
 from common.constants import DEFAULT_LONG_DOC_PAGE_THRESHOLD, DEFAULT_REVIEW_CONFIDENCE_THRESHOLD
 from common.schemas import (
     is_canonical,
+    is_common_model,
     is_valid,
     iter_validation_errors,
     resolved_schema,
@@ -457,7 +459,7 @@ def _extract_policy_windows(
             f"{', '.join(failed[:6])}). The first failure: {first_cause}"
         )
 
-    merged = merge_policy_windows(windows)
+    merged = merge_policy_windows(windows, lob=lob)
     flags = merged.review_flags + [f"{WINDOW_FAILED_FLAG}:{entry}" for entry in failed]
     log.info(
         "%s read in %d window(s) over %d routed page(s) in %d round(s); %d duplicate row(s) "
@@ -791,6 +793,8 @@ def extract(
     # so a policy's output is canonical JSON either way.
     lob = None if lob_fallback_used else request.known_lob
     canonical = is_canonical(route_.schema_doc_type, route_.schema_acord_form, lob)
+    common_model = canonical and route_.schema_doc_type == "policy" and is_common_model(
+        route_.schema_doc_type, route_.schema_acord_form, lob)
 
     # --- page routing, for long documents only -----------------------------
     routes_pages = route_.doc_type in long_doc_types
@@ -890,8 +894,10 @@ def extract(
     if calibrators is not None:
         calibrated: CalibratedResult = _feature_calibrated(
             # The model form, envelopes and all: flattened it gives the same
-            # values, and it still carries each value's printed form.
-            extraction=extraction, spans=all_spans,
+            # values, and it still carries each value's printed form. A
+            # common-model line's ids and codes are no reading, and not scored.
+            extraction=without_bare_values(extraction) if common_model else extraction,
+            spans=all_spans,
             calibrators=calibrators, thresholds=thresholds,
             # The same definition validation fits the calibrators with: the OCR
             # text of the pages the model was shown, none for image_only.
@@ -952,6 +958,7 @@ def extract(
             envelope(extraction, scores),
             page_count=len(request.image_paths) or len(request.page_texts) or None,
             source_file_name=request.source_file_name,
+            lob=lob, modality=(request.ocr_meta or {}).get("modality"),
         )
     else:
         output = extraction
@@ -981,9 +988,12 @@ def extract(
         # (an answer missing a required section must still fail), and after
         # confidence, so the nulls carry none of it.
         from common.canonical import with_all_keys
-        from common.schemas import load_schema
+        from common.schemas import _strip_prefixed, load_schema
 
-        output = with_all_keys(output, load_schema(route_.schema_doc_type, route_.schema_acord_form, lob))
+        # Without the client's annotation properties (fideon:provenance): they
+        # are not the answer's keys, and filled they would be keys of nulls.
+        output = with_all_keys(output, _strip_prefixed(
+            load_schema(route_.schema_doc_type, route_.schema_acord_form, lob), ("fideon:",)))
 
     result = ExtractionResult(
         source_id=request.source_id,

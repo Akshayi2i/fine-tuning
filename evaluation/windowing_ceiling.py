@@ -38,6 +38,12 @@ class DocumentResult:
     merged_rows: int = 0
     conflicts: int = 0
     lost_values: list[tuple[str, str, str]] = field(default_factory=list)
+    #: Common-model lines: links (a coverage to its vehicle) in the gold label,
+    #: those the merged answer still makes, and references no window or merge
+    #: could resolve.
+    gold_references: int = 0
+    recovered_references: int = 0
+    dangling: int = 0
 
     @property
     def recall(self) -> float | None:
@@ -70,14 +76,29 @@ def oracle(source_id: str, label: dict, lob: Any, page_count: int,
                                  sections=multi_window_sections(lob, plans))
     windows = [PolicyWindow(group=p.group, pages=list(p.pages),
                             extraction=window_target(placed, lob, p, report)) for p in plans]
-    merged = merge_policy_windows(windows)
+    merged = merge_policy_windows(windows, lob=lob)
     result.windows, result.conflicts = len(plans), len(merged.conflicts)
 
     mapped = map_label(label, lob)
     scored = without_system_fields(schema_label(label, "policy", None, lob))
     result.outside_schema = _stated(without_system_fields(mapped)) - _stated(scored)
+    answer = without_system_fields(merged.extraction)
+    from common.schemas import is_common_model
+
+    if is_common_model("policy", None, lob):
+        # Ids are numbered by whoever writes them, so values are compared with
+        # ids left out, and links - what a reference names - counted apart.
+        from common.schema_sections import references
+        from common.structural_ids import comparable_view, reference_pairs
+
+        expected_links, found_links = Counter(reference_pairs(scored, lob)), Counter(reference_pairs(answer, lob))
+        result.gold_references = sum(expected_links.values())
+        result.recovered_references = sum((expected_links & found_links).values())
+        result.dangling = len(set(report.dangling)) + len(merged.dangling_references)
+        links = set(references(lob))
+        scored, answer = (_without(comparable_view(doc, lob), links) for doc in (scored, answer))
     gold = values_view(scored)
-    got = values_view(without_system_fields(merged.extraction))
+    got = values_view(answer)
     reasons = {
         "no_page_ref": {_bare(p.split(":", 1)[1]) for p in report.unplaced},
         "unread_page": {_bare(p) for p in unread_values(map_label(placed, lob), lob, plans)},
@@ -142,6 +163,14 @@ def _stated(node: Any) -> int:
     return 0
 
 
+def _without(node: Any, names: set[str]) -> Any:
+    if isinstance(node, dict):
+        return {k: _without(v, names) for k, v in node.items() if k not in names}
+    if isinstance(node, list):
+        return [_without(v, names) for v in node]
+    return node
+
+
 def _bare(path: str) -> str:
     return re.sub(r"\[\d+\]", "[]", path)
 
@@ -151,9 +180,14 @@ def ceiling(results: list[DocumentResult]) -> dict[str, Any]:
     gold = sum(d.gold_values for d in results)
     recovered = sum(d.recovered for d in results)
     lost = sum((d.lost for d in results), Counter())
-    return {
+    out = {
         "documents": len(results),
         "value_recall": round(recovered / gold, 4) if gold else None,
         "lost": {reason: lost[reason] for reason in REASONS if lost[reason]},
         "outside_schema_values": sum(d.outside_schema for d in results),
     }
+    links = sum(d.gold_references for d in results)
+    if links:
+        out["reference_recall"] = round(sum(d.recovered_references for d in results) / links, 4)
+        out["dangling_references"] = sum(d.dangling for d in results)
+    return out

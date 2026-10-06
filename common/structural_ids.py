@@ -51,6 +51,7 @@ def renumber_structural_ids(
     *,
     extra_index: dict[str, str] | None = None,
     assign: tuple[str, ...] = (),
+    in_place: bool = False,
 ) -> tuple[dict[str, Any], IdReport]:
     """``doc`` with every table's ids numbered from 1 in row order, and every
     reference rewritten to them. A copy; ``doc`` is not changed.
@@ -65,11 +66,14 @@ def renumber_structural_ids(
 
     A reference that names no row is dropped (and reported): a list keeps the
     ids that resolve and is removed when none do, a single reference is removed.
+
+    ``in_place`` changes ``doc`` itself: the serving merge keeps each value's
+    token spans by object identity, which a copy would lose.
     """
     from common.schema_sections import references, structural_ids
 
     ids = structural_ids(lob)
-    out = copy.deepcopy(doc)
+    out = doc if in_place else copy.deepcopy(doc)
     report = IdReport()
     by_table: dict[str, dict[str, str]] = {}
     for table, spec in ids.items():
@@ -166,6 +170,25 @@ def unit_key(table: str, row: Any, lob: str | list[str] | None) -> tuple | None:
     return None
 
 
+def same_unit(table: str, a: Any, b: Any, lob: str | list[str] | None) -> bool | None:
+    """Whether two rows of a unit table are one unit: decided by the first of
+    the table's unit keys that BOTH rows state (a row with only its VIN and a
+    fragment with only its vehicle number compare on neither, and are not
+    known to be one; a row with both meets either). ``None`` when no key is
+    stated by both."""
+    from common.schema_sections import unit_keys
+
+    if not (isinstance(a, dict) and isinstance(b, dict)):
+        return None
+    for key in unit_keys(lob).get(table, ()):
+        names = tuple(key) if isinstance(key, (list, tuple)) else (key,)
+        left = tuple(_normalised(a.get(name), f"{table}[].{name}") for name in names)
+        right = tuple(_normalised(b.get(name), f"{table}[].{name}") for name in names)
+        if all(v not in (None, "") for v in left + right):
+            return left == right
+    return None
+
+
 def resolve_references(doc: Any, lob: str | list[str] | None) -> Any:
     """``doc`` with every reference replaced by the units' own keys.
 
@@ -220,3 +243,65 @@ def _normalised(value: Any, path: str) -> Any:
     if normalised is None:
         normalised = normalize_text(value)
     return normalised
+
+
+def comparable_view(doc: Any, lob: str | list[str] | None) -> Any:
+    """``doc`` as two readings of one policy can be compared: references written
+    as the units' own keys, and every structural id left out.
+
+    The numbering is the writer's choice - a gold label's veh_3 is an answer's
+    veh_1 - so an id is never right or wrong; what a reference NAMES is. A
+    copy; ``doc`` is not changed.
+    """
+    from common.schema_sections import structural_ids
+
+    id_fields = {spec["field"] for spec in structural_ids(lob).values()}
+    if not id_fields:
+        return doc
+    resolved = resolve_references(doc, lob)
+    parts = resolved.get("lob_parts") if isinstance(resolved, dict) else None
+    single_part = not (isinstance(parts, list) and len(parts) > 1)
+
+    def strip(node: Any) -> Any:
+        if isinstance(node, list):
+            return [strip(item) for item in node]
+        if not isinstance(node, dict):
+            return node
+        return {k: strip(v) for k, v in node.items()
+                if k not in id_fields and not (single_part and k == "part")}
+
+    return strip(resolved)
+
+
+def reference_pairs(doc: Any, lob: str | list[str] | None) -> list[tuple[Any, ...]]:
+    """Every link in ``doc`` as ``(table, row identity, field, unit key)``.
+
+    The row is identified by its table's keys other than its references (a
+    coverage by its code and printed name), the unit by its own keys - so a
+    link counts as the same in two documents whatever either numbered.
+    """
+    from common.schema_sections import array_key, references
+
+    refs = references(lob)
+    if not refs or not isinstance(doc, dict):
+        return []
+    link_fields = set(refs)
+    parts = doc.get("lob_parts")
+    if not (isinstance(parts, list) and len(parts) > 1):
+        # One part: `part` is omitted by its own definition, so it links nothing.
+        refs = {k: v for k, v in refs.items() if k != "part"}
+    resolved = resolve_references(doc, lob)
+    pairs: list[tuple[Any, ...]] = []
+    for table, rows in resolved.items():
+        if not isinstance(rows, list):
+            continue
+        keys = [k for k in (*array_key(table, lob), "coverage_name", "name") if k not in link_fields]
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            identity = tuple(_normalised(row.get(k), f"{table}[].{k}") for k in dict.fromkeys(keys))
+            for field_name in refs:
+                value = row.get(field_name)
+                for target in value if isinstance(value, list) else [value] if value else []:
+                    pairs.append((table, identity, field_name, target))
+    return pairs

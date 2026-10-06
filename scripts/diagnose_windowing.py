@@ -98,6 +98,14 @@ def summarise(results: list[DocumentResult]) -> str:
         detail = "    lost: " + (", ".join(f"{r} {lost[r]}" for r in REASONS if lost[r]) or "nothing")
         detail += f" | rows gold {rows} merged {merged_rows}"
         detail += f" | conflicts {sum(d.conflicts for d in docs)}"
+        links = sum(d.gold_references for d in docs)
+        if links:
+            # Common-model lines: a coverage's link to its vehicle survives the
+            # windows only when one window shows both.
+            kept = sum(d.recovered_references for d in docs)
+            detail += (f"\n    links (common model): {kept / links:.1%} kept "
+                       f"({links - kept} of {links} lost), "
+                       f"{sum(d.dangling for d in docs)} reference(s) dangling")
         outside = sum(d.outside_schema for d in docs)
         share = outside / (gold + outside) if gold + outside else 0
         detail += (f"\n    outside schema (not trained, not scored): {outside} of "
@@ -151,12 +159,14 @@ def main(argv: list[str] | None = None) -> int:
     with (args.out / "documents.csv").open("w", newline="", encoding="utf-8") as fh:
         writer = csv.writer(fh)
         writer.writerow(["source_id", "lob", "synthetic", "pages", "windows", "gold_values",
-                         "recovered", "recall", "outside_schema", *REASONS, "gold_rows", "merged_rows", "conflicts"])
+                         "recovered", "recall", "outside_schema", *REASONS, "gold_rows", "merged_rows", "conflicts",
+                         "gold_links", "kept_links", "dangling"])
         for d in results:
             writer.writerow([d.source_id, d.lob, d.synthetic, d.pages, d.windows, d.gold_values,
                              d.recovered, f"{d.recall:.4f}" if d.recall is not None else "",
                              d.outside_schema,
-                             *(d.lost[r] for r in REASONS), d.gold_rows, d.merged_rows, d.conflicts])
+                             *(d.lost[r] for r in REASONS), d.gold_rows, d.merged_rows, d.conflicts,
+                             d.gold_references, d.recovered_references, d.dangling])
     with (args.out / "lost_values.csv").open("w", newline="", encoding="utf-8") as fh:
         writer = csv.writer(fh)
         writer.writerow(["source_id", "lob", "path", "gold_value", "reason"])

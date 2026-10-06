@@ -218,7 +218,7 @@ def test_a_matched_rows_lost_value_is_a_merge_loss_not_an_unmatched_row(monkeypa
     label = {"policy": {"policy_number": _env("PA-1")},
              "auto": {"vehicles": [{"vin": _env("1HGCM82633A004352"), "year": _env(2019)}]}}
 
-    def drop_year(windows):
+    def drop_year(windows, lob=None):
         merged = policy_merge.MergedPolicy()
         merged.extraction = {"auto": {"vehicles": [{"vin": _env("1HGCM82633A004352")}]},
                              "policy": {"policy_number": _env("PA-1")}}
