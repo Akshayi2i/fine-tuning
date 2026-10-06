@@ -1,0 +1,454 @@
+# SPEC_21 4.2.4 coverage codes of homeowners (schema 1.0.0, common model 1.0.0).
+# Built from all 37 seed golds of 11 carriers (Chubb, Dryden Mutual, Leatherstocking Cooperative Insurance Company, Madison Mutual, Mercury Insurance Company, Midstate Mutual Insurance Company, Millennial Specialty Insurance, NYCM Insurance, North Country Insurance Company, Plymouth, Travelers).
+# aliases: coverage names as the seeds print them (whitespace collapsed; a dash the text layer has no
+# Unicode for is written '-'). Codes are LOB-prefixed (HO_); a coverage the common model shares across
+# lines uses its X_ code (common_model.json fideon:shared_coverage_codes); shared: true marks those.
+# carriers: how many of the line's carriers print the coverage. replaces_draft_codes: codes used by the
+# engine-test seed golds for the same coverage; those golds are re-coded at seed review (see CHANGELOG).
+lob: homeowners
+schema_version: 1.0.0
+common_model_version: 1.0.0
+code_prefix: HO_
+codes:
+- code: HO_ADDITIONAL_INSURED
+  name: Additional insured
+  aliases:
+  - FL-41 Additional Insured
+  - FL-41L Additional Insured
+  - MM HO 5140 09 19 Additional Insured -- Specified Coverages
+  default_limit_types: []
+  carriers: 2
+  replaces_draft_codes:
+  - HO_MM_HO_5140_09_19_ADDITIONAL_INSURED_SPEC
+- code: HO_ADDITIONAL_REPLACEMENT_COST
+  name: Additional Replacement Cost
+  aliases:
+  - Additional Replacement Cost
+  default_limit_types:
+  - other
+  carriers: 1
+- code: HO_ADDITIONAL_RESIDENCE_RENTED_LIABILITY
+  name: Additional Residential Premises-Rented To Others - Liabili
+  aliases:
+  - Additional Residential Premises-Rented To Others - Liabili
+  default_limit_types: []
+  carriers: 1
+- code: HO_AUTOMATIC_INCREASE
+  name: Automatic increase in insurance
+  aliases:
+  - Auto Increase in Insurance
+  - Automatic Increase in Insurance - 3 Percent
+  - HO 2584 01 06 Automatic Adjustment Of Limits - Annual Increase 3 Percent
+  default_limit_types: []
+  carriers: 2
+  replaces_draft_codes:
+  - HO_HO_2584_01_06_AUTOMATIC_ADJUSTMENT_OF_LI
+- code: HO_BUSINESS_PROPERTY_INCREASED
+  name: Business Property Increased Limits
+  aliases:
+  - Business Property Increased Limits
+  default_limit_types:
+  - sublimit
+  carriers: 1
+- code: HO_COV_A
+  name: Coverage A - Dwelling / Residence
+  aliases:
+  - Coverage A - Dwelling
+  - Coverage A - Residence
+  - A. Dwelling
+  - A. Residence
+  - 'A: DWELLING'
+  - Cov A - Dwelling
+  - Coverage A -- Residence
+  - Dwelling
+  - Residence
+  default_limit_types:
+  - per_occurrence
+  carriers: 11
+- code: HO_COV_B
+  name: Coverage B - Other / Related Private Structures
+  aliases:
+  - Coverage B - Other Structures
+  - B. Other Structures
+  - B. Related Private Structures
+  - 'B: OTHER STRUCTURES'
+  - Cov B - Other Structures
+  - Coverage B - Related Private Structures on the Premises
+  - Coverage B -- Related Private Structures
+  - Other Structures
+  - Other permanent structures
+  default_limit_types:
+  - per_occurrence
+  carriers: 10
+- code: HO_COV_C
+  name: Coverage C - Personal Property
+  aliases:
+  - Coverage C - Personal Property
+  - C. Personal Property
+  - Personal Property
+  - 'C: PERSONAL PROPERTY'
+  - Contents
+  - Cov C - Personal Property
+  - Coverage C -- Personal Property
+  default_limit_types:
+  - per_occurrence
+  - sublimit
+  carriers: 10
+- code: HO_CREDIT_CARD_FORGERY
+  name: Credit card, fund transfer, forgery and counterfeit money
+  aliases:
+  - Credit Card, EFT Card, Forgery, Etc
+  - Credit Card, Fund Transfer, Forgery and Counterfeit Money
+  - Limits - Credit Card, Electronic Fund Transfer Card Or Access Device, Forgery And Counterfeit Money
+  default_limit_types:
+  - per_occurrence
+  carriers: 3
+  replaces_draft_codes:
+  - HO_LIMITS_CREDIT_CARD_ELECTRONIC_FUND_TRANS
+- code: HO_DAMAGE_TO_PROPERTY_OF_OTHERS
+  name: Damage to Property of Others
+  aliases:
+  - Damage to Property of Others
+  default_limit_types:
+  - per_occurrence
+  carriers: 2
+- code: HO_DEBRIS_REMOVAL
+  name: Debris Removal
+  aliases:
+  - Debris Removal
+  default_limit_types: []
+  carriers: 1
+- code: HO_DISAPPEARING_DEDUCTIBLE
+  name: Disappearing Deductible
+  aliases:
+  - Disappearing Deductible
+  - MM HO 5039 09 19 Disappearing Deductible
+  default_limit_types: []
+  carriers: 1
+  replaces_draft_codes:
+  - HO_MM_HO_5039_09_19_DISAPPEARING_DEDUCTIBLE
+- code: HO_FIRE_DEPARTMENT_SERVICE_CHARGE
+  name: Fire Department Service Charge
+  aliases:
+  - Fire Department Service Charge
+  default_limit_types:
+  - per_occurrence
+  carriers: 1
+- code: HO_FUNGI_REMEDIATION
+  name: Limited fungi / mold remediation
+  aliases:
+  - LIMITED FUNGI, WET OR DRY ROT, OR BACTERIA COVERAGE
+  - Limited Fungi or Other Microbes Remediation
+  - Limited Fungi, Other Microbes or Rot(Section I)
+  - mold remediation expense coverage
+  default_limit_types:
+  - per_occurrence
+  - aggregate
+  carriers: 4
+- code: HO_INCIDENTAL_BUSINESS
+  name: Incidental Business Pursuits -Including Products Liability
+  aliases:
+  - Incidental Business Pursuits -Including Products Liability
+  default_limit_types: []
+  carriers: 1
+- code: HO_LANDLORD_FURNISHINGS
+  name: Landlord Furnishings
+  aliases:
+  - Landlord Furnishings
+  default_limit_types:
+  - per_occurrence
+  carriers: 1
+- code: HO_LOSS_ASSESSMENT
+  name: Loss assessment (property)
+  aliases:
+  - HO 2550 01 06 Loss Assessment Coverage - Described Location - Additional Limit
+  - Loss Assessment Coverage - Residence
+  default_limit_types:
+  - per_occurrence
+  carriers: 3
+  replaces_draft_codes:
+  - HO_HO_2550_01_06_LOSS_ASSESSMENT_COVERAGE_D
+- code: HO_LOSS_ASSESSMENT_LIABILITY
+  name: Loss assessment (liability)
+  aliases: []
+  default_limit_types:
+  - per_occurrence
+  carriers: 1
+  note: Printed as 'Loss Assessment' under Section II by one carrier; the printed name is an alias of HO_LOSS_ASSESSMENT,
+    so the code is told apart by its section.
+- code: HO_PERSONAL_ARTICLES
+  name: PERSONAL ARTICLES COVERAGE
+  aliases:
+  - PERSONAL ARTICLES COVERAGE
+  default_limit_types:
+  - scheduled_total
+  carriers: 1
+- code: HO_PERSONAL_INJURY
+  name: Personal Injury Coverage
+  aliases:
+  - Personal Injury Coverage
+  default_limit_types: []
+  carriers: 3
+- code: HO_PERSONAL_PROPERTY_REPLACEMENT_COST
+  name: Personal Property Replacement Cost
+  aliases:
+  - Personal Property Replacement Cost
+  - HO 4855 01 06 Replacement Cost Loss Settlement Terms - Personal Property
+  - Personal Property Replacement Cost Loss Settlement
+  - Replacement Cost Provision (Coverage C - Personal Property)
+  default_limit_types: []
+  carriers: 4
+  replaces_draft_codes:
+  - HO_HO_4855_01_06_REPLACEMENT_COST_LOSS_SETT
+- code: HO_PERSONAL_RECORDS_DATA
+  name: Personal Records and Data Replacement
+  aliases:
+  - Personal Records and Data Replacement
+  default_limit_types:
+  - per_occurrence
+  carriers: 1
+- code: HO_PREMISES_LIABILITY_ENDORSEMENT
+  name: Premises Liability Coverage
+  aliases:
+  - Premises Liability Coverage
+  default_limit_types: []
+  carriers: 1
+- code: HO_PRIVATE_STRUCTURES_INCREASED
+  name: Related Private Structures
+  aliases:
+  - Related Private Structures
+  - Private Structures - Increased
+  default_limit_types:
+  - per_occurrence
+  - per_item
+  carriers: 4
+- code: HO_PROPERTY_LIABILITY_ENHANCEMENT
+  name: Personal Property and Liability Enhancement
+  aliases:
+  - Personal Property and Liability Enhancement
+  default_limit_types:
+  - sublimit
+  carriers: 1
+- code: HO_REFRIGERATED_FOOD_PRODUCTS
+  name: Added Perils For Refrigerated Food Products
+  aliases:
+  - Added Perils For Refrigerated Food Products
+  - Refrigerated Food Products
+  default_limit_types:
+  - per_occurrence
+  carriers: 2
+- code: HO_RESIDENCE_LOSS_SETTLEMENT
+  name: Residence Loss Settlement
+  aliases:
+  - Residence Loss Settlement
+  default_limit_types: []
+  carriers: 1
+- code: HO_SERVICE_LINE
+  name: Service Line Coverage
+  aliases:
+  - Service Line Coverage
+  default_limit_types:
+  - per_occurrence
+  carriers: 1
+- code: HO_SPECIAL_LIMITS
+  name: Special Limits of Liability
+  aliases:
+  - Special Limits of Liability
+  default_limit_types:
+  - sublimit
+  carriers: 1
+- code: HO_SPECIAL_PERSONAL_PROPERTY
+  name: Special Personal Property Coverage
+  aliases:
+  - Special Personal Property Coverage
+  default_limit_types: []
+  carriers: 1
+- code: HO_TREES_SHRUBS_PLANTS
+  name: Trees, Shrubs and Other Plants
+  aliases:
+  - Trees, Shrubs and Other Plants
+  default_limit_types:
+  - per_occurrence
+  - per_item
+  carriers: 1
+- code: HO_TREE_REMOVAL
+  name: Tree Removal
+  aliases:
+  - Tree Removal
+  default_limit_types:
+  - per_occurrence
+  - per_item
+  carriers: 1
+- code: HO_UNDERGROUND_UTILITY_LINE
+  name: Underground utility line
+  aliases:
+  - FL-342 Underground Utility Line
+  - Underground Utility Line
+  default_limit_types:
+  - per_occurrence
+  carriers: 2
+- code: HO_VALUABLE_ARTICLES
+  name: VALUABLE ARTICLES
+  aliases:
+  - VALUABLE ARTICLES
+  default_limit_types:
+  - per_item
+  - blanket
+  carriers: 1
+- code: HO_VIP_ENDORSEMENT
+  name: Homeowners VIP Coverage
+  aliases:
+  - Homeowners VIP Coverage
+  default_limit_types: []
+  carriers: 1
+- code: HO_WATER_DAMAGE_ADDED
+  name: Added Water Damages Coverage
+  aliases:
+  - Added Water Damages Coverage
+  default_limit_types:
+  - per_occurrence
+  carriers: 1
+- code: HO_WATER_DAMAGE_HIGHER_LIMITS
+  name: Higher Limits - Water Damage Coverage
+  aliases:
+  - Higher Limits - Water Damage Coverage
+  default_limit_types:
+  - per_occurrence
+  carriers: 1
+- code: HO_WORKERS_COMP_RESIDENCE_EMPLOYEE
+  name: Workers' Compensation Residence Employee
+  aliases:
+  - Workers' Compensation Residence Employee
+  default_limit_types: []
+  carriers: 1
+- code: X_CYBER
+  name: Cyber / data breach
+  aliases:
+  - Home Cyber Protection Coverage
+  default_limit_types:
+  - aggregate
+  - per_claim
+  - sublimit
+  shared: true
+  carriers: 1
+- code: X_EQUIPMENT_BREAKDOWN
+  name: Equipment breakdown
+  aliases:
+  - Equipment Breakdown Coverage
+  - Equipment Breakdown Enhancement Endorsement
+  - FL-345 Equipment Breakdown
+  - HOME SYSTEMS PROTECTION
+  - Home Systems Protection
+  - MM HO 5346 09 19 Equipment Breakdown Enhancement Endorsement
+  - Mech/Elec/Pressure Sys
+  default_limit_types:
+  - per_occurrence
+  shared: true
+  carriers: 7
+  replaces_draft_codes:
+  - HO_MM_HO_5346_09_19_EQUIPMENT_BREAKDOWN_ENH
+- code: X_IDENTITY_THEFT
+  name: Identity theft / fraud expense
+  aliases:
+  - IDENTITY MONITORING AND PROTECTION SERVICES
+  - Identity Fraud Expense and Resolution Services
+  default_limit_types:
+  - per_occurrence
+  - aggregate
+  shared: true
+  carriers: 2
+- code: X_LOSS_OF_USE
+  name: Loss of use / additional living expense / fair rental value
+  aliases:
+  - Coverage D - Loss of Use
+  - Addl. Living Exp and Loss of Rent
+  - Cov D - Addl Living Exp/Loss of Rents
+  - Coverage D - Additional Living Expense and Loss of Rent
+  - Coverage D - Additional Living Expense or Loss of Rent
+  - Coverage D - Addl. Living Exp and Loss of Rent
+  - Coverage D -- Additional Living Costs And Loss Of Rent
+  - D. Add'l Living Exp. & Loss of Rent
+  - D. Loss Of Use
+  - 'D: LOSS OF USE'
+  - Loss Of Use (Cov. D)
+  default_limit_types:
+  - per_occurrence
+  - other
+  shared: true
+  carriers: 10
+- code: X_MED_PAY
+  name: Medical payments
+  aliases:
+  - Coverage F - Medical Payments to Others
+  - Cov M - Medical Payments
+  - Coverage F - Medical Payments Coverage
+  - Coverage M - OLT - Premises Med Pay - Per Occurrence
+  - Coverage M - OLT - Premises Med Pay - Per Person
+  - Coverage M - Premises Medical Payments
+  - Coverage M -- Medical Payments To Others
+  - F. Medical Payments
+  - 'F: MEDICAL PAYMENTS TO OTHERS'
+  - M. Medical Payments per Person
+  - Medical Payments
+  default_limit_types:
+  - per_occurrence
+  - per_person
+  - per_accident
+  shared: true
+  carriers: 10
+  replaces_draft_codes:
+  - HO_COVERAGE_M_MEDICAL_PAYMENTS_TO_OTHERS
+- code: X_ORDINANCE_LAW
+  name: Ordinance or law
+  aliases:
+  - Ordinance or Law
+  - Ordinance Or Law
+  - Ordinance and Law
+  default_limit_types:
+  - per_occurrence
+  - sublimit
+  - other
+  shared: true
+  carriers: 4
+  replaces_draft_codes:
+  - HO_ORDINANCE_OR_LAW
+- code: X_PERSONAL_LIABILITY
+  name: Personal liability
+  aliases:
+  - Coverage E - Personal Liability
+  - Cov L - Personal Liability
+  - Coverage E - Personal Liability - Bodily Injury and Property Damage
+  - Coverage L - OLT - Premises Liability
+  - Coverage L - Premises Liability Coverage
+  - Coverage L -- Personal Liability
+  - E. Personal Liability
+  - 'E: PERSONAL LIABILITY EACH'
+  - L. Personal Liability per Occurence
+  - Liability
+  - PERSONAL LIABILITY
+  - Personal Liability
+  default_limit_types:
+  - per_occurrence
+  shared: true
+  carriers: 11
+- code: X_WATER_BACKUP
+  name: Water or sewer backup
+  aliases:
+  - HO 2708 07 11 Water Back Up And Sump Discharge Or Overflow Coverage
+  - Water Backup and Sump Discharge or Overflow
+  default_limit_types:
+  - per_occurrence
+  - sublimit
+  shared: true
+  carriers: 2
+  replaces_draft_codes:
+  - HO_HO_2708_07_11_WATER_BACK_UP_AND_SUMP_DIS
+shared_codes_used:
+- X_CYBER
+- X_EQUIPMENT_BREAKDOWN
+- X_IDENTITY_THEFT
+- X_LOSS_OF_USE
+- X_MED_PAY
+- X_ORDINANCE_LAW
+- X_PERSONAL_LIABILITY
+- X_WATER_BACKUP

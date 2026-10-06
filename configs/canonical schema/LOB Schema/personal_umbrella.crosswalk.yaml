@@ -1,0 +1,55 @@
+# SPEC_21 4.7 crosswalk for personal_umbrella: every canonical_path declared by the line's policy registry YAMLs
+# (config/document_registry/policy/*/personal_umbrella.yaml) -> the SPEC_21 schema 1.0.0.
+# new: same concept at its SPEC_21 path; overflow: an additional_fields entry with that label;
+# drop: not a value (needs reviewer approval). Paths already under additional_fields keep their label.
+# Each entry names the registry fields that declare it. Applied by tools/registry_migrate.py --lob personal_umbrella.
+lob: personal_umbrella
+from_schema: "3.2.0"
+to_schema: "1.0.0"
+paths:
+  # nycm/personal_umbrella.yaml:carrier_address; plymouth/personal_umbrella.yaml:carrier_address
+  carrier.address: {new: "carrier.address"}
+  # nycm/personal_umbrella.yaml:carrier_phone
+  carrier.contact.phone: {new: "carrier.phone"}
+  # nycm/personal_umbrella.yaml:carrier_website
+  carrier.contact.website: {new: "carrier.web_address"}
+  # nycm/personal_umbrella.yaml:transaction_description
+  document.transaction_reason: {new: "document.transaction_reason"}
+  # plymouth/personal_umbrella.yaml:schedules.forms_table
+  forms_and_endorsements: {new: "forms_and_endorsements"}
+  # plymouth/personal_umbrella.yaml:schedules.additional_named_insureds
+  named_insured.additional_named_insureds: {new: "named_insured.additional_named_insureds"}
+  # plymouth/personal_umbrella.yaml:mailing_address
+  named_insured.mailing_address: {new: "named_insured.mailing_address"}
+  # plymouth/personal_umbrella.yaml:insured_location_address
+  named_insured.physical_address: {overflow: "Insured Property Location"}
+  # plymouth/personal_umbrella.yaml:schedules.coverages
+  personal_umbrella.coverage_schedule: {new: "coverages"}
+  # nycm/personal_umbrella.yaml:schedules.insured_summary
+  personal_umbrella.household_members: {new: "named_insured.additional_named_insureds"}
+  # plymouth/personal_umbrella.yaml:personal_umbrella_limit
+  personal_umbrella.limits.personal_umbrella_limit: {new: "coverages[coverage_code=PU_LIABILITY].limits[limit_type=per_occurrence].amount"}
+  # plymouth/personal_umbrella.yaml:self_insured_retention
+  personal_umbrella.limits.self_insured_retention: {new: "coverages[coverage_code=PU_LIABILITY].deductibles[deductible_type=retention].amount"}
+  # plymouth/personal_umbrella.yaml:schedules.package_index
+  personal_umbrella.package_index: {drop: "index of the documents in the package: a list of form titles, kept verbatim in text_sections and forms_and_endorsements; reviewer approval needed"}
+  # plymouth/personal_umbrella.yaml:schedules.exposures
+  personal_umbrella.rated_exposures: {overflow: "Exposures"}
+  # plymouth/personal_umbrella.yaml:schedules.required_underlying_limits
+  personal_umbrella.required_underlying_limits: {overflow: "Required Minimum Liability Limits for Underlying Policies"}
+  # nycm/personal_umbrella.yaml:schedules.residence_summary
+  personal_umbrella.residences: {overflow: "Residence Summary"}
+  # nycm/personal_umbrella.yaml:schedules.underlying_insurance_policies; plymouth/personal_umbrella.yaml:schedules.underlying_policies
+  personal_umbrella.schedule_of_underlying_insurance: {new: "underlying_insurance"}
+  # nycm/personal_umbrella.yaml:agent_address; plymouth/personal_umbrella.yaml:agent_address
+  producer.address: {new: "producer.address"}
+  # nycm/personal_umbrella.yaml:agency_email
+  producer.contact.email: {new: "producer.email"}
+  # nycm/personal_umbrella.yaml:agency_fax
+  producer.contact.fax: {new: "producer.fax"}
+  # nycm/personal_umbrella.yaml:agency_website
+  producer.contact.website: {new: "producer.web_address"}
+  # plymouth/personal_umbrella.yaml:producer_code
+  producer.producer_code: {new: "producer.producer_code"}
+  # plymouth/personal_umbrella.yaml:schedules.renewal_notice
+  state_notices: {drop: "renewal notice wording, not a value; kept verbatim in text_sections (SPEC_21 4.6); reviewer approval needed"}

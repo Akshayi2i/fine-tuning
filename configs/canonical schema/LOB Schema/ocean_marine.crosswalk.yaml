@@ -1,0 +1,55 @@
+# SPEC_21 4.7 crosswalk for ocean_marine: every canonical_path declared by the line's policy registry YAMLs
+# (config/document_registry/policy/*/ocean_marine.yaml, config/document_registry/policy/*/watercraft.yaml) -> the SPEC_21 schema 1.0.0.
+# new: same concept at its SPEC_21 path; overflow: an additional_fields entry with that label;
+# drop: not a value (needs reviewer approval). Paths already under additional_fields keep their label.
+# Each entry names the registry fields that declare it. Applied by tools/registry_migrate.py --lob ocean_marine.
+lob: ocean_marine
+from_schema: "3.1.0"
+to_schema: "1.0.0"
+paths:
+  # progressive/ocean_marine.yaml:insurer_name
+  carrier.company_name: {new: "carrier.name"}
+  # progressive/ocean_marine.yaml:document_title
+  document.document_title_as_stated: {new: "document.title"}
+  # progressive/ocean_marine.yaml:issue_date
+  document.issue_date: {new: "document.issue_date"}
+  # progressive/ocean_marine.yaml:insured_name
+  named_insured.primary_name: {new: "named_insured.primary_name"}
+  # progressive/ocean_marine.yaml:effective_time
+  policy.effective_time: {overflow: "Effective Time"}
+  # progressive/ocean_marine.yaml:original_inception_date
+  policy.original_inception_date: {new: "policy.original_inception_date"}
+  # progressive/ocean_marine.yaml:pay_in_full_discount
+  premium.discounts_and_credits: {new: "premium.discounts[].amount"}
+  # progressive/ocean_marine.yaml:pay_in_full_amount
+  premium.pay_in_full_amount: {overflow: "Pay in Full"}
+  # progressive/ocean_marine.yaml:total_premium
+  premium.total_policy_premium: {new: "premium.total"}
+  # progressive/ocean_marine.yaml:agent_address
+  producer.address: {new: "producer.address"}
+  # progressive/ocean_marine.yaml:agency_name
+  producer.agency_name: {new: "producer.agency_name"}
+  # progressive/ocean_marine.yaml:agency_phone
+  producer.contact.phone: {new: "producer.phone"}
+  # progressive/ocean_marine.yaml:agency_website
+  producer.contact.website: {new: "producer.web_address"}
+  # progressive/ocean_marine.yaml:bodily_injury_and_property_damage_limit
+  watercraft.liability_coverages.bodily_injury_and_property_damage_limit: {new: "coverages[coverage_code=X_VEHICLE_LIABILITY].limits[limit_type=combined_single].amount"}
+  # progressive/ocean_marine.yaml:fuel_spill_liability_included
+  watercraft.liability_coverages.fuel_spill_liability_included: {new: "coverages[coverage_code=OM_FUEL_SPILL_LIABILITY].included"}
+  # progressive/ocean_marine.yaml:medical_payments_each_person_limit
+  watercraft.liability_coverages.medical_payments_each_person_limit: {new: "coverages[coverage_code=X_MED_PAY].limits[limit_type=per_person].amount"}
+  # progressive/ocean_marine.yaml:uninsured_boater_limit
+  watercraft.liability_coverages.uninsured_boater_limit: {new: "coverages[coverage_code=X_UM].limits[limit_type=combined_single].amount"}
+  # progressive/ocean_marine.yaml:navigational_territory
+  watercraft.navigation_and_use.navigational_territory: {new: "watercraft[].navigation_area"}
+  # progressive/ocean_marine.yaml:schedules.operators
+  watercraft.operators: {new: "drivers"}
+  # progressive/ocean_marine.yaml:collision_deductible
+  watercraft.physical_damage_coverages.collision_deductible: {new: "coverages[coverage_code=X_COLLISION].deductibles[deductible_type=flat].amount"}
+  # progressive/ocean_marine.yaml:comprehensive_deductible
+  watercraft.physical_damage_coverages.comprehensive_deductible: {new: "coverages[coverage_code=X_COMPREHENSIVE].deductibles[deductible_type=flat].amount"}
+  # progressive/ocean_marine.yaml:total_loss_settlement_basis
+  watercraft.physical_damage_coverages.total_loss_replacement_indicator: {new: "coverages[].valuation"}
+  # progressive/ocean_marine.yaml:schedules.watercraft
+  watercraft.watercraft: {new: "watercraft"}

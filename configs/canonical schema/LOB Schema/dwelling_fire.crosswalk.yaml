@@ -1,0 +1,55 @@
+# SPEC_21 4.7 crosswalk for dwelling_fire: every canonical_path declared by the line's policy registry YAMLs
+# (config/document_registry/policy/*/dwelling_fire.yaml) -> the SPEC_21 schema 1.0.0.
+# new: same concept at its SPEC_21 path; overflow: an additional_fields entry with that label;
+# drop: not a value (needs reviewer approval). Paths already under additional_fields keep their label.
+# Each entry names the registry fields that declare it. Applied by tools/registry_migrate.py --lob dwelling_fire.
+lob: dwelling_fire
+from_schema: "1.5.0"
+to_schema: "1.0.0"
+paths:
+  # leatherstocking/dwelling_fire.yaml:policy_subject_to_the_following_forms_and_endorsements
+  additional_fields.forms_sentence: {overflow: "forms_sentence"}
+  # leatherstocking/dwelling_fire.yaml:property_1
+  additional_fields.property_1: {overflow: "property_1"}
+  # leatherstocking/dwelling_fire.yaml:insurer_name
+  carrier.company_name: {new: "carrier.name"}
+  # leatherstocking/dwelling_fire.yaml:coverages
+  coverages: {new: "coverages"}
+  # leatherstocking/dwelling_fire.yaml:deductible
+  dwelling_fire.deductibles.all_other_perils_deductible: {new: "deductibles[deductible_type=flat].amount"}
+  # leatherstocking/dwelling_fire.yaml:construction_type
+  dwelling_fire.dwelling.construction_type: {new: "buildings[].construction"}
+  # leatherstocking/dwelling_fire.yaml:address
+  dwelling_fire.dwelling.described_location: {new: "locations[].address"}
+  # leatherstocking/dwelling_fire.yaml:occupancy
+  dwelling_fire.dwelling.occupancy_type: {new: "buildings[].occupancy"}
+  # leatherstocking/dwelling_fire.yaml:protection_class
+  dwelling_fire.dwelling.protection_class: {new: "locations[].protection_class"}
+  # leatherstocking/dwelling_fire.yaml:living_expense
+  dwelling_fire.property_coverages.coverage_e_additional_living_expense_limit: {new: "coverages[coverage_code=X_LOSS_OF_USE].limits[limit_type=per_occurrence].amount"}
+  # leatherstocking/dwelling_fire.yaml:loss_settlement_basis
+  dwelling_fire.property_coverages.loss_settlement_basis: {new: "coverages[].valuation"}
+  # leatherstocking/dwelling_fire.yaml:classification_description
+  dwelling_fire.rating_characteristics.classification_description: {overflow: "Classification"}
+  # leatherstocking/dwelling_fire.yaml:special_rating_conditions
+  dwelling_fire.rating_characteristics.special_rating_conditions: {overflow: "Special Rating Conditions"}
+  # leatherstocking/dwelling_fire.yaml:territorial_zone
+  dwelling_fire.rating_characteristics.territorial_zone: {new: "locations[].territory"}
+  # leatherstocking/dwelling_fire.yaml:endorsements
+  forms_and_endorsements: {new: "forms_and_endorsements"}
+  # leatherstocking/dwelling_fire.yaml:insured_name
+  named_insured.primary_name: {new: "named_insured.primary_name"}
+  # leatherstocking/dwelling_fire.yaml:effective_date
+  policy.effective_date: {new: "policy.effective_date"}
+  # leatherstocking/dwelling_fire.yaml:expiration_date
+  policy.expiration_date: {new: "policy.expiration_date"}
+  # leatherstocking/dwelling_fire.yaml:form_number
+  policy.policy_form_number: {new: "lob_parts[].coverage_part_form"}
+  # leatherstocking/dwelling_fire.yaml:policy_number
+  policy.policy_number: {new: "policy.policy_number"}
+  # leatherstocking/dwelling_fire.yaml:taxes_and_fees
+  premium.taxes_and_fees: {new: "premium.taxes_fees[].amount"}
+  # leatherstocking/dwelling_fire.yaml:total_premium
+  premium.total_policy_premium: {new: "premium.total"}
+  # leatherstocking/dwelling_fire.yaml:agency_name
+  producer.agency_name: {new: "producer.agency_name"}

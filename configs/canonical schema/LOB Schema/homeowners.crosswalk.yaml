@@ -1,0 +1,335 @@
+# SPEC_21 4.7 crosswalk for homeowners: every canonical_path declared by the line's policy registry YAMLs
+# (config/document_registry/policy/*/homeowners.yaml) -> the SPEC_21 schema 1.0.0.
+# new: same concept at its SPEC_21 path; overflow: an additional_fields entry with that label;
+# drop: not a value (needs reviewer approval). Paths already under additional_fields keep their label.
+# Each entry names the registry fields that declare it. Applied by tools/registry_migrate.py --lob homeowners.
+lob: homeowners
+from_schema: "1.6.0"
+to_schema: "1.0.0"
+paths:
+  # plymouth/homeowners.yaml:account_number
+  additional_fields.account_number: {overflow: "account_number"}
+  # nycm/homeowners.yaml:account_type
+  additional_fields.account_type: {overflow: "account_type"}
+  # north_country/homeowners.yaml:address
+  additional_fields.address: {overflow: "address"}
+  # nycm/homeowners.yaml:agent_territory
+  additional_fields.agent_territory: {overflow: "agent_territory"}
+  # nycm/homeowners.yaml:alternate_heat_source
+  additional_fields.alternate_heat_source: {overflow: "alternate_heat_source"}
+  # north_country/homeowners.yaml:change_reason_s
+  additional_fields.change_reason: {overflow: "change_reason"}
+  # nycm/homeowners.yaml:coded_score
+  additional_fields.coded_score: {overflow: "coded_score"}
+  # nycm/homeowners.yaml:ordered_date
+  additional_fields.credit_report_ordered_date: {overflow: "credit_report_ordered_date"}
+  # north_country/homeowners.yaml:description
+  additional_fields.description: {overflow: "description"}
+  # north_country/homeowners.yaml:usage
+  additional_fields.dwelling_usage: {overflow: "dwelling_usage"}
+  # nycm/homeowners.yaml:employment_status
+  additional_fields.employment_status: {overflow: "employment_status"}
+  # plymouth/homeowners.yaml:first
+  additional_fields.first_mortgagee: {overflow: "first_mortgagee"}
+  # north_country/homeowners.yaml:forms_endorsements_premium
+  additional_fields.forms_and_endorsements_premium: {overflow: "forms_and_endorsements_premium"}
+  # nycm/homeowners.yaml:fuel_tank_location
+  additional_fields.fuel_tank_location: {overflow: "fuel_tank_location"}
+  # north_country/homeowners.yaml:interest_type
+  additional_fields.interest_type: {overflow: "interest_type"}
+  # nycm/homeowners.yaml:months_occupied_annually
+  additional_fields.months_occupied_annually: {overflow: "months_occupied_annually"}
+  # plymouth/homeowners.yaml:mortgagee_company_name
+  additional_fields.mortgagee_company_name: {overflow: "mortgagee_company_name"}
+  # nycm/homeowners.yaml:name_address
+  additional_fields.mortgagee_name_address: {overflow: "mortgagee_name_address"}
+  # plymouth/homeowners.yaml:name_of_payer
+  additional_fields.name_of_payer: {overflow: "name_of_payer"}
+  # plymouth/homeowners.yaml:payment_status
+  additional_fields.payment_status: {overflow: "payment_status"}
+  # nycm/homeowners.yaml:primary_policy_number
+  additional_fields.primary_policy_number: {overflow: "primary_policy_number"}
+  # nycm/homeowners.yaml:quoted_pro_rated_premium_amount
+  additional_fields.quoted_pro_rated_premium: {overflow: "quoted_pro_rated_premium"}
+  # nycm/homeowners.yaml:secondary_indicator
+  additional_fields.secondary_indicator: {overflow: "secondary_indicator"}
+  # north_country/homeowners.yaml:sprinklers
+  additional_fields.sprinklered: {overflow: "sprinklered"}
+  # nycm/homeowners.yaml:total_amount_jewelry
+  additional_fields.total_amount_jewelry: {overflow: "total_amount_jewelry"}
+  # nycm/homeowners.yaml:total_im_schedule
+  additional_fields.total_im_schedule: {overflow: "total_im_schedule"}
+  # nycm/homeowners.yaml:town_row_house
+  additional_fields.town_row_house: {overflow: "town_row_house"}
+  # travelers/homeowners.yaml:amount_due
+  billing.amount_due: {new: "billing.amount_due"}
+  # north_country/homeowners.yaml:payor; travelers/homeowners.yaml:bill_to_party
+  billing.bill_to_party: {overflow: "Bill To"}
+  # travelers/homeowners.yaml:checks_payable_to
+  billing.checks_payable_to: {overflow: "Checks Payable To"}
+  # travelers/homeowners.yaml:invoice_date
+  billing.invoice_date: {overflow: "Invoice Date"}
+  # travelers/homeowners.yaml:invoice_loan_number
+  billing.loan_number: {new: "interested_parties[].loan_number"}
+  # plymouth/homeowners.yaml:payment_type
+  billing.payment_method: {new: "billing.payment_method"}
+  # plymouth/homeowners.yaml:policy_pay_plan
+  billing.payment_plan: {new: "billing.payment_plan"}
+  # travelers/homeowners.yaml:schedules.payment_receipt
+  billing.payments: {overflow: "Payment Receipt"}
+  # travelers/homeowners.yaml:remittance_address
+  billing.remittance_address: {overflow: "Remittance Address"}
+  # travelers/homeowners.yaml:scan_line
+  billing.scan_line: {drop: "OCR scan line of the payment coupon: a machine code, not a policy value (reviewer approval needed); kept in text_sections"}
+  # leatherstocking/homeowners.yaml:carrier_address; midstate/homeowners.yaml:carrier_address; travelers/homeowners.yaml:carrier_address
+  carrier.address: {new: "carrier.address"}
+  # madison_mutual/homeowners.yaml:insurer_name; midstate/homeowners.yaml:insurer_name; plymouth/homeowners.yaml:insurer_name
+  carrier.company_name: {new: "carrier.name"}
+  # leatherstocking/homeowners.yaml:carrier_fax
+  carrier.contact.fax: {new: "carrier.fax"}
+  # leatherstocking/homeowners.yaml:carrier_phone
+  carrier.contact.phone: {new: "carrier.phone"}
+  # leatherstocking/homeowners.yaml:carrier_website
+  carrier.contact.website: {new: "carrier.web_address"}
+  # travelers/homeowners.yaml:insurer_group
+  carrier.group_name: {new: "carrier.group_name"}
+  # travelers/homeowners.yaml:naic_number
+  carrier.naic_number: {new: "carrier.naic_code"}
+  # liberty_mutual/homeowners.yaml:state
+  carrier.state_of_issue: {new: "policy.rating_state"}
+  # plymouth/homeowners.yaml:underwriting_company
+  carrier.writing_company_name: {new: "carrier.name"}
+  # liberty_mutual/homeowners.yaml:coverages; north_country/homeowners.yaml:coverages; nycm/homeowners.yaml:coverages; plymouth/homeowners.yaml:coverages
+  coverages: {new: "coverages"}
+  # travelers/homeowners.yaml:schedules.deductible_rows
+  deductibles: {new: "deductibles"}
+  # midstate/homeowners.yaml:schedules.changes
+  document.changes: {new: "document.transaction_reason"}
+  # travelers/homeowners.yaml:document_form_edition
+  document.document_form_edition: {overflow: "Document Form Edition"}
+  # travelers/homeowners.yaml:document_form_number
+  document.document_form_number: {overflow: "Document Form Number"}
+  # leatherstocking/homeowners.yaml:document_title; madison_mutual/homeowners.yaml:document_title; midstate/homeowners.yaml:document_title
+  document.document_title_as_stated: {new: "document.title"}
+  # liberty_mutual/homeowners.yaml:line_of_business
+  document.line_of_business_as_stated: {new: "lob_parts[].title"}
+  # travelers/homeowners.yaml:not_a_bill_indicator
+  document.not_a_bill_indicator: {overflow: "This Is Not A Bill"}
+  # travelers/homeowners.yaml:transaction_date
+  document.transaction_date: {new: "document.transaction_date"}
+  # midstate/homeowners.yaml:transaction_effective_date
+  document.transaction_effective_date: {new: "document.transaction_effective_date"}
+  # leatherstocking/homeowners.yaml:schedules.forms; midstate/homeowners.yaml:schedules.forms; nycm/homeowners.yaml:endorsements; plymouth/homeowners.yaml:endorsements; travelers/homeowners.yaml:schedules.policy_forms; travelers/homeowners.yaml:schedules.required_forms
+  forms_and_endorsements: {new: "forms_and_endorsements"}
+  # travelers/homeowners.yaml:schedules.coverage_table; travelers/homeowners.yaml:schedules.property_coverages
+  homeowners.coverage_schedule: {new: "coverages"}
+  # leatherstocking/homeowners.yaml:deductible; madison_mutual/homeowners.yaml:deductible; midstate/homeowners.yaml:deductible; north_country/homeowners.yaml:deductible; plymouth/homeowners.yaml:deductible; travelers/homeowners.yaml:all_other_perils_deductible
+  homeowners.deductibles.all_other_perils_deductible: {new: "deductibles[deductible_type=flat].amount"}
+  # plymouth/homeowners.yaml:wind_deductible; travelers/homeowners.yaml:wind_hail_deductible
+  homeowners.deductibles.wind_hail_deductible: {new: "deductibles[deductible_type=percentage].percentage"}
+  # travelers/homeowners.yaml:schedules.discounts
+  homeowners.discounts: {new: "premium.discounts"}
+  # north_country/homeowners.yaml:burglar_alarm; travelers/homeowners.yaml:smoke_alarm
+  homeowners.dwelling.alarm_type: {new: "buildings[].protective_devices"}
+  # travelers/homeowners.yaml:basement_finished_percentage
+  homeowners.dwelling.basement_finished_percentage: {overflow: "Basement Finished Percentage"}
+  # nycm/homeowners.yaml:basement; travelers/homeowners.yaml:basement_type
+  homeowners.dwelling.basement_type: {overflow: "Basement Type"}
+  # liberty_mutual/homeowners.yaml:construction; madison_mutual/homeowners.yaml:construction_type; midstate/homeowners.yaml:construction_type; north_country/homeowners.yaml:construction; north_country/homeowners.yaml:construction_type; travelers/homeowners.yaml:construction_type
+  homeowners.dwelling.construction_type: {new: "buildings[].construction"}
+  # leatherstocking/homeowners.yaml:property_address; liberty_mutual/homeowners.yaml:location; north_country/homeowners.yaml:described_location; north_country/homeowners.yaml:property_address; nycm/homeowners.yaml:described_location; travelers/homeowners.yaml:residence_premises
+  homeowners.dwelling.described_location: {new: "locations[].address"}
+  # north_country/homeowners.yaml:county; nycm/homeowners.yaml:county
+  homeowners.dwelling.described_location.county: {new: "locations[].address.county"}
+  # plymouth/homeowners.yaml:residence_address
+  homeowners.dwelling.described_location.line_1: {new: "locations[].address.street"}
+  # nycm/homeowners.yaml:sub_county
+  homeowners.dwelling.described_location.sub_county: {overflow: "Sub County"}
+  # travelers/homeowners.yaml:distance_to_fire_station
+  homeowners.dwelling.distance_to_fire_station: {new: "locations[].distance_to_fire_station"}
+  # midstate/homeowners.yaml:distance_to_hydrant; travelers/homeowners.yaml:distance_to_hydrant
+  homeowners.dwelling.distance_to_hydrant: {new: "locations[].distance_to_hydrant"}
+  # travelers/homeowners.yaml:dwelling_type
+  homeowners.dwelling.dwelling_type: {new: "buildings[].occupancy"}
+  # travelers/homeowners.yaml:exterior_wall_type
+  homeowners.dwelling.exterior_wall_type: {overflow: "Exterior Wall Type"}
+  # travelers/homeowners.yaml:fire_extinguisher
+  homeowners.dwelling.fire_extinguisher: {new: "buildings[].protective_devices"}
+  # madison_mutual/homeowners.yaml:foundation_type; nycm/homeowners.yaml:foundation_type; travelers/homeowners.yaml:foundation_type
+  homeowners.dwelling.foundation_type: {overflow: "Foundation Type"}
+  # travelers/homeowners.yaml:garage_number_of_cars
+  homeowners.dwelling.garage_number_of_cars: {overflow: "Garage Number of Cars"}
+  # travelers/homeowners.yaml:garage_type
+  homeowners.dwelling.garage_type: {overflow: "Garage Type"}
+  # nycm/homeowners.yaml:heating_type; nycm/homeowners.yaml:primary_heat_source; travelers/homeowners.yaml:heating_type
+  homeowners.dwelling.heating_type: {new: "buildings[].heating_type"}
+  # travelers/homeowners.yaml:number_of_bathrooms
+  homeowners.dwelling.number_of_bathrooms: {overflow: "Number of Bathrooms"}
+  # midstate/homeowners.yaml:number_of_families; north_country/homeowners.yaml:number_of_families; travelers/homeowners.yaml:number_of_families
+  homeowners.dwelling.number_of_families: {new: "buildings[].number_of_units"}
+  # travelers/homeowners.yaml:number_of_residence_employees
+  homeowners.dwelling.number_of_residence_employees: {overflow: "Number of Residence Employees"}
+  # travelers/homeowners.yaml:number_of_stories
+  homeowners.dwelling.number_of_stories: {new: "buildings[].stories"}
+  # travelers/homeowners.yaml:number_of_units
+  homeowners.dwelling.number_of_units: {new: "buildings[].number_of_units"}
+  # leatherstocking/homeowners.yaml:occupancy; liberty_mutual/homeowners.yaml:occupancy; north_country/homeowners.yaml:occupancy
+  homeowners.dwelling.occupancy_type: {new: "buildings[].occupancy"}
+  # travelers/homeowners.yaml:principal_unit_at_risk
+  homeowners.dwelling.principal_unit_at_risk: {overflow: "Principal Unit at Risk"}
+  # leatherstocking/homeowners.yaml:protection_class; liberty_mutual/homeowners.yaml:protection_class; madison_mutual/homeowners.yaml:protection_class; midstate/homeowners.yaml:protection_class; north_country/homeowners.yaml:protection_class; travelers/homeowners.yaml:protection_class
+  homeowners.dwelling.protection_class: {new: "locations[].protection_class"}
+  # leatherstocking/homeowners.yaml:protective_devices
+  homeowners.dwelling.protective_devices: {new: "buildings[].protective_devices"}
+  # travelers/homeowners.yaml:roof_age
+  homeowners.dwelling.roof_age: {overflow: "Roof Age"}
+  # travelers/homeowners.yaml:roof_type
+  homeowners.dwelling.roof_type: {new: "buildings[].roof_type"}
+  # travelers/homeowners.yaml:slab_foundation
+  homeowners.dwelling.slab_foundation: {overflow: "Slab Foundation"}
+  # liberty_mutual/homeowners.yaml:square_footage; travelers/homeowners.yaml:square_footage
+  homeowners.dwelling.square_footage: {new: "buildings[].area_sq_ft"}
+  # travelers/homeowners.yaml:swimming_pool
+  homeowners.dwelling.swimming_pool: {overflow: "Swimming Pool"}
+  # travelers/homeowners.yaml:territory_code
+  homeowners.dwelling.territory_code: {new: "locations[].territory"}
+  # travelers/homeowners.yaml:thermostat_controlled_central_heat
+  homeowners.dwelling.thermostat_controlled_central_heat: {overflow: "Thermostat Controlled Central Heat"}
+  # travelers/homeowners.yaml:usage_type
+  homeowners.dwelling.usage_type: {new: "buildings[].occupancy"}
+  # travelers/homeowners.yaml:visibility
+  homeowners.dwelling.visibility: {overflow: "Visibility"}
+  # leatherstocking/homeowners.yaml:year_built; liberty_mutual/homeowners.yaml:year_built; madison_mutual/homeowners.yaml:year_built; north_country/homeowners.yaml:year_built; travelers/homeowners.yaml:year_built
+  homeowners.dwelling.year_built: {new: "buildings[].year_built"}
+  # travelers/homeowners.yaml:schedules.liability_coverages
+  homeowners.liability_coverage_schedule: {new: "coverages"}
+  # leatherstocking/homeowners.yaml:schedules.mortgagees; midstate/homeowners.yaml:schedules.mortgagees; nycm/homeowners.yaml:mortgagees; travelers/homeowners.yaml:schedules.mortgagees
+  homeowners.mortgagees: {new: "interested_parties"}
+  # travelers/homeowners.yaml:schedules.optional_coverages_priced
+  homeowners.optional_coverage_premium_schedule: {new: "coverages"}
+  # travelers/homeowners.yaml:schedules.optional_coverages
+  homeowners.optional_endorsement_coverages: {new: "coverages"}
+  # midstate/homeowners.yaml:fire_district; travelers/homeowners.yaml:fire_district
+  homeowners.rating_characteristics.fire_district: {new: "locations[].fire_district"}
+  # leatherstocking/homeowners.yaml:territorial_zone
+  homeowners.rating_characteristics.territorial_zone: {new: "locations[].territory"}
+  # leatherstocking/homeowners.yaml:vandalism_option
+  homeowners.rating_characteristics.vandalism_malicious_mischief_option: {overflow: "Vandalism and Malicious Mischief"}
+  # travelers/homeowners.yaml:schedules.remark_lines
+  homeowners.remarks: {overflow: "Remarks"}
+  # midstate/homeowners.yaml:schedules.locations
+  homeowners.scheduled_locations: {new: "locations"}
+  # midstate/homeowners.yaml:schedules.other_structures
+  homeowners.scheduled_other_structures: {new: "buildings"}
+  # nycm/homeowners.yaml:scheduled_personal_property
+  homeowners.scheduled_personal_property: {new: "scheduled_items"}
+  # travelers/homeowners.yaml:schedules.property_additional_coverages
+  homeowners.section_i_property_coverages.additional_coverages: {new: "coverages"}
+  # travelers/homeowners.yaml:coverage_a_dwelling_limit
+  homeowners.section_i_property_coverages.coverage_a_dwelling_limit: {new: "coverages[coverage_code=HO_COV_A].limits[limit_type=per_occurrence].amount"}
+  # travelers/homeowners.yaml:coverage_b_other_structures_limit
+  homeowners.section_i_property_coverages.coverage_b_other_structures_limit: {new: "coverages[coverage_code=HO_COV_B].limits[limit_type=per_occurrence].amount"}
+  # travelers/homeowners.yaml:coverage_c_personal_property_limit
+  homeowners.section_i_property_coverages.coverage_c_personal_property_limit: {new: "coverages[coverage_code=HO_COV_C].limits[limit_type=per_occurrence].amount"}
+  # travelers/homeowners.yaml:coverage_d_loss_of_use_limit
+  homeowners.section_i_property_coverages.coverage_d_loss_of_use_limit: {new: "coverages[coverage_code=X_LOSS_OF_USE].limits[limit_type=per_occurrence].amount"}
+  # travelers/homeowners.yaml:loss_assessment_limit
+  homeowners.section_i_property_coverages.loss_assessment_limit: {new: "coverages[coverage_code=HO_LOSS_ASSESSMENT].limits[limit_type=per_occurrence].amount"}
+  # leatherstocking/homeowners.yaml:loss_settlement; north_country/homeowners.yaml:settlement
+  homeowners.section_i_property_coverages.loss_settlement_basis: {new: "coverages[].valuation"}
+  # travelers/homeowners.yaml:ordinance_or_law_limit
+  homeowners.section_i_property_coverages.ordinance_or_law_limit: {new: "coverages[coverage_code=X_ORDINANCE_LAW].limits[limit_type=per_occurrence].amount"}
+  # travelers/homeowners.yaml:ordinance_or_law_percentage
+  homeowners.section_i_property_coverages.ordinance_or_law_percentage: {new: "coverages[coverage_code=X_ORDINANCE_LAW].limits[limit_type=per_occurrence].percentage"}
+  # travelers/homeowners.yaml:schedules.liability_additional_coverages
+  homeowners.section_ii_liability_coverages.additional_coverages: {new: "coverages"}
+  # travelers/homeowners.yaml:coverage_e_personal_liability_limit
+  homeowners.section_ii_liability_coverages.coverage_e_personal_liability_limit: {new: "coverages[coverage_code=X_PERSONAL_LIABILITY].limits[limit_type=per_occurrence].amount"}
+  # travelers/homeowners.yaml:coverage_f_medical_payments_limit
+  homeowners.section_ii_liability_coverages.coverage_f_medical_payments_limit: {new: "coverages[coverage_code=X_MED_PAY].limits[limit_type=per_person].amount"}
+  # travelers/homeowners.yaml:damage_to_property_of_others_limit
+  homeowners.section_ii_liability_coverages.damage_to_property_of_others_limit: {new: "coverages[coverage_code=HO_DAMAGE_TO_PROPERTY_OF_OTHERS].limits[limit_type=per_occurrence].amount"}
+  # leatherstocking/homeowners.yaml:liability_coverage_form
+  homeowners.section_ii_liability_coverages.liability_coverage_type: {new: "coverages[coverage_code=X_PERSONAL_LIABILITY].coverage_name"}
+  # midstate/homeowners.yaml:schedules.special_limits; travelers/homeowners.yaml:schedules.special_limits
+  homeowners.special_limits_of_liability: {new: "coverages[coverage_code=HO_SPECIAL_LIMITS].limits"}
+  # leatherstocking/homeowners.yaml:schedules.additional_interests
+  interested_parties: {new: "interested_parties"}
+  # nycm/homeowners.yaml:locations; travelers/homeowners.yaml:schedules.location
+  locations: {new: "locations"}
+  # nycm/homeowners.yaml:named_insureds; travelers/homeowners.yaml:schedules.additional_named_insureds
+  named_insured.additional_named_insureds: {new: "named_insured.additional_named_insureds"}
+  # travelers/homeowners.yaml:insured_email
+  named_insured.contact.email: {new: "named_insured.email"}
+  # travelers/homeowners.yaml:insured_phone
+  named_insured.contact.phone: {new: "named_insured.phone"}
+  # travelers/homeowners.yaml:insured_person_name
+  named_insured.contact_name: {new: "named_insured.additional_named_insureds[].name"}
+  # travelers/homeowners.yaml:insured_date_of_birth
+  named_insured.date_of_birth: {new: "named_insured.date_of_birth"}
+  # liberty_mutual/homeowners.yaml:mailing_address; travelers/homeowners.yaml:mailing_address
+  named_insured.mailing_address: {new: "named_insured.mailing_address"}
+  # travelers/homeowners.yaml:name_as_printed
+  named_insured.name_as_printed: {new: "named_insured.primary_name"}
+  # nycm/homeowners.yaml:occupation_name
+  named_insured.occupation: {new: "named_insured.occupation"}
+  # leatherstocking/homeowners.yaml:insured_name; liberty_mutual/homeowners.yaml:named_insured; madison_mutual/homeowners.yaml:insured_name; midstate/homeowners.yaml:insured_name; north_country/homeowners.yaml:insured_name; nycm/homeowners.yaml:insured_name
+  named_insured.primary_name: {new: "named_insured.primary_name"}
+  # travelers/homeowners.yaml:billing_account; travelers/homeowners.yaml:billing_account_number
+  policy.account_id: {new: "billing.account_number"}
+  # travelers/homeowners.yaml:contract; travelers/homeowners.yaml:contract_number
+  policy.certificate_number: {new: "policy.certificate_number"}
+  # liberty_mutual/homeowners.yaml:effective_date; madison_mutual/homeowners.yaml:effective_date; north_country/homeowners.yaml:effective_date
+  policy.effective_date: {new: "policy.effective_date"}
+  # leatherstocking/homeowners.yaml:effective_time; midstate/homeowners.yaml:effective_time
+  policy.effective_time: {overflow: "Effective Time"}
+  # liberty_mutual/homeowners.yaml:expiration_date; madison_mutual/homeowners.yaml:expiration_date
+  policy.expiration_date: {new: "policy.expiration_date"}
+  # travelers/homeowners.yaml:original_inception_date
+  policy.original_inception_date: {new: "policy.original_inception_date"}
+  # leatherstocking/homeowners.yaml:policy_form_name; madison_mutual/homeowners.yaml:policy_form_name
+  policy.policy_form_name: {new: "policy.policy_type"}
+  # leatherstocking/homeowners.yaml:policy_form_number; liberty_mutual/homeowners.yaml:form_number; madison_mutual/homeowners.yaml:policy_form_number; north_country/homeowners.yaml:form_number; nycm/homeowners.yaml:form_number; plymouth/homeowners.yaml:form_number
+  policy.policy_form_number: {new: "lob_parts[].coverage_part_form"}
+  # liberty_mutual/homeowners.yaml:policy_number; madison_mutual/homeowners.yaml:policy_number; travelers/homeowners.yaml:policy_number_a
+  policy.policy_number: {new: "policy.policy_number"}
+  # plymouth/homeowners.yaml:policy_term
+  policy.policy_term_as_printed: {overflow: "Policy Term"}
+  # liberty_mutual/homeowners.yaml:term_months
+  policy.policy_term_months: {new: "policy.term_months"}
+  # travelers/homeowners.yaml:policy_type
+  policy.policy_type: {new: "policy.policy_type"}
+  # travelers/homeowners.yaml:program_name
+  policy.program_name: {overflow: "Program Name"}
+  # travelers/homeowners.yaml:state_code
+  policy.rating_state: {new: "policy.rating_state"}
+  # leatherstocking/homeowners.yaml:coverage_premium
+  premium.basic_premium: {new: "premium.items[].amount"}
+  # travelers/homeowners.yaml:coverage_premium
+  premium.coverage_premium: {new: "premium.items[].amount"}
+  # midstate/homeowners.yaml:fire_fee
+  premium.fire_fee: {new: "premium.taxes_fees[].amount"}
+  # travelers/homeowners.yaml:premium_change
+  premium.premium_change: {new: "premium.change"}
+  # north_country/homeowners.yaml:return_premium
+  premium.return_premium: {new: "premium.change"}
+  # leatherstocking/homeowners.yaml:fees_amount
+  premium.taxes_and_fees: {new: "premium.taxes_fees[].amount"}
+  # travelers/homeowners.yaml:total_discount_amount
+  premium.total_discount_amount: {overflow: "Total Discount Amount"}
+  # leatherstocking/homeowners.yaml:total_premium; liberty_mutual/homeowners.yaml:total_premium; madison_mutual/homeowners.yaml:total_premium; midstate/homeowners.yaml:total_premium; north_country/homeowners.yaml:total_premium; plymouth/homeowners.yaml:annual_policy_premium
+  premium.total_policy_premium: {new: "premium.total"}
+  # leatherstocking/homeowners.yaml:agent_address; midstate/homeowners.yaml:agent_address; travelers/homeowners.yaml:agent_address
+  producer.address: {new: "producer.address"}
+  # leatherstocking/homeowners.yaml:agency_name; madison_mutual/homeowners.yaml:agency_name; midstate/homeowners.yaml:agency_name; north_country/homeowners.yaml:agency_name; plymouth/homeowners.yaml:agency_name
+  producer.agency_name: {new: "producer.agency_name"}
+  # travelers/homeowners.yaml:commission_percentage
+  producer.commission_percentage: {overflow: "Commission Percentage"}
+  # leatherstocking/homeowners.yaml:agency_fax; midstate/homeowners.yaml:agency_fax; travelers/homeowners.yaml:agency_fax
+  producer.contact.fax: {new: "producer.fax"}
+  # leatherstocking/homeowners.yaml:agency_phone; midstate/homeowners.yaml:agency_phone; travelers/homeowners.yaml:policy_service_phone
+  producer.contact.phone: {new: "producer.phone"}
+  # nycm/homeowners.yaml:agent_number; plymouth/homeowners.yaml:agent_number
+  producer.producer_code: {new: "producer.producer_code"}
+  # travelers/homeowners.yaml:producer_sub_code; travelers/homeowners.yaml:sub_code
+  producer.producer_sub_code: {overflow: "Producer Sub-Code"}

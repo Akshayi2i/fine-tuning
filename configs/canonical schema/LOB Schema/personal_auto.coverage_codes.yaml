@@ -1,0 +1,376 @@
+# SPEC_21 4.2.4 coverage codes of personal_auto (schema 1.0.0, common model 1.0.0).
+# Built from all 20 seed golds of 9 carriers (AEIC, Foremost Insurance Company, Hagerty Insurance, MAPFRE Insurance Company, Mercury Insurance Company, NYCM Insurance, Plymouth, Progressive, Travelers).
+# aliases: coverage names as the seeds print them (whitespace collapsed; a dash the text layer has no
+# Unicode for is written '-'). Codes are LOB-prefixed (PA_); a coverage the common model shares across
+# lines uses its X_ code (common_model.json fideon:shared_coverage_codes); shared: true marks those.
+# carriers: how many of the line's carriers print the coverage. replaces_draft_codes: codes used by the
+# engine-test seed golds for the same coverage; those golds are re-coded at seed review (see CHANGELOG).
+lob: personal_auto
+schema_version: 1.0.0
+common_model_version: 1.0.0
+code_prefix: PA_
+codes:
+- code: PA_ADDITIONAL_DEATH_BENEFITS
+  name: ADDITIONAL DEATH BENEFITS
+  aliases:
+  - ADDITIONAL DEATH BENEFITS
+  - DEATH BENEFIT
+  default_limit_types:
+  - per_person
+  carriers: 1
+  replaces_draft_codes:
+  - X_PIP
+- code: PA_ADDITIONAL_PIP
+  name: Additional personal injury protection (APIP)
+  aliases:
+  - Additional Personal Injury Protection
+  - ADDITIONAL PERSONAL INJURY PROTECTION (PIP)
+  - Added PIP
+  - Added Personal Injury Protection Benefits
+  - Additional PIP
+  - Additional Personal Injury Protection - Full
+  - BROADENED ADDITIONAL PIP
+  - INCREASED PIP
+  default_limit_types:
+  - per_occurrence
+  - per_person
+  - per_day
+  - sublimit
+  - other
+  carriers: 6
+  note: 'Kept apart from X_PIP: NY policies print basic PIP, OBEL and APIP as separate coverages with their own limits and
+    premiums (CR-PA-01).'
+  replaces_draft_codes:
+  - PA_ADDED_PIP
+  - PA_ADDITIONAL_PERSONAL_INJURY_PROTECTION
+  - X_PIP
+- code: PA_AGGREGATE_DEATH_BENEFITS
+  name: AGGREGATE DEATH BENEFITS
+  aliases:
+  - AGGREGATE DEATH BENEFITS
+  default_limit_types:
+  - aggregate
+  carriers: 1
+- code: PA_AGGREGATE_NO_FAULT_BENEFITS_AVAILABLE
+  name: Aggregate no-fault benefits available
+  aliases:
+  - AGGREGATE NO FAULT BENEFITS AVAILABLE
+  - Aggregate No-Fault Coverage
+  - Total No-Fault Benefits Available
+  default_limit_types:
+  - aggregate
+  - per_person
+  - per_day
+  - sublimit
+  - other
+  carriers: 3
+  replaces_draft_codes:
+  - PA_TOTAL_NO_FAULT_BENEFITS
+  - X_PIP
+- code: PA_AGREED_VALUE
+  name: Agreed value (classic auto)
+  aliases:
+  - AGREED VALUE
+  default_limit_types: []
+  carriers: 1
+- code: PA_ASSURANCE_PLUS
+  name: Assurance Plus Package
+  aliases:
+  - Assurance Plus Package
+  default_limit_types: []
+  carriers: 1
+- code: PA_CUSTOMIZING
+  name: CUSTOMIZING
+  aliases:
+  - CUSTOMIZING
+  default_limit_types:
+  - per_occurrence
+  - other
+  carriers: 1
+- code: PA_EXCESS_EQUIPMENT
+  name: EXCESS EQUIPMENT
+  aliases:
+  - EXCESS EQUIPMENT
+  default_limit_types: []
+  carriers: 1
+- code: PA_EXTENDED_NON_OWNED
+  name: EXTENDED NON- OWNED
+  aliases:
+  - EXTENDED NON- OWNED
+  default_limit_types: []
+  carriers: 1
+- code: PA_FULL_GLASS
+  name: FULL COVERAGE WINDOW GLASS
+  aliases:
+  - FULL COVERAGE WINDOW GLASS
+  - Full Glass Coverage
+  - No deductible for glass
+  default_limit_types: []
+  carriers: 3
+  replaces_draft_codes:
+  - PA_FULL_COVERAGE_WINDOW_GLASS
+- code: PA_NEW_CAR_REPLACEMENT
+  name: NEW CAR REPLACEMENT
+  aliases:
+  - NEW CAR REPLACEMENT
+  default_limit_types: []
+  carriers: 1
+- code: PA_OEM_PARTS
+  name: OEM PARTS
+  aliases:
+  - OEM PARTS
+  default_limit_types: []
+  carriers: 1
+  replaces_draft_codes:
+  - PA_OEM
+- code: PA_OPTIONAL_BASIC_ECONOMIC_LOSS
+  name: Optional basic economic loss (OBEL)
+  aliases:
+  - Optional Basic Economic Loss
+  - OBEL
+  - OPTIONAL BASIC ECONOMIC LOSS
+  default_limit_types:
+  - per_occurrence
+  - per_person
+  - other
+  carriers: 5
+  note: Kept apart from X_PIP (CR-PA-01).
+  replaces_draft_codes:
+  - X_PIP
+- code: PA_OUT_OF_STATE_PERSONAL_INJURY_PROTECTION
+  name: OUT OF STATE PERSONAL INJURY PROTECTION (PIP)
+  aliases:
+  - OUT OF STATE PERSONAL INJURY PROTECTION (PIP)
+  - OUT OF STATE PIP
+  default_limit_types:
+  - per_occurrence
+  - per_person
+  - other
+  carriers: 1
+  replaces_draft_codes:
+  - X_PIP
+- code: PA_PERSONAL_ARTICLES
+  name: PERSONAL ARTICLES COVERAGE
+  aliases:
+  - PERSONAL ARTICLES COVERAGE
+  default_limit_types:
+  - per_accident
+  - other
+  carriers: 1
+  replaces_draft_codes:
+  - PA_PERSONAL_ARTICLES_COVERAGE
+- code: PA_PET_INJURY
+  name: PET INJURY COVERAGE
+  aliases:
+  - PET INJURY COVERAGE
+  default_limit_types:
+  - per_occurrence
+  - per_accident
+  - other
+  carriers: 1
+  replaces_draft_codes:
+  - PA_PET_INJURY_COVERAGE
+- code: PA_SPARE_PARTS
+  name: Spare parts (classic auto)
+  aliases:
+  - Spare Parts
+  default_limit_types:
+  - other
+  carriers: 1
+- code: PA_SUPPLEMENTAL_SPOUSAL_LIABILITY
+  name: Supplemental spousal liability
+  aliases:
+  - Spousal Liability
+  - Supplemental Spousal Liability
+  - Including Supplemental Spousal
+  - SUPP SPOUSAL LIAB
+  default_limit_types: []
+  carriers: 7
+  note: Shared code proposed (CR-PA-02).
+  replaces_draft_codes:
+  - PA_SUPP_SPOUSAL_LIAB
+- code: PA_TAPES_DISCS_MEDIA
+  name: TAPES/DISCS & MEDIA
+  aliases:
+  - TAPES/DISCS & MEDIA
+  default_limit_types: []
+  carriers: 1
+  replaces_draft_codes:
+  - PA_MEDIA
+- code: PA_TRAVELING_COLLECTOR
+  name: Traveling collector endorsement (classic auto)
+  aliases:
+  - Traveling Collector Endorsement
+  default_limit_types: []
+  carriers: 1
+- code: PA_TRIP_INTERRUPTION
+  name: TRAVEL - TRIP INTERRUPTION (FAMILY PLUS)
+  aliases:
+  - TRAVEL - TRIP INTERRUPTION (FAMILY PLUS)
+  - TRIP INTERRUPTION
+  default_limit_types:
+  - aggregate
+  - per_day
+  - other
+  carriers: 1
+  replaces_draft_codes:
+  - PA_TRAVEL_TRIP_INTERRUPTION
+- code: PA_UMPD
+  name: UNINSURED MOTORISTS PROPERTY DAMAGE
+  aliases:
+  - UNINSURED MOTORISTS PROPERTY DAMAGE
+  default_limit_types:
+  - property_damage
+  carriers: 1
+- code: PA_UNLICENSED_HOUSEHOLD_MEMBERS_19
+  name: UNLICENSED HOUSEHOLD MEMBERS < 19
+  aliases:
+  - UNLICENSED HOUSEHOLD MEMBERS < 19
+  default_limit_types:
+  - other
+  carriers: 1
+- code: PA_VEHICLE_UNDER_CONSTRUCTION
+  name: Vehicle under construction endorsement (classic auto)
+  aliases:
+  - Vehicle Under Construction Endorsement
+  default_limit_types: []
+  carriers: 1
+- code: X_COLLISION
+  name: Collision
+  aliases:
+  - Collision
+  - COLLISION
+  - COLLISION LOSS
+  - Collision Less Deductible
+  default_limit_types:
+  - other
+  shared: true
+  carriers: 8
+- code: X_COMPREHENSIVE
+  name: Comprehensive / other than collision
+  aliases:
+  - Comprehensive
+  - COMPREHENSIVE - FULL GLASS
+  - Comprehensive Less Deductible
+  - OTHER THAN COLL
+  - OTHER THAN COLLISION LOSS
+  default_limit_types:
+  - other
+  shared: true
+  carriers: 8
+- code: X_MED_PAY
+  name: Medical payments
+  aliases:
+  - Medical Payments
+  - MEDICAL PAYMENTS
+  - Medical Expense Limit
+  default_limit_types:
+  - per_occurrence
+  - per_person
+  - per_accident
+  shared: true
+  carriers: 5
+- code: X_PIP
+  name: Personal injury protection / no-fault
+  aliases:
+  - Mandatory Personal Injury Protection
+  - Personal Injury Protection
+  - Mandatory PIP
+  - PERSONAL INJURY PROTECTION (PIP)
+  - PIP DEDUCTIBLE
+  - Personal Injury Protection Benefits
+  default_limit_types:
+  - aggregate
+  - per_person
+  - per_day
+  - sublimit
+  - other
+  shared: true
+  carriers: 8
+- code: X_RENTAL
+  name: Rental reimbursement / transportation expense
+  aliases:
+  - Rental Reimbursement
+  - Substitute Transportation
+  - Extended Transportation Expenses
+  - OPTIONAL LIMITS TRANSPORTATION EXPENSES COVERAGE
+  - Rental Vehicle Coverage
+  - TRANSPORTATION EXP
+  - TRAVEL - TRANSPORTATION EXPENSES (FAMILY PLUS)
+  default_limit_types:
+  - aggregate
+  - per_accident
+  - per_day
+  shared: true
+  carriers: 7
+  replaces_draft_codes:
+  - PA_RENTAL_VEHICLE
+- code: X_TOWING
+  name: Towing and roadside assistance
+  aliases:
+  - Roadside Assistance
+  - Roadside Assistance Coverage
+  - TRAVEL - ROADSIDE ASSISTANCE (FAMILY PLUS)
+  - Towing and Labor Limit
+  default_limit_types:
+  - per_occurrence
+  - per_disablement
+  - other
+  shared: true
+  carriers: 6
+  replaces_draft_codes:
+  - PA_ROADSIDE_ASSISTANCE
+  - PA_TOWING_LABOR
+- code: X_UIM
+  name: Underinsured / supplementary uninsured motorist
+  aliases:
+  - STAT/SUM
+  - SUPPLEMENTARY UNINSURED/UNDERINSURED MOTORISTS (SUM)
+  - SUPPLEMENTARY UNINSURED/UNDERINSURED MOTORISTS*
+  - Supplementary Uninsured/ Underinsured Motorists (SUM)
+  - Supplementary Uninsured/ Underinsured Motorists Coverage
+  - Supplementary Uninsured/Underinsured Motorist
+  - Uninsured/Underinsured Motorist
+  default_limit_types:
+  - per_person
+  - per_accident
+  - combined_single
+  shared: true
+  carriers: 7
+- code: X_UM
+  name: Uninsured motorist / boater
+  aliases:
+  - Basic UM
+  - UNINSURED/UNDERINSURED MOTORISTS
+  default_limit_types:
+  - per_person
+  - per_accident
+  - combined_single
+  shared: true
+  carriers: 2
+- code: X_VEHICLE_LIABILITY
+  name: Liability (bodily injury and property damage) for an auto, motorcycle, RV or boat
+  aliases:
+  - Bodily Injury
+  - Property Damage
+  - Bodily Injury Liability
+  - Property Damage Liability
+  - BODILY INJURY SPLIT LIMITS
+  - Liability To Others
+  default_limit_types:
+  - per_person
+  - per_accident
+  - property_damage
+  - combined_single
+  shared: true
+  carriers: 8
+shared_codes_used:
+- X_COLLISION
+- X_COMPREHENSIVE
+- X_MED_PAY
+- X_PIP
+- X_RENTAL
+- X_TOWING
+- X_UIM
+- X_UM
+- X_VEHICLE_LIABILITY

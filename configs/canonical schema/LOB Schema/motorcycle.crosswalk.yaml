@@ -1,0 +1,9 @@
+# SPEC_21 4.7 crosswalk for motorcycle: every canonical_path declared by the line's policy registry YAMLs
+# (config/document_registry/policy/*/motorcycle.yaml) -> the SPEC_21 schema 1.0.0.
+# new: same concept at its SPEC_21 path; overflow: an additional_fields entry with that label;
+# drop: not a value (needs reviewer approval). Paths already under additional_fields keep their label.
+# Each entry names the registry fields that declare it. Applied by tools/registry_migrate.py --lob motorcycle.
+lob: motorcycle
+from_schema: "1.5.0"
+to_schema: "1.0.0"
+paths: {}   # the line's registry YAMLs declare no canonical_path (field_map has none)

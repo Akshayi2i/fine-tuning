@@ -1,0 +1,195 @@
+# SPEC_21 4.2.4 coverage codes of ocean_marine (schema 1.0.0, common model 1.0.0).
+# Built from all 4 seed golds of 3 carriers (Markel American Insurance Company, Progressive, Travelers).
+# aliases: coverage names as the seeds print them (whitespace collapsed; a dash the text layer has no
+# Unicode for is written '-'). Codes are LOB-prefixed (OM_); a coverage the common model shares across
+# lines uses its X_ code (common_model.json fideon:shared_coverage_codes); shared: true marks those.
+# carriers: how many of the line's carriers print the coverage. replaces_draft_codes: codes used by the
+# engine-test seed golds for the same coverage; those golds are re-coded at seed review (see CHANGELOG).
+lob: ocean_marine
+schema_version: 1.0.0
+common_model_version: 1.0.0
+code_prefix: OM_
+codes:
+- code: OM_AGREED_VALUE_HULL
+  name: Agreed Value Loss Settlement - Hull
+  aliases:
+  - Agreed Value Loss Settlement - Hull
+  default_limit_types: []
+  carriers: 1
+- code: OM_AGREED_VALUE_MACHINERY
+  name: Agreed Value Loss Settlement - Machinery
+  aliases:
+  - Agreed Value Loss Settlement - Machinery
+  default_limit_types: []
+  carriers: 1
+- code: OM_COASTAL_NAVIGATION
+  name: Coastal Navigation
+  aliases:
+  - Coastal Navigation
+  default_limit_types:
+  - other
+  carriers: 1
+- code: OM_DISAPPEARING_DEDUCTIBLE
+  name: Disappearing / diminishing deductible
+  aliases:
+  - Diminishing Deductible
+  - Disappearing Deductible
+  default_limit_types: []
+  carriers: 2
+- code: OM_DRIVE_SYSTEM_PROTECTION
+  name: Drive System Protect Plus Coverage
+  aliases:
+  - Drive System Protect Plus Coverage
+  default_limit_types: []
+  carriers: 1
+- code: OM_FUEL_SPILL_LIABILITY
+  name: Fuel spill / oil pollution liability
+  aliases:
+  - Accidental Fuel Spill Liability Coverage
+  - Fuel Spill Liability
+  - Oil Pollution Liability
+  default_limit_types:
+  - per_occurrence
+  carriers: 3
+- code: OM_HAUL_OUT_EXPENSE
+  name: Hurricane/Tsunami Haul Out Expense Reimbursement
+  aliases:
+  - Hurricane/Tsunami Haul Out Expense Reimbursement
+  default_limit_types:
+  - per_occurrence
+  - aggregate
+  - other
+  carriers: 1
+- code: OM_MARINE_ELECTRONICS
+  name: Marine Electronics
+  aliases:
+  - Marine Electronics
+  default_limit_types: []
+  carriers: 1
+- code: OM_NEW_BOAT_REPLACEMENT
+  name: New Boat Replacement Coverage
+  aliases:
+  - New Boat Replacement Coverage
+  default_limit_types: []
+  carriers: 1
+- code: OM_ON_WATER_TOWING
+  name: On-water towing (Sign & Glide)
+  aliases:
+  - Sign & Glide®
+  default_limit_types: []
+  carriers: 1
+- code: OM_PERSONAL_PROPERTY
+  name: Personal effects / personal property
+  aliases:
+  - Personal Effects
+  - Personal Property Coverage
+  default_limit_types:
+  - per_occurrence
+  - other
+  carriers: 2
+- code: OM_PROPULSION_PLUS
+  name: Propulsion Plus®
+  aliases:
+  - Propulsion Plus®
+  default_limit_types: []
+  carriers: 1
+- code: OM_REPLACEMENT_COST_PERSONAL_EFFECTS
+  name: Replacement Cost Personal Effects
+  aliases:
+  - Replacement Cost Personal Effects
+  default_limit_types:
+  - other
+  carriers: 1
+- code: OM_TRAILER
+  name: Trailer
+  aliases:
+  - Trailer
+  default_limit_types: []
+  carriers: 1
+- code: OM_WATERCRAFT_EQUIPMENT
+  name: Watercraft and equipment (hull) physical damage
+  aliases:
+  - Watercraft & Equipment, Agreed Value
+  - Watercraft and Auxiliary Equipment Coverage
+  default_limit_types:
+  - per_occurrence
+  - other
+  carriers: 2
+- code: OM_WRECKAGE_REMOVAL
+  name: Wreckage Removal
+  aliases:
+  - Wreckage Removal
+  default_limit_types: []
+  carriers: 1
+- code: X_COLLISION
+  name: Collision
+  aliases:
+  - Collision
+  default_limit_types:
+  - other
+  shared: true
+  carriers: 1
+- code: X_COMPREHENSIVE
+  name: Comprehensive / other than collision
+  aliases:
+  - Comprehensive
+  default_limit_types:
+  - other
+  shared: true
+  carriers: 1
+- code: X_MED_PAY
+  name: Medical payments
+  aliases:
+  - Medical Payments
+  - Medical Payments Coverage
+  default_limit_types:
+  - per_occurrence
+  - per_person
+  - per_accident
+  shared: true
+  carriers: 3
+- code: X_TOWING
+  name: Towing and roadside assistance
+  aliases:
+  - Commercial Towing and Assistance Coverage
+  - Emergency Towing and Assist
+  - Roadside Assistance
+  default_limit_types:
+  - per_occurrence
+  - sublimit
+  - other
+  shared: true
+  carriers: 3
+- code: X_UM
+  name: Uninsured motorist / boater
+  aliases:
+  - Uninsured Boater Coverage
+  - Uninsured Watercraft
+  default_limit_types:
+  - per_occurrence
+  - per_person
+  - per_accident
+  - combined_single
+  shared: true
+  carriers: 3
+- code: X_VEHICLE_LIABILITY
+  name: Liability (bodily injury and property damage) for an auto, motorcycle, RV or boat
+  aliases:
+  - Liability (Protection and Indemnity) Coverage
+  - Liability To Others
+  - Watercraft Liability
+  default_limit_types:
+  - per_occurrence
+  - per_person
+  - per_accident
+  - property_damage
+  - combined_single
+  shared: true
+  carriers: 3
+shared_codes_used:
+- X_COLLISION
+- X_COMPREHENSIVE
+- X_MED_PAY
+- X_TOWING
+- X_UM
+- X_VEHICLE_LIABILITY

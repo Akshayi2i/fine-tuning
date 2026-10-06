@@ -1,0 +1,35 @@
+# SPEC_21 4.2.4 coverage codes of personal_umbrella (schema 1.0.0, common model 1.0.0).
+# Built from all 4 seed golds of 2 carriers (NYCM Insurance, Plymouth).
+# aliases: coverage names as the seeds print them (whitespace collapsed; a dash the text layer has no
+# Unicode for is written '-'). Codes are LOB-prefixed (PU_); a coverage the common model shares across
+# lines uses its X_ code (common_model.json fideon:shared_coverage_codes); shared: true marks those.
+# carriers: how many of the line's carriers print the coverage. replaces_draft_codes: codes used by the
+# engine-test seed golds for the same coverage; those golds are re-coded at seed review (see CHANGELOG).
+lob: personal_umbrella
+schema_version: 1.0.0
+common_model_version: 1.0.0
+code_prefix: PU_
+codes:
+- code: PU_EXCESS_UM_UIM
+  name: Excess uninsured / underinsured motorists
+  aliases:
+  - EXCESS UNINSURED/UNDERINSURED MOTORIST LIMIT
+  default_limit_types:
+  - other
+  carriers: 1
+- code: PU_INCIDENTAL_OCCUPANCY
+  name: Permitted incidental occupancies
+  aliases:
+  - PERSONAL UMBRELLA LIABILITY POLICY - PERMITTED INCIDENTAL OCCUPANCIES
+  default_limit_types: []
+  carriers: 1
+- code: PU_LIABILITY
+  name: Personal umbrella liability
+  aliases:
+  - Liability Limit
+  - Liability Per Occurrence
+  - Liability Per Occurrence*
+  default_limit_types:
+  - per_occurrence
+  carriers: 2
+shared_codes_used: []

@@ -1,0 +1,149 @@
+# SPEC_21 4.7 crosswalk for personal_auto: every canonical_path declared by the line's policy registry YAMLs
+# (config/document_registry/policy/*/personal_auto.yaml, config/document_registry/policy/*/classic_auto.yaml) -> the SPEC_21 schema 1.0.0.
+# new: same concept at its SPEC_21 path; overflow: an additional_fields entry with that label;
+# drop: not a value (needs reviewer approval). Paths already under additional_fields keep their label.
+# Each entry names the registry fields that declare it. Applied by tools/registry_migrate.py --lob personal_auto.
+lob: personal_auto
+from_schema: "1.5.0"
+to_schema: "1.0.0"
+paths:
+  # nycm/personal_auto.yaml:coded_score
+  additional_fields.coded_score: {overflow: "coded_score"}
+  # nycm/personal_auto.yaml:ordered_date; nycm/personal_auto.yaml:ordereddate
+  additional_fields.credit_report_ordered_date: {overflow: "credit_report_ordered_date"}
+  # nycm/personal_auto.yaml:anti_lock_brakes; nycm/personal_auto.yaml:anti_lockbrakes
+  additional_fields.discount_anti_lock_brakes: {overflow: "discount_anti_lock_brakes"}
+  # nycm/personal_auto.yaml:anti_theft_device; nycm/personal_auto.yaml:anti_theftdevice
+  additional_fields.discount_anti_theft_device: {overflow: "discount_anti_theft_device"}
+  # nycm/personal_auto.yaml:claims_free_discount; nycm/personal_auto.yaml:claimsfreediscount
+  additional_fields.discount_claims_free: {overflow: "discount_claims_free"}
+  # nycm/personal_auto.yaml:daytime_running_lamps; nycm/personal_auto.yaml:daytimerunninglamps
+  additional_fields.discount_daytime_running_lamps: {overflow: "discount_daytime_running_lamps"}
+  # nycm/personal_auto.yaml:home_ownership; nycm/personal_auto.yaml:homeownership
+  additional_fields.discount_home_ownership: {overflow: "discount_home_ownership"}
+  # nycm/personal_auto.yaml:new_car_discount; nycm/personal_auto.yaml:newcardiscount
+  additional_fields.discount_new_car: {overflow: "discount_new_car"}
+  # nycm/personal_auto.yaml:paid_in_full_discount; nycm/personal_auto.yaml:paidinfull_discount
+  additional_fields.discount_paid_in_full: {overflow: "discount_paid_in_full"}
+  # nycm/personal_auto.yaml:passive_restraint; nycm/personal_auto.yaml:passiverestraint
+  additional_fields.discount_passive_restraint: {overflow: "discount_passive_restraint"}
+  # nycm/personal_auto.yaml:premises
+  additional_fields.premises_business_use: {overflow: "premises_business_use"}
+  # nycm/personal_auto.yaml:quoted_pro_rated_premium_amount
+  additional_fields.quoted_pro_rated_premium: {overflow: "quoted_pro_rated_premium"}
+  # nycm/personal_auto.yaml:rated_driver
+  additional_fields.rated_driver_premium: {overflow: "rated_driver_premium"}
+  # nycm/personal_auto.yaml:registeredto
+  additional_fields.registered_to: {overflow: "registered_to"}
+  # nycm/personal_auto.yaml:bi_symbol; nycm/personal_auto.yaml:bisymbol
+  additional_fields.symbol_bodily_injury: {overflow: "symbol_bodily_injury"}
+  # nycm/personal_auto.yaml:coll_symbol
+  additional_fields.symbol_collision: {overflow: "symbol_collision"}
+  # nycm/personal_auto.yaml:csl_symbol
+  additional_fields.symbol_combined_single_limit: {overflow: "symbol_combined_single_limit"}
+  # nycm/personal_auto.yaml:mpsymbol
+  additional_fields.symbol_medical_payments: {overflow: "symbol_medical_payments"}
+  # nycm/personal_auto.yaml:otc_symbol; nycm/personal_auto.yaml:otcsymbol
+  additional_fields.symbol_other_than_collision: {overflow: "symbol_other_than_collision"}
+  # nycm/personal_auto.yaml:pip_symbol; nycm/personal_auto.yaml:pipsymbol
+  additional_fields.symbol_personal_injury_protection: {overflow: "symbol_personal_injury_protection"}
+  # nycm/personal_auto.yaml:pd_symbol; nycm/personal_auto.yaml:pdsymbol
+  additional_fields.symbol_property_damage: {overflow: "symbol_property_damage"}
+  # nycm/personal_auto.yaml:prem
+  additional_fields.vehicle_premium: {overflow: "vehicle_premium"}
+  # plymouth/personal_auto.yaml:schedules.discounts_and_credits
+  auto.discounts: {new: "premium.discounts"}
+  # nycm/personal_auto.yaml:drivers
+  auto.drivers: {new: "drivers"}
+  # nycm/personal_auto.yaml:vehicles
+  auto.vehicles: {new: "vehicles"}
+  # hagerty/classic_auto.yaml:carrier_address; plymouth/personal_auto.yaml:carrier_address
+  carrier.address: {new: "carrier.address"}
+  # hanover/personal_auto.yaml:insurer_name
+  carrier.company_name: {new: "carrier.name"}
+  # hagerty/classic_auto.yaml:insurer_company_structure
+  carrier.company_structure: {overflow: "Company Structure"}
+  # hanover/personal_auto.yaml:state
+  carrier.state_of_issue: {new: "policy.rating_state"}
+  # hagerty/classic_auto.yaml:schedules.declined_coverages
+  classic_auto.declined_coverages: {new: "coverages"}
+  # hagerty/classic_auto.yaml:excluded_persons
+  classic_auto.excluded_persons: {new: "drivers"}
+  # hagerty/classic_auto.yaml:schedules.liability_coverages
+  classic_auto.liability_coverage_schedule: {new: "coverages"}
+  # hagerty/classic_auto.yaml:bodily_injury_per_accident_limit
+  classic_auto.liability_coverages.bodily_injury_per_accident_limit: {new: "coverages[coverage_code=X_VEHICLE_LIABILITY].limits[limit_type=per_accident].amount"}
+  # hagerty/classic_auto.yaml:bodily_injury_per_person_limit
+  classic_auto.liability_coverages.bodily_injury_per_person_limit: {new: "coverages[coverage_code=X_VEHICLE_LIABILITY].limits[limit_type=per_person].amount"}
+  # hagerty/classic_auto.yaml:medical_payments_limit
+  classic_auto.liability_coverages.medical_payments_limit: {new: "coverages[coverage_code=X_MED_PAY].limits[limit_type=per_person].amount"}
+  # hagerty/classic_auto.yaml:property_damage_limit
+  classic_auto.liability_coverages.property_damage_limit: {new: "coverages[coverage_code=X_VEHICLE_LIABILITY].limits[limit_type=property_damage].amount"}
+  # hagerty/classic_auto.yaml:uninsured_motorist_limit
+  classic_auto.liability_coverages.uninsured_motorist_limit: {new: "coverages[coverage_code=X_UIM].limits[limit_type=per_person].amount"}
+  # hagerty/classic_auto.yaml:additional_pip_limit
+  classic_auto.no_fault_benefits.additional_pip_limit: {new: "coverages[coverage_code=PA_ADDITIONAL_PIP].limits[limit_type=per_person].amount"}
+  # hagerty/classic_auto.yaml:aggregate_no_fault_benefits_available
+  classic_auto.no_fault_benefits.aggregate_no_fault_benefits_available: {new: "coverages[coverage_code=X_PIP].limits[limit_type=aggregate].amount"}
+  # hagerty/classic_auto.yaml:death_benefit
+  classic_auto.no_fault_benefits.death_benefit: {new: "coverages[coverage_code=PA_ADDITIONAL_DEATH_BENEFITS].limits[limit_type=per_person].amount"}
+  # hagerty/classic_auto.yaml:mandatory_pip_limit
+  classic_auto.no_fault_benefits.mandatory_pip_limit: {new: "coverages[coverage_code=X_PIP].limits[limit_type=per_person].amount"}
+  # hagerty/classic_auto.yaml:maximum_monthly_work_loss
+  classic_auto.no_fault_benefits.maximum_monthly_work_loss: {new: "coverages[coverage_code=X_PIP].limits[limit_type=sublimit].amount"}
+  # hagerty/classic_auto.yaml:optional_basic_economic_loss_limit
+  classic_auto.no_fault_benefits.optional_basic_economic_loss_limit: {new: "coverages[coverage_code=PA_OPTIONAL_BASIC_ECONOMIC_LOSS].limits[limit_type=per_person].amount"}
+  # hagerty/classic_auto.yaml:other_necessary_expenses_per_day
+  classic_auto.no_fault_benefits.other_necessary_expenses_per_day: {new: "coverages[coverage_code=X_PIP].limits[limit_type=per_day].amount"}
+  # hagerty/classic_auto.yaml:schedules.notices
+  classic_auto.notices_and_enclosures: {drop: "list of enclosed notices: document wording, kept verbatim in text_sections (SPEC_21 4.6); reviewer approval needed"}
+  # hagerty/classic_auto.yaml:schedules.operator_rows
+  classic_auto.operators: {new: "drivers"}
+  # hagerty/classic_auto.yaml:schedules.optional_coverages
+  classic_auto.optional_coverage_schedule: {new: "coverages"}
+  # hagerty/classic_auto.yaml:schedules.physical_damage_coverages
+  classic_auto.physical_damage_coverage_schedule: {new: "coverages"}
+  # hagerty/classic_auto.yaml:collision_deductible
+  classic_auto.physical_damage_coverages.collision_deductible: {new: "coverages[coverage_code=X_COLLISION].deductibles[deductible_type=flat].amount"}
+  # hagerty/classic_auto.yaml:comprehensive_deductible
+  classic_auto.physical_damage_coverages.comprehensive_deductible: {new: "coverages[coverage_code=X_COMPREHENSIVE].deductibles[deductible_type=flat].amount"}
+  # hagerty/classic_auto.yaml:spare_parts_limit
+  classic_auto.physical_damage_coverages.spare_parts_limit: {new: "coverages[coverage_code=PA_SPARE_PARTS].limits[limit_type=other].amount"}
+  # hagerty/classic_auto.yaml:schedules.vehicle_details
+  classic_auto.vehicle_schedule_as_printed: {new: "vehicles"}
+  # nycm/personal_auto.yaml:coverages
+  coverages: {new: "coverages"}
+  # hagerty/classic_auto.yaml:sum_notice
+  document.additional_information: {overflow: "SUM Notice"}
+  # hanover/personal_auto.yaml:line_of_business
+  document.line_of_business_as_stated: {new: "lob_parts[].title"}
+  # hagerty/classic_auto.yaml:print_time
+  document.print_time: {overflow: "Print Time"}
+  # hagerty/classic_auto.yaml:surcharge_notice
+  document.remarks: {overflow: "Surcharge Notice"}
+  # hagerty/classic_auto.yaml:schedules.forms; nycm/personal_auto.yaml:endorsements
+  forms_and_endorsements: {new: "forms_and_endorsements"}
+  # hagerty/classic_auto.yaml:schedules.additional_interests
+  interested_parties: {new: "interested_parties"}
+  # nycm/personal_auto.yaml:locations
+  locations: {new: "locations"}
+  # hagerty/classic_auto.yaml:schedules.additional_named_insureds
+  named_insured.additional_named_insureds: {new: "named_insured.additional_named_insureds"}
+  # nycm/personal_auto.yaml:form_number
+  policy.policy_form_number: {new: "lob_parts[].coverage_part_form"}
+  # hanover/personal_auto.yaml:policy_number
+  policy.policy_number: {new: "policy.policy_number"}
+  # hagerty/classic_auto.yaml:issue_state
+  policy.state_of_issue: {new: "policy.rating_state"}
+  # hagerty/classic_auto.yaml:schedules.discounts
+  premium.discounts_and_credits: {new: "premium.discounts"}
+  # hagerty/classic_auto.yaml:fees
+  premium.taxes_and_fees: {new: "premium.taxes_fees[].amount"}
+  # nycm/personal_auto.yaml:total_premium
+  premium.total_policy_premium: {new: "premium.total"}
+  # hagerty/classic_auto.yaml:agent_address; plymouth/personal_auto.yaml:agent_address
+  producer.address: {new: "producer.address"}
+  # hagerty/classic_auto.yaml:agent_phone; plymouth/personal_auto.yaml:agent_phone
+  producer.contact.phone: {new: "producer.phone"}
+  # hagerty/classic_auto.yaml:schedules.senior_citizen_notice
+  state_notices: {drop: "state notice wording, not a value; kept verbatim in text_sections (SPEC_21 4.6); reviewer approval needed"}

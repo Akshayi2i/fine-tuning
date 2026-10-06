@@ -1,0 +1,1097 @@
+{
+  "document": {
+    "doc_type": "policy_check",
+    "modality": "native_pdf",
+    "transaction_type": {
+      "raw": "RENEWAL",
+      "parsed": "renewal",
+      "confidence": {
+        "score": 1.0,
+        "source": "deterministic"
+      },
+      "page_ref": [
+        1
+      ],
+      "flagged": false
+    },
+    "title": {
+      "raw": "Homeowners Policy Declarations",
+      "parsed": "Homeowners Policy Declarations",
+      "confidence": {
+        "score": 1.0,
+        "source": "deterministic"
+      },
+      "page_ref": [
+        1
+      ],
+      "flagged": false
+    },
+    "issue_date": {
+      "raw": "09/14/2026",
+      "parsed": "09/14/2026",
+      "confidence": {
+        "score": 1.0,
+        "source": "deterministic"
+      },
+      "page_ref": [
+        1
+      ],
+      "flagged": false
+    },
+    "print_date": {
+      "raw": "09/15/2026",
+      "parsed": "09/15/2026",
+      "confidence": {
+        "score": 1.0,
+        "source": "deterministic"
+      },
+      "page_ref": [
+        1
+      ],
+      "flagged": false
+    },
+    "page_count": 3,
+    "source_file_name": "example_home_dec.pdf"
+  },
+  "carrier": {
+    "name": {
+      "raw": "Example Mutual Insurance Company",
+      "parsed": "Example Mutual Insurance Company",
+      "confidence": {
+        "score": 1.0,
+        "source": "deterministic"
+      },
+      "page_ref": [
+        1
+      ],
+      "flagged": false
+    },
+    "naic_code": {
+      "raw": "00000",
+      "parsed": "00000",
+      "confidence": {
+        "score": 1.0,
+        "source": "deterministic"
+      },
+      "page_ref": [
+        1
+      ],
+      "flagged": false
+    },
+    "address": {
+      "street": {
+        "raw": "1 Example Plaza",
+        "parsed": "1 Example Plaza",
+        "confidence": {
+          "score": 1.0,
+          "source": "deterministic"
+        },
+        "page_ref": [
+          1
+        ],
+        "flagged": false
+      },
+      "city": {
+        "raw": "Albany",
+        "parsed": "Albany",
+        "confidence": {
+          "score": 1.0,
+          "source": "deterministic"
+        },
+        "page_ref": [
+          1
+        ],
+        "flagged": false
+      },
+      "state": {
+        "raw": "NY",
+        "parsed": "NY",
+        "confidence": {
+          "score": 1.0,
+          "source": "deterministic"
+        },
+        "page_ref": [
+          1
+        ],
+        "flagged": false
+      },
+      "postal_code": {
+        "raw": "12207",
+        "parsed": "12207",
+        "confidence": {
+          "score": 1.0,
+          "source": "deterministic"
+        },
+        "page_ref": [
+          1
+        ],
+        "flagged": false
+      }
+    },
+    "phone": {
+      "raw": "(800) 555-0100",
+      "parsed": "(800) 555-0100",
+      "confidence": {
+        "score": 1.0,
+        "source": "deterministic"
+      },
+      "page_ref": [
+        1
+      ],
+      "flagged": false
+    },
+    "claims_phone": {
+      "raw": "(800) 555-0199",
+      "parsed": "(800) 555-0199",
+      "confidence": {
+        "score": 1.0,
+        "source": "deterministic"
+      },
+      "page_ref": [
+        1
+      ],
+      "flagged": false
+    },
+    "admitted_status": {
+      "raw": "Admitted",
+      "parsed": "admitted",
+      "confidence": {
+        "score": 1.0,
+        "source": "deterministic"
+      },
+      "page_ref": [
+        1
+      ],
+      "flagged": false
+    }
+  },
+  "producer": {
+    "agency_name": {
+      "raw": "Sample Agency LLC",
+      "parsed": "Sample Agency LLC",
+      "confidence": {
+        "score": 1.0,
+        "source": "deterministic"
+      },
+      "page_ref": [
+        1
+      ],
+      "flagged": false
+    },
+    "producer_code": {
+      "raw": "A-0001",
+      "parsed": "A-0001",
+      "confidence": {
+        "score": 1.0,
+        "source": "deterministic"
+      },
+      "page_ref": [
+        1
+      ],
+      "flagged": false
+    },
+    "phone": {
+      "raw": "(518) 555-0142",
+      "parsed": "(518) 555-0142",
+      "confidence": {
+        "score": 1.0,
+        "source": "deterministic"
+      },
+      "page_ref": [
+        1
+      ],
+      "flagged": false
+    }
+  },
+  "named_insured": {
+    "primary_name": {
+      "raw": "TAYLOR SAMPLE",
+      "parsed": "TAYLOR SAMPLE",
+      "confidence": {
+        "score": 1.0,
+        "source": "deterministic"
+      },
+      "page_ref": [
+        1
+      ],
+      "flagged": false
+    },
+    "mailing_address": {
+      "street": {
+        "raw": "12 Elm St",
+        "parsed": "12 Elm St",
+        "confidence": {
+          "score": 1.0,
+          "source": "deterministic"
+        },
+        "page_ref": [
+          1
+        ],
+        "flagged": false
+      },
+      "city": {
+        "raw": "Troy",
+        "parsed": "Troy",
+        "confidence": {
+          "score": 1.0,
+          "source": "deterministic"
+        },
+        "page_ref": [
+          1
+        ],
+        "flagged": false
+      },
+      "state": {
+        "raw": "NY",
+        "parsed": "NY",
+        "confidence": {
+          "score": 1.0,
+          "source": "deterministic"
+        },
+        "page_ref": [
+          1
+        ],
+        "flagged": false
+      },
+      "postal_code": {
+        "raw": "12180",
+        "parsed": "12180",
+        "confidence": {
+          "score": 1.0,
+          "source": "deterministic"
+        },
+        "page_ref": [
+          1
+        ],
+        "flagged": false
+      },
+      "county": {
+        "raw": "Rensselaer",
+        "parsed": "Rensselaer",
+        "confidence": {
+          "score": 1.0,
+          "source": "deterministic"
+        },
+        "page_ref": [
+          1
+        ],
+        "flagged": false
+      }
+    }
+  },
+  "policy": {
+    "policy_number": {
+      "raw": "HX-0000-0001",
+      "parsed": "HX-0000-0001",
+      "confidence": {
+        "score": 1.0,
+        "source": "deterministic"
+      },
+      "page_ref": [
+        1
+      ],
+      "flagged": false
+    },
+    "prior_policy_number": {
+      "raw": "HX-0000-0000",
+      "parsed": "HX-0000-0000",
+      "confidence": {
+        "score": 1.0,
+        "source": "deterministic"
+      },
+      "page_ref": [
+        1
+      ],
+      "flagged": false
+    },
+    "effective_date": {
+      "raw": "10/01/2026",
+      "parsed": "10/01/2026",
+      "confidence": {
+        "score": 1.0,
+        "source": "deterministic"
+      },
+      "page_ref": [
+        1
+      ],
+      "flagged": false
+    },
+    "expiration_date": {
+      "raw": "10/01/2027",
+      "parsed": "10/01/2027",
+      "confidence": {
+        "score": 1.0,
+        "source": "deterministic"
+      },
+      "page_ref": [
+        1
+      ],
+      "flagged": false
+    },
+    "term_months": {
+      "raw": "12 Months",
+      "parsed": 12,
+      "confidence": {
+        "score": 1.0,
+        "source": "deterministic"
+      },
+      "page_ref": [
+        1
+      ],
+      "flagged": false
+    },
+    "coverage_trigger": {
+      "raw": "Occurrence",
+      "parsed": "occurrence",
+      "confidence": {
+        "score": 1.0,
+        "source": "deterministic"
+      },
+      "page_ref": [
+        1
+      ],
+      "flagged": false
+    },
+    "rating_state": {
+      "raw": "NY",
+      "parsed": "NY",
+      "confidence": {
+        "score": 1.0,
+        "source": "deterministic"
+      },
+      "page_ref": [
+        1
+      ],
+      "flagged": false
+    }
+  },
+  "lob_parts": [
+    {
+      "part_id": "part_1",
+      "lob": "homeowners",
+      "title": {
+        "raw": "Homeowners Policy",
+        "parsed": "Homeowners Policy",
+        "confidence": {
+          "score": 1.0,
+          "source": "deterministic"
+        },
+        "page_ref": [
+          1
+        ],
+        "flagged": false
+      }
+    }
+  ],
+  "locations": [
+    {
+      "unit_id": "loc_1",
+      "location_number": {
+        "raw": "1",
+        "parsed": 1,
+        "confidence": {
+          "score": 1.0,
+          "source": "deterministic"
+        },
+        "page_ref": [
+          1
+        ],
+        "flagged": false
+      },
+      "address": {
+        "street": {
+          "raw": "12 Elm St",
+          "parsed": "12 Elm St",
+          "confidence": {
+            "score": 1.0,
+            "source": "deterministic"
+          },
+          "page_ref": [
+            1
+          ],
+          "flagged": false
+        },
+        "city": {
+          "raw": "Troy",
+          "parsed": "Troy",
+          "confidence": {
+            "score": 1.0,
+            "source": "deterministic"
+          },
+          "page_ref": [
+            1
+          ],
+          "flagged": false
+        },
+        "state": {
+          "raw": "NY",
+          "parsed": "NY",
+          "confidence": {
+            "score": 1.0,
+            "source": "deterministic"
+          },
+          "page_ref": [
+            1
+          ],
+          "flagged": false
+        },
+        "postal_code": {
+          "raw": "12180",
+          "parsed": "12180",
+          "confidence": {
+            "score": 1.0,
+            "source": "deterministic"
+          },
+          "page_ref": [
+            1
+          ],
+          "flagged": false
+        },
+        "county": {
+          "raw": "Rensselaer",
+          "parsed": "Rensselaer",
+          "confidence": {
+            "score": 1.0,
+            "source": "deterministic"
+          },
+          "page_ref": [
+            1
+          ],
+          "flagged": false
+        }
+      },
+      "protection_class": {
+        "raw": "3",
+        "parsed": "3",
+        "confidence": {
+          "score": 1.0,
+          "source": "deterministic"
+        },
+        "page_ref": [
+          1
+        ],
+        "flagged": false
+      },
+      "fire_district": {
+        "raw": "Troy FD",
+        "parsed": "Troy FD",
+        "confidence": {
+          "score": 1.0,
+          "source": "deterministic"
+        },
+        "page_ref": [
+          1
+        ],
+        "flagged": false
+      }
+    }
+  ],
+  "buildings": [
+    {
+      "unit_id": "bldg_1",
+      "location_ref": "loc_1",
+      "construction": {
+        "raw": "Frame",
+        "parsed": "Frame",
+        "confidence": {
+          "score": 1.0,
+          "source": "deterministic"
+        },
+        "page_ref": [
+          1
+        ],
+        "flagged": false
+      },
+      "occupancy": {
+        "raw": "Owner Occupied",
+        "parsed": "Owner Occupied",
+        "confidence": {
+          "score": 1.0,
+          "source": "deterministic"
+        },
+        "page_ref": [
+          1
+        ],
+        "flagged": false
+      },
+      "year_built": {
+        "raw": "1987",
+        "parsed": 1987,
+        "confidence": {
+          "score": 1.0,
+          "source": "deterministic"
+        },
+        "page_ref": [
+          1
+        ],
+        "flagged": false
+      },
+      "number_of_units": {
+        "raw": "1",
+        "parsed": 1,
+        "confidence": {
+          "score": 1.0,
+          "source": "deterministic"
+        },
+        "page_ref": [
+          1
+        ],
+        "flagged": false
+      }
+    }
+  ],
+  "coverages": [
+    {
+      "coverage_id": "cov_1",
+      "coverage_code": "HO_COV_A",
+      "coverage_name": {
+        "raw": "Coverage A - Dwelling",
+        "parsed": "Coverage A - Dwelling",
+        "confidence": {
+          "score": 1.0,
+          "source": "deterministic"
+        },
+        "page_ref": [
+          1
+        ],
+        "flagged": false
+      },
+      "part": "part_1",
+      "applies_to": [
+        "bldg_1"
+      ],
+      "included": {
+        "raw": "Included",
+        "parsed": "included",
+        "confidence": {
+          "score": 1.0,
+          "source": "deterministic"
+        },
+        "page_ref": [
+          1
+        ],
+        "flagged": false
+      },
+      "limits": [
+        {
+          "limit_type": "per_occurrence",
+          "amount": {
+            "raw": "$350,000",
+            "parsed": 350000,
+            "confidence": {
+              "score": 1.0,
+              "source": "deterministic"
+            },
+            "page_ref": [
+              1
+            ],
+            "flagged": false
+          }
+        }
+      ],
+      "premium": {
+        "raw": "$1,210.00",
+        "parsed": 1210.0,
+        "confidence": {
+          "score": 1.0,
+          "source": "deterministic"
+        },
+        "page_ref": [
+          1
+        ],
+        "flagged": false
+      },
+      "valuation": {
+        "raw": "Replacement Cost",
+        "parsed": "replacement_cost",
+        "confidence": {
+          "score": 1.0,
+          "source": "deterministic"
+        },
+        "page_ref": [
+          1
+        ],
+        "flagged": false
+      }
+    },
+    {
+      "coverage_id": "cov_2",
+      "coverage_code": "HO_COV_C",
+      "coverage_name": {
+        "raw": "Coverage C - Personal Property",
+        "parsed": "Coverage C - Personal Property",
+        "confidence": {
+          "score": 1.0,
+          "source": "deterministic"
+        },
+        "page_ref": [
+          1
+        ],
+        "flagged": false
+      },
+      "part": "part_1",
+      "included": {
+        "raw": "Included",
+        "parsed": "included",
+        "confidence": {
+          "score": 1.0,
+          "source": "deterministic"
+        },
+        "page_ref": [
+          1
+        ],
+        "flagged": false
+      },
+      "limits": [
+        {
+          "limit_type": "per_occurrence",
+          "amount": {
+            "raw": "$175,000",
+            "parsed": 175000,
+            "confidence": {
+              "score": 1.0,
+              "source": "deterministic"
+            },
+            "page_ref": [
+              1
+            ],
+            "flagged": false
+          },
+          "percentage": {
+            "raw": "50%",
+            "parsed": 50,
+            "confidence": {
+              "score": 1.0,
+              "source": "deterministic"
+            },
+            "page_ref": [
+              1
+            ],
+            "flagged": false
+          },
+          "basis_coverage_code": "HO_COV_A"
+        },
+        {
+          "limit_type": "sublimit",
+          "amount": {
+            "raw": "$1,500",
+            "parsed": 1500,
+            "confidence": {
+              "score": 1.0,
+              "source": "deterministic"
+            },
+            "page_ref": [
+              1
+            ],
+            "flagged": false
+          },
+          "description": {
+            "raw": "Theft of jewelry, watches and furs",
+            "parsed": "Theft of jewelry, watches and furs",
+            "confidence": {
+              "score": 1.0,
+              "source": "deterministic"
+            },
+            "page_ref": [
+              1
+            ],
+            "flagged": false
+          }
+        }
+      ],
+      "premium": {
+        "raw": "$190.00",
+        "parsed": 190.0,
+        "confidence": {
+          "score": 1.0,
+          "source": "deterministic"
+        },
+        "page_ref": [
+          1
+        ],
+        "flagged": false
+      }
+    }
+  ],
+  "deductibles": [
+    {
+      "deductible_type": "flat",
+      "amount": {
+        "raw": "$1,000",
+        "parsed": 1000,
+        "confidence": {
+          "score": 1.0,
+          "source": "deterministic"
+        },
+        "page_ref": [
+          1
+        ],
+        "flagged": false
+      },
+      "peril": {
+        "raw": "All Perils",
+        "parsed": "All Perils",
+        "confidence": {
+          "score": 1.0,
+          "source": "deterministic"
+        },
+        "page_ref": [
+          1
+        ],
+        "flagged": false
+      },
+      "applies_to_coverages": [
+        "HO_COV_A",
+        "HO_COV_C"
+      ]
+    }
+  ],
+  "interested_parties": [
+    {
+      "role": "mortgagee",
+      "rank": {
+        "raw": "1",
+        "parsed": 1,
+        "confidence": {
+          "score": 1.0,
+          "source": "deterministic"
+        },
+        "page_ref": [
+          1
+        ],
+        "flagged": false
+      },
+      "name": {
+        "raw": "Sample Savings Bank",
+        "parsed": "Sample Savings Bank",
+        "confidence": {
+          "score": 1.0,
+          "source": "deterministic"
+        },
+        "page_ref": [
+          1
+        ],
+        "flagged": false
+      },
+      "address": {
+        "street": {
+          "raw": "PO Box 100",
+          "parsed": "PO Box 100",
+          "confidence": {
+            "score": 1.0,
+            "source": "deterministic"
+          },
+          "page_ref": [
+            1
+          ],
+          "flagged": false
+        },
+        "city": {
+          "raw": "Albany",
+          "parsed": "Albany",
+          "confidence": {
+            "score": 1.0,
+            "source": "deterministic"
+          },
+          "page_ref": [
+            1
+          ],
+          "flagged": false
+        },
+        "state": {
+          "raw": "NY",
+          "parsed": "NY",
+          "confidence": {
+            "score": 1.0,
+            "source": "deterministic"
+          },
+          "page_ref": [
+            1
+          ],
+          "flagged": false
+        },
+        "postal_code": {
+          "raw": "12201",
+          "parsed": "12201",
+          "confidence": {
+            "score": 1.0,
+            "source": "deterministic"
+          },
+          "page_ref": [
+            1
+          ],
+          "flagged": false
+        }
+      },
+      "loan_number": {
+        "raw": "0000123",
+        "parsed": "0000123",
+        "confidence": {
+          "score": 1.0,
+          "source": "deterministic"
+        },
+        "page_ref": [
+          1
+        ],
+        "flagged": false
+      },
+      "applies_to": [
+        "bldg_1"
+      ]
+    }
+  ],
+  "premium": {
+    "total": {
+      "raw": "$1,425.00",
+      "parsed": 1425.0,
+      "confidence": {
+        "score": 1.0,
+        "source": "deterministic"
+      },
+      "page_ref": [
+        1
+      ],
+      "flagged": false
+    },
+    "items": [
+      {
+        "description": {
+          "raw": "Coverage A",
+          "parsed": "Coverage A",
+          "confidence": {
+            "score": 1.0,
+            "source": "deterministic"
+          },
+          "page_ref": [
+            1
+          ],
+          "flagged": false
+        },
+        "amount": {
+          "raw": "$1,210.00",
+          "parsed": 1210.0,
+          "confidence": {
+            "score": 1.0,
+            "source": "deterministic"
+          },
+          "page_ref": [
+            1
+          ],
+          "flagged": false
+        },
+        "unit_type": "coverage",
+        "coverage_code": "HO_COV_A"
+      },
+      {
+        "description": {
+          "raw": "Coverage C",
+          "parsed": "Coverage C",
+          "confidence": {
+            "score": 1.0,
+            "source": "deterministic"
+          },
+          "page_ref": [
+            1
+          ],
+          "flagged": false
+        },
+        "amount": {
+          "raw": "$190.00",
+          "parsed": 190.0,
+          "confidence": {
+            "score": 1.0,
+            "source": "deterministic"
+          },
+          "page_ref": [
+            1
+          ],
+          "flagged": false
+        },
+        "unit_type": "coverage",
+        "coverage_code": "HO_COV_C"
+      }
+    ],
+    "taxes_fees": [
+      {
+        "description": {
+          "raw": "NY Fire Fee",
+          "parsed": "NY Fire Fee",
+          "confidence": {
+            "score": 1.0,
+            "source": "deterministic"
+          },
+          "page_ref": [
+            1
+          ],
+          "flagged": false
+        },
+        "amount": {
+          "raw": "$25.00",
+          "parsed": 25.0,
+          "confidence": {
+            "score": 1.0,
+            "source": "deterministic"
+          },
+          "page_ref": [
+            1
+          ],
+          "flagged": false
+        }
+      }
+    ]
+  },
+  "billing": {
+    "payment_plan": {
+      "raw": "Annual",
+      "parsed": "Annual",
+      "confidence": {
+        "score": 1.0,
+        "source": "deterministic"
+      },
+      "page_ref": [
+        1
+      ],
+      "flagged": false
+    },
+    "bill_type": {
+      "raw": "Direct Bill",
+      "parsed": "Direct Bill",
+      "confidence": {
+        "score": 1.0,
+        "source": "deterministic"
+      },
+      "page_ref": [
+        1
+      ],
+      "flagged": false
+    },
+    "amount_due": {
+      "raw": "$1,425.00",
+      "parsed": 1425.0,
+      "confidence": {
+        "score": 1.0,
+        "source": "deterministic"
+      },
+      "page_ref": [
+        1
+      ],
+      "flagged": false
+    },
+    "due_date": {
+      "raw": "10/01/2026",
+      "parsed": "10/01/2026",
+      "confidence": {
+        "score": 1.0,
+        "source": "deterministic"
+      },
+      "page_ref": [
+        1
+      ],
+      "flagged": false
+    }
+  },
+  "forms_and_endorsements": [
+    {
+      "form_number": {
+        "raw": "HO 00 03",
+        "parsed": "HO 00 03",
+        "confidence": {
+          "score": 1.0,
+          "source": "deterministic"
+        },
+        "page_ref": [
+          1,
+          2
+        ],
+        "flagged": false
+      },
+      "edition_date": {
+        "raw": "05 11",
+        "parsed": "05 11",
+        "confidence": {
+          "score": 1.0,
+          "source": "deterministic"
+        },
+        "page_ref": [
+          1
+        ],
+        "flagged": false
+      },
+      "title": {
+        "raw": "Homeowners 3 - Special Form",
+        "parsed": "Homeowners 3 - Special Form",
+        "confidence": {
+          "score": 1.0,
+          "source": "deterministic"
+        },
+        "page_ref": [
+          1
+        ],
+        "flagged": false
+      },
+      "form_type": "coverage_form",
+      "page_range": [
+        2,
+        3
+      ]
+    }
+  ],
+  "additional_fields": [
+    {
+      "label": "Hurricane Shutters Credit",
+      "value": {
+        "raw": "$0.00",
+        "parsed": 0.0,
+        "confidence": {
+          "score": 1.0,
+          "source": "deterministic"
+        },
+        "page_ref": [
+          1
+        ],
+        "flagged": false
+      },
+      "section_hint": "discounts",
+      "page_ref": [
+        1
+      ]
+    }
+  ],
+  "text_sections": {
+    "NOFORM|DECLARATIONS|": {
+      "section_id": "NOFORM|DECLARATIONS|",
+      "form_number": null,
+      "form_title": null,
+      "edition_date": null,
+      "form_type": "declarations",
+      "section_path": [
+        "DECLARATIONS"
+      ],
+      "section_title": "Declarations",
+      "section_type": "label",
+      "raw_text": "Named Insured: TAYLOR SAMPLE\nPolicy Number: HX-0000-0001",
+      "page_range": [
+        1,
+        1
+      ]
+    },
+    "HO 00 03 05 11|SECTION I - EXCLUSIONS|A.2": {
+      "section_id": "HO 00 03 05 11|SECTION I - EXCLUSIONS|A.2",
+      "form_number": "HO 00 03 05 11",
+      "form_title": "Homeowners 3 - Special Form",
+      "edition_date": "05/11",
+      "form_type": "coverage_form",
+      "section_path": [
+        "SECTION I - EXCLUSIONS",
+        "A.2"
+      ],
+      "section_title": "Earth Movement",
+      "section_type": "prose",
+      "raw_text": "Earth Movement means ...",
+      "page_range": [
+        3,
+        3
+      ]
+    }
+  }
+}

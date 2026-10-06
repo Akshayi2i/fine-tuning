@@ -1,0 +1,4615 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "common_model.json",
+  "title": "Fideon canonical common model",
+  "description": "SPEC_21 §4.2. The shared envelope and building blocks every policy_check LOB schema composes by $ref ('../common/common_model.json#/$defs/<name>'). This file is a $defs library, not a schema a document is validated against directly. Field names here are fixed: a LOB schema never renames or adds to them; a missing concept is a change request to the common-model owner. Every limit lives in coverages[].limits[].",
+  "fideon:common_model_version": "1.0.0",
+  "fideon:status": "field list approved by the project owner, 3 October 2026",
+  "fideon:envelope_blocks": [
+    "document",
+    "carrier",
+    "producer",
+    "named_insured",
+    "policy",
+    "lob_parts",
+    "coverages",
+    "deductibles",
+    "interested_parties",
+    "premium",
+    "billing",
+    "forms_and_endorsements",
+    "additional_fields",
+    "text_sections"
+  ],
+  "fideon:building_blocks": [
+    "locations",
+    "buildings",
+    "vehicles",
+    "drivers",
+    "watercraft",
+    "scheduled_items",
+    "rating_exposures",
+    "rating_modifiers",
+    "claims_made_terms",
+    "insuring_agreements",
+    "underlying_insurance",
+    "attachment",
+    "bond",
+    "benefit_plans",
+    "countersignature"
+  ],
+  "fideon:block_naming": "A top-level block is a $def under its own property name (e.g. $defs/vehicles); a LOB schema writes \"vehicles\": {\"$ref\": \"../common/common_model.json#/$defs/vehicles\"}. Capitalised $defs are element and value types.",
+  "fideon:minimum_mandatory_fields": [
+    "carrier.name",
+    "named_insured.primary_name",
+    "policy.policy_number",
+    "policy.effective_date",
+    "policy.expiration_date"
+  ],
+  "fideon:inclusion_rule": "A field, block or coverage code belongs here when two or more LOBs print it. A concept printed by one LOB only goes in that LOB's own block or coverage_codes.yaml.",
+  "fideon:default_audit_rules": [
+    "policy.effective_date < policy.expiration_date",
+    "months_between(policy.effective_date, policy.expiration_date) == policy.term_months",
+    "policy.effective_date <= document.transaction_effective_date <= policy.expiration_date",
+    "claims_made_terms.retroactive_date <= policy.effective_date",
+    "len(coverages[].limits[]) >= 1"
+  ],
+  "fideon:shared_coverage_codes": {
+    "X_VEHICLE_LIABILITY": {
+      "name": "Liability (bodily injury and property damage) for an auto, motorcycle, RV or boat",
+      "aliases": [
+        "Liability",
+        "Bodily Injury",
+        "Property Damage",
+        "Bodily Injury and Property Damage Liability",
+        "Bodily Injury Liability",
+        "Property Damage Liability"
+      ],
+      "default_limit_types": [
+        "per_person",
+        "per_accident",
+        "property_damage",
+        "combined_single"
+      ]
+    },
+    "X_MED_PAY": {
+      "name": "Medical payments",
+      "aliases": [
+        "Medical Payments",
+        "Med Pay",
+        "Medical Payments to Others",
+        "Coverage F",
+        "Medical Payments Limit"
+      ],
+      "default_limit_types": [
+        "per_person",
+        "per_accident",
+        "per_occurrence"
+      ]
+    },
+    "X_PERSONAL_LIABILITY": {
+      "name": "Personal liability",
+      "aliases": [
+        "Personal Liability",
+        "Coverage E"
+      ],
+      "default_limit_types": [
+        "per_occurrence"
+      ]
+    },
+    "X_UM": {
+      "name": "Uninsured motorist / boater",
+      "aliases": [
+        "Uninsured Motorist",
+        "Uninsured Boater",
+        "UM"
+      ],
+      "default_limit_types": [
+        "per_person",
+        "per_accident",
+        "combined_single"
+      ]
+    },
+    "X_UIM": {
+      "name": "Underinsured / supplementary uninsured motorist",
+      "aliases": [
+        "Underinsured Motorist",
+        "Supplementary Uninsured/Underinsured Motorists",
+        "SUM",
+        "UIM"
+      ],
+      "default_limit_types": [
+        "per_person",
+        "per_accident",
+        "combined_single"
+      ]
+    },
+    "X_PIP": {
+      "name": "Personal injury protection / no-fault",
+      "aliases": [
+        "Personal Injury Protection",
+        "PIP",
+        "Basic No-Fault",
+        "Additional PIP",
+        "OBEL",
+        "Personal Injury Protection Benefits",
+        "Optional Basic Economic Loss"
+      ],
+      "default_limit_types": [
+        "per_person",
+        "other"
+      ]
+    },
+    "X_COLLISION": {
+      "name": "Collision",
+      "aliases": [
+        "Collision"
+      ],
+      "default_limit_types": [
+        "other"
+      ]
+    },
+    "X_COMPREHENSIVE": {
+      "name": "Comprehensive / other than collision",
+      "aliases": [
+        "Comprehensive",
+        "Other Than Collision"
+      ],
+      "default_limit_types": [
+        "other"
+      ]
+    },
+    "X_TOWING": {
+      "name": "Towing and roadside assistance",
+      "aliases": [
+        "Towing",
+        "Towing and Labor",
+        "Roadside Assistance"
+      ],
+      "default_limit_types": [
+        "per_occurrence",
+        "other"
+      ]
+    },
+    "X_RENTAL": {
+      "name": "Rental reimbursement / transportation expense",
+      "aliases": [
+        "Rental Reimbursement",
+        "Transportation Expense",
+        "Rental Car"
+      ],
+      "default_limit_types": [
+        "per_day",
+        "aggregate"
+      ]
+    },
+    "X_LOSS_OF_USE": {
+      "name": "Loss of use / additional living expense / fair rental value",
+      "aliases": [
+        "Loss of Use",
+        "Additional Living Expense",
+        "Fair Rental Value",
+        "Coverage D"
+      ],
+      "default_limit_types": [
+        "per_occurrence",
+        "other"
+      ]
+    },
+    "X_ORDINANCE_LAW": {
+      "name": "Ordinance or law",
+      "aliases": [
+        "Ordinance or Law",
+        "Ordinance & Law"
+      ],
+      "default_limit_types": [
+        "per_occurrence",
+        "sublimit"
+      ]
+    },
+    "X_WATER_BACKUP": {
+      "name": "Water or sewer backup",
+      "aliases": [
+        "Water Back-Up",
+        "Sewer Backup",
+        "Water Backup and Sump Discharge"
+      ],
+      "default_limit_types": [
+        "per_occurrence",
+        "sublimit"
+      ]
+    },
+    "X_EQUIPMENT_BREAKDOWN": {
+      "name": "Equipment breakdown",
+      "aliases": [
+        "Equipment Breakdown"
+      ],
+      "default_limit_types": [
+        "per_occurrence"
+      ]
+    },
+    "X_IDENTITY_THEFT": {
+      "name": "Identity theft / fraud expense",
+      "aliases": [
+        "Identity Theft",
+        "Identity Fraud Expense"
+      ],
+      "default_limit_types": [
+        "per_occurrence",
+        "aggregate"
+      ]
+    },
+    "X_CYBER": {
+      "name": "Cyber / data breach",
+      "aliases": [
+        "Cyber",
+        "Data Breach",
+        "Data Compromise",
+        "Cyber Liability"
+      ],
+      "default_limit_types": [
+        "per_claim",
+        "aggregate",
+        "sublimit"
+      ]
+    },
+    "X_EPL": {
+      "name": "Employment practices liability",
+      "aliases": [
+        "Employment Practices Liability",
+        "EPL",
+        "EPLI"
+      ],
+      "default_limit_types": [
+        "per_claim",
+        "aggregate"
+      ]
+    },
+    "X_HIRED_NONOWNED_AUTO": {
+      "name": "Hired and non-owned auto liability",
+      "aliases": [
+        "Hired and Non-Owned Auto",
+        "Hired & Non-Owned Auto",
+        "Non-Owned Auto"
+      ],
+      "default_limit_types": [
+        "per_occurrence",
+        "combined_single"
+      ]
+    },
+    "X_TERRORISM": {
+      "name": "Terrorism (TRIA)",
+      "aliases": [
+        "Terrorism",
+        "Certified Acts of Terrorism",
+        "TRIA",
+        "Terrorism Risk Insurance Act"
+      ],
+      "default_limit_types": [
+        "other"
+      ]
+    }
+  },
+  "$defs": {
+    "Confidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "minProperties": 1,
+      "properties": {
+        "score": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "source": {
+          "type": "string",
+          "enum": [
+            "deterministic",
+            "structural",
+            "vlm",
+            "audit"
+          ]
+        }
+      },
+      "required": [
+        "score",
+        "source"
+      ]
+    },
+    "FieldValue": {
+      "type": "object",
+      "description": "SPEC_00 FieldValue. Every leaf of the core tier is one of these or a typed variant below.",
+      "additionalProperties": false,
+      "required": [
+        "raw",
+        "parsed",
+        "confidence",
+        "page_ref"
+      ],
+      "properties": {
+        "raw": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Exactly as printed; the first occurrence in page order."
+        },
+        "parsed": {
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
+        },
+        "confidence": {
+          "$ref": "#/$defs/Confidence"
+        },
+        "page_ref": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "uniqueItems": true,
+          "description": "Every 1-based PDF page the value is printed on. Non-empty whenever raw is non-null."
+        },
+        "flagged": {
+          "type": "boolean",
+          "default": false
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "raw": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "raw"
+            ]
+          },
+          "then": {
+            "properties": {
+              "page_ref": {
+                "minItems": 1
+              }
+            }
+          },
+          "description": "A printed value names at least one page."
+        },
+        {
+          "if": {
+            "properties": {
+              "raw": {
+                "type": "null"
+              }
+            },
+            "required": [
+              "raw"
+            ]
+          },
+          "then": {
+            "properties": {
+              "parsed": {
+                "type": "null"
+              }
+            }
+          },
+          "description": "Nothing printed, nothing parsed: a value never appears from nowhere."
+        }
+      ]
+    },
+    "DateValue": {
+      "type": "object",
+      "description": "A date. `parsed` is MM/DD/YYYY (SPEC_21 D1), or null when the printed wording is not a date (e.g. a retroactive date printed 'Full Prior Acts').",
+      "additionalProperties": false,
+      "required": [
+        "raw",
+        "parsed",
+        "confidence",
+        "page_ref"
+      ],
+      "properties": {
+        "raw": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Exactly as printed; the first occurrence in page order."
+        },
+        "parsed": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^(0[1-9]|1[0-2])/(0[1-9]|[12][0-9]|3[01])/[0-9]{4}$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "confidence": {
+          "$ref": "#/$defs/Confidence"
+        },
+        "page_ref": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "uniqueItems": true,
+          "description": "Every 1-based PDF page the value is printed on. Non-empty whenever raw is non-null."
+        },
+        "flagged": {
+          "type": "boolean",
+          "default": false
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "raw": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "raw"
+            ]
+          },
+          "then": {
+            "properties": {
+              "page_ref": {
+                "minItems": 1
+              }
+            }
+          },
+          "description": "A printed value names at least one page."
+        },
+        {
+          "if": {
+            "properties": {
+              "raw": {
+                "type": "null"
+              }
+            },
+            "required": [
+              "raw"
+            ]
+          },
+          "then": {
+            "properties": {
+              "parsed": {
+                "type": "null"
+              }
+            }
+          },
+          "description": "Nothing printed, nothing parsed: a value never appears from nowhere."
+        }
+      ]
+    },
+    "MoneyValue": {
+      "type": "object",
+      "description": "An amount of money. `parsed` is a number, or null when the printed wording is not an amount ('Included', 'Not Covered'); whether the coverage applies is recorded in `included`.",
+      "additionalProperties": false,
+      "required": [
+        "raw",
+        "parsed",
+        "confidence",
+        "page_ref"
+      ],
+      "properties": {
+        "raw": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Exactly as printed; the first occurrence in page order."
+        },
+        "parsed": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "confidence": {
+          "$ref": "#/$defs/Confidence"
+        },
+        "page_ref": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "uniqueItems": true,
+          "description": "Every 1-based PDF page the value is printed on. Non-empty whenever raw is non-null."
+        },
+        "flagged": {
+          "type": "boolean",
+          "default": false
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "raw": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "raw"
+            ]
+          },
+          "then": {
+            "properties": {
+              "page_ref": {
+                "minItems": 1
+              }
+            }
+          },
+          "description": "A printed value names at least one page."
+        },
+        {
+          "if": {
+            "properties": {
+              "raw": {
+                "type": "null"
+              }
+            },
+            "required": [
+              "raw"
+            ]
+          },
+          "then": {
+            "properties": {
+              "parsed": {
+                "type": "null"
+              }
+            }
+          },
+          "description": "Nothing printed, nothing parsed: a value never appears from nowhere."
+        }
+      ]
+    },
+    "PercentValue": {
+      "type": "object",
+      "description": "A percentage. `parsed` is a number: 5% -> 5.",
+      "additionalProperties": false,
+      "required": [
+        "raw",
+        "parsed",
+        "confidence",
+        "page_ref"
+      ],
+      "properties": {
+        "raw": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Exactly as printed; the first occurrence in page order."
+        },
+        "parsed": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "confidence": {
+          "$ref": "#/$defs/Confidence"
+        },
+        "page_ref": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "uniqueItems": true,
+          "description": "Every 1-based PDF page the value is printed on. Non-empty whenever raw is non-null."
+        },
+        "flagged": {
+          "type": "boolean",
+          "default": false
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "raw": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "raw"
+            ]
+          },
+          "then": {
+            "properties": {
+              "page_ref": {
+                "minItems": 1
+              }
+            }
+          },
+          "description": "A printed value names at least one page."
+        },
+        {
+          "if": {
+            "properties": {
+              "raw": {
+                "type": "null"
+              }
+            },
+            "required": [
+              "raw"
+            ]
+          },
+          "then": {
+            "properties": {
+              "parsed": {
+                "type": "null"
+              }
+            }
+          },
+          "description": "Nothing printed, nothing parsed: a value never appears from nowhere."
+        }
+      ]
+    },
+    "NumberValue": {
+      "type": "object",
+      "description": "A count, year or measurement. `parsed` is a number.",
+      "additionalProperties": false,
+      "required": [
+        "raw",
+        "parsed",
+        "confidence",
+        "page_ref"
+      ],
+      "properties": {
+        "raw": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Exactly as printed; the first occurrence in page order."
+        },
+        "parsed": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "confidence": {
+          "$ref": "#/$defs/Confidence"
+        },
+        "page_ref": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "uniqueItems": true,
+          "description": "Every 1-based PDF page the value is printed on. Non-empty whenever raw is non-null."
+        },
+        "flagged": {
+          "type": "boolean",
+          "default": false
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "raw": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "raw"
+            ]
+          },
+          "then": {
+            "properties": {
+              "page_ref": {
+                "minItems": 1
+              }
+            }
+          },
+          "description": "A printed value names at least one page."
+        },
+        {
+          "if": {
+            "properties": {
+              "raw": {
+                "type": "null"
+              }
+            },
+            "required": [
+              "raw"
+            ]
+          },
+          "then": {
+            "properties": {
+              "parsed": {
+                "type": "null"
+              }
+            }
+          },
+          "description": "Nothing printed, nothing parsed: a value never appears from nowhere."
+        }
+      ]
+    },
+    "BoolValue": {
+      "type": "object",
+      "description": "A yes/no fact. `raw` is the printed mark or wording ('X', 'Yes', 'Included').",
+      "additionalProperties": false,
+      "required": [
+        "raw",
+        "parsed",
+        "confidence",
+        "page_ref"
+      ],
+      "properties": {
+        "raw": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Exactly as printed; the first occurrence in page order."
+        },
+        "parsed": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "confidence": {
+          "$ref": "#/$defs/Confidence"
+        },
+        "page_ref": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "uniqueItems": true,
+          "description": "Every 1-based PDF page the value is printed on. Non-empty whenever raw is non-null."
+        },
+        "flagged": {
+          "type": "boolean",
+          "default": false
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "raw": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "raw"
+            ]
+          },
+          "then": {
+            "properties": {
+              "page_ref": {
+                "minItems": 1
+              }
+            }
+          },
+          "description": "A printed value names at least one page."
+        },
+        {
+          "if": {
+            "properties": {
+              "raw": {
+                "type": "null"
+              }
+            },
+            "required": [
+              "raw"
+            ]
+          },
+          "then": {
+            "properties": {
+              "parsed": {
+                "type": "null"
+              }
+            }
+          },
+          "description": "Nothing printed, nothing parsed: a value never appears from nowhere."
+        }
+      ]
+    },
+    "YearValue": {
+      "type": "object",
+      "description": "A calendar year (model year, year built). `parsed` is an integer 1900-2100.",
+      "additionalProperties": false,
+      "required": [
+        "raw",
+        "parsed",
+        "confidence",
+        "page_ref"
+      ],
+      "properties": {
+        "raw": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Exactly as printed; the first occurrence in page order."
+        },
+        "parsed": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 1900,
+              "maximum": 2100
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "confidence": {
+          "$ref": "#/$defs/Confidence"
+        },
+        "page_ref": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "uniqueItems": true,
+          "description": "Every 1-based PDF page the value is printed on. Non-empty whenever raw is non-null."
+        },
+        "flagged": {
+          "type": "boolean",
+          "default": false
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "raw": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "raw"
+            ]
+          },
+          "then": {
+            "properties": {
+              "page_ref": {
+                "minItems": 1
+              }
+            }
+          },
+          "description": "A printed value names at least one page."
+        },
+        {
+          "if": {
+            "properties": {
+              "raw": {
+                "type": "null"
+              }
+            },
+            "required": [
+              "raw"
+            ]
+          },
+          "then": {
+            "properties": {
+              "parsed": {
+                "type": "null"
+              }
+            }
+          },
+          "description": "Nothing printed, nothing parsed: a value never appears from nowhere."
+        }
+      ]
+    },
+    "StateValue": {
+      "type": "object",
+      "description": "A US state or territory. `parsed` is the two-letter USPS code ('New York' -> 'NY').",
+      "additionalProperties": false,
+      "required": [
+        "raw",
+        "parsed",
+        "confidence",
+        "page_ref"
+      ],
+      "properties": {
+        "raw": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Exactly as printed; the first occurrence in page order."
+        },
+        "parsed": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^[A-Z]{2}$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "confidence": {
+          "$ref": "#/$defs/Confidence"
+        },
+        "page_ref": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "uniqueItems": true,
+          "description": "Every 1-based PDF page the value is printed on. Non-empty whenever raw is non-null."
+        },
+        "flagged": {
+          "type": "boolean",
+          "default": false
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "raw": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "raw"
+            ]
+          },
+          "then": {
+            "properties": {
+              "page_ref": {
+                "minItems": 1
+              }
+            }
+          },
+          "description": "A printed value names at least one page."
+        },
+        {
+          "if": {
+            "properties": {
+              "raw": {
+                "type": "null"
+              }
+            },
+            "required": [
+              "raw"
+            ]
+          },
+          "then": {
+            "properties": {
+              "parsed": {
+                "type": "null"
+              }
+            }
+          },
+          "description": "Nothing printed, nothing parsed: a value never appears from nowhere."
+        }
+      ]
+    },
+    "PostalCodeValue": {
+      "type": "object",
+      "description": "A US ZIP code. `parsed` is 5 digits or ZIP+4 ('12180-1234').",
+      "additionalProperties": false,
+      "required": [
+        "raw",
+        "parsed",
+        "confidence",
+        "page_ref"
+      ],
+      "properties": {
+        "raw": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Exactly as printed; the first occurrence in page order."
+        },
+        "parsed": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^[0-9]{5}(-[0-9]{4})?$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "confidence": {
+          "$ref": "#/$defs/Confidence"
+        },
+        "page_ref": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "uniqueItems": true,
+          "description": "Every 1-based PDF page the value is printed on. Non-empty whenever raw is non-null."
+        },
+        "flagged": {
+          "type": "boolean",
+          "default": false
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "raw": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "raw"
+            ]
+          },
+          "then": {
+            "properties": {
+              "page_ref": {
+                "minItems": 1
+              }
+            }
+          },
+          "description": "A printed value names at least one page."
+        },
+        {
+          "if": {
+            "properties": {
+              "raw": {
+                "type": "null"
+              }
+            },
+            "required": [
+              "raw"
+            ]
+          },
+          "then": {
+            "properties": {
+              "parsed": {
+                "type": "null"
+              }
+            }
+          },
+          "description": "Nothing printed, nothing parsed: a value never appears from nowhere."
+        }
+      ]
+    },
+    "NaicValue": {
+      "type": "object",
+      "description": "An NAIC company code. `parsed` is 5 digits, leading zeros kept.",
+      "additionalProperties": false,
+      "required": [
+        "raw",
+        "parsed",
+        "confidence",
+        "page_ref"
+      ],
+      "properties": {
+        "raw": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Exactly as printed; the first occurrence in page order."
+        },
+        "parsed": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^[0-9]{5}$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "confidence": {
+          "$ref": "#/$defs/Confidence"
+        },
+        "page_ref": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "uniqueItems": true,
+          "description": "Every 1-based PDF page the value is printed on. Non-empty whenever raw is non-null."
+        },
+        "flagged": {
+          "type": "boolean",
+          "default": false
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "raw": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "raw"
+            ]
+          },
+          "then": {
+            "properties": {
+              "page_ref": {
+                "minItems": 1
+              }
+            }
+          },
+          "description": "A printed value names at least one page."
+        },
+        {
+          "if": {
+            "properties": {
+              "raw": {
+                "type": "null"
+              }
+            },
+            "required": [
+              "raw"
+            ]
+          },
+          "then": {
+            "properties": {
+              "parsed": {
+                "type": "null"
+              }
+            }
+          },
+          "description": "Nothing printed, nothing parsed: a value never appears from nowhere."
+        }
+      ]
+    },
+    "TransactionTypeValue": {
+      "type": "object",
+      "description": "Transaction the document records. `raw` is the printed wording; `parsed` is the normalised value, or null when the printed wording maps to none of them.",
+      "additionalProperties": false,
+      "required": [
+        "raw",
+        "parsed",
+        "confidence",
+        "page_ref"
+      ],
+      "properties": {
+        "raw": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Exactly as printed; the first occurrence in page order."
+        },
+        "parsed": {
+          "enum": [
+            "new",
+            "renewal",
+            "endorsement",
+            "cancellation",
+            "reinstatement",
+            "quote",
+            "binder",
+            "application",
+            "declarations_only",
+            null
+          ]
+        },
+        "confidence": {
+          "$ref": "#/$defs/Confidence"
+        },
+        "page_ref": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "uniqueItems": true,
+          "description": "Every 1-based PDF page the value is printed on. Non-empty whenever raw is non-null."
+        },
+        "flagged": {
+          "type": "boolean",
+          "default": false
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "raw": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "raw"
+            ]
+          },
+          "then": {
+            "properties": {
+              "page_ref": {
+                "minItems": 1
+              }
+            }
+          },
+          "description": "A printed value names at least one page."
+        },
+        {
+          "if": {
+            "properties": {
+              "raw": {
+                "type": "null"
+              }
+            },
+            "required": [
+              "raw"
+            ]
+          },
+          "then": {
+            "properties": {
+              "parsed": {
+                "type": "null"
+              }
+            }
+          },
+          "description": "Nothing printed, nothing parsed: a value never appears from nowhere."
+        }
+      ]
+    },
+    "CoverageTriggerValue": {
+      "type": "object",
+      "description": "Coverage trigger. `raw` is the printed wording; `parsed` is the normalised value, or null when the printed wording maps to none of them.",
+      "additionalProperties": false,
+      "required": [
+        "raw",
+        "parsed",
+        "confidence",
+        "page_ref"
+      ],
+      "properties": {
+        "raw": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Exactly as printed; the first occurrence in page order."
+        },
+        "parsed": {
+          "enum": [
+            "occurrence",
+            "claims_made",
+            "claims_made_and_reported",
+            "not_applicable",
+            null
+          ]
+        },
+        "confidence": {
+          "$ref": "#/$defs/Confidence"
+        },
+        "page_ref": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "uniqueItems": true,
+          "description": "Every 1-based PDF page the value is printed on. Non-empty whenever raw is non-null."
+        },
+        "flagged": {
+          "type": "boolean",
+          "default": false
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "raw": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "raw"
+            ]
+          },
+          "then": {
+            "properties": {
+              "page_ref": {
+                "minItems": 1
+              }
+            }
+          },
+          "description": "A printed value names at least one page."
+        },
+        {
+          "if": {
+            "properties": {
+              "raw": {
+                "type": "null"
+              }
+            },
+            "required": [
+              "raw"
+            ]
+          },
+          "then": {
+            "properties": {
+              "parsed": {
+                "type": "null"
+              }
+            }
+          },
+          "description": "Nothing printed, nothing parsed: a value never appears from nowhere."
+        }
+      ]
+    },
+    "IncludedValue": {
+      "type": "object",
+      "description": "Whether the coverage applies under this policy. `raw` is the printed wording; `parsed` is the normalised value, or null when the printed wording maps to none of them.",
+      "additionalProperties": false,
+      "required": [
+        "raw",
+        "parsed",
+        "confidence",
+        "page_ref"
+      ],
+      "properties": {
+        "raw": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Exactly as printed; the first occurrence in page order."
+        },
+        "parsed": {
+          "enum": [
+            "included",
+            "excluded",
+            "not_purchased",
+            null
+          ]
+        },
+        "confidence": {
+          "$ref": "#/$defs/Confidence"
+        },
+        "page_ref": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "uniqueItems": true,
+          "description": "Every 1-based PDF page the value is printed on. Non-empty whenever raw is non-null."
+        },
+        "flagged": {
+          "type": "boolean",
+          "default": false
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "raw": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "raw"
+            ]
+          },
+          "then": {
+            "properties": {
+              "page_ref": {
+                "minItems": 1
+              }
+            }
+          },
+          "description": "A printed value names at least one page."
+        },
+        {
+          "if": {
+            "properties": {
+              "raw": {
+                "type": "null"
+              }
+            },
+            "required": [
+              "raw"
+            ]
+          },
+          "then": {
+            "properties": {
+              "parsed": {
+                "type": "null"
+              }
+            }
+          },
+          "description": "Nothing printed, nothing parsed: a value never appears from nowhere."
+        }
+      ]
+    },
+    "ValuationValue": {
+      "type": "object",
+      "description": "Valuation basis. `raw` is the printed wording; `parsed` is the normalised value, or null when the printed wording maps to none of them.",
+      "additionalProperties": false,
+      "required": [
+        "raw",
+        "parsed",
+        "confidence",
+        "page_ref"
+      ],
+      "properties": {
+        "raw": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Exactly as printed; the first occurrence in page order."
+        },
+        "parsed": {
+          "enum": [
+            "replacement_cost",
+            "actual_cash_value",
+            "agreed_value",
+            "stated_amount",
+            "other",
+            null
+          ]
+        },
+        "confidence": {
+          "$ref": "#/$defs/Confidence"
+        },
+        "page_ref": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "uniqueItems": true,
+          "description": "Every 1-based PDF page the value is printed on. Non-empty whenever raw is non-null."
+        },
+        "flagged": {
+          "type": "boolean",
+          "default": false
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "raw": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "raw"
+            ]
+          },
+          "then": {
+            "properties": {
+              "page_ref": {
+                "minItems": 1
+              }
+            }
+          },
+          "description": "A printed value names at least one page."
+        },
+        {
+          "if": {
+            "properties": {
+              "raw": {
+                "type": "null"
+              }
+            },
+            "required": [
+              "raw"
+            ]
+          },
+          "then": {
+            "properties": {
+              "parsed": {
+                "type": "null"
+              }
+            }
+          },
+          "description": "Nothing printed, nothing parsed: a value never appears from nowhere."
+        }
+      ]
+    },
+    "AdmittedStatusValue": {
+      "type": "object",
+      "description": "Admitted status of the writing company. `raw` is the printed wording; `parsed` is the normalised value, or null when the printed wording maps to none of them.",
+      "additionalProperties": false,
+      "required": [
+        "raw",
+        "parsed",
+        "confidence",
+        "page_ref"
+      ],
+      "properties": {
+        "raw": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Exactly as printed; the first occurrence in page order."
+        },
+        "parsed": {
+          "enum": [
+            "admitted",
+            "non_admitted",
+            "surplus_lines",
+            null
+          ]
+        },
+        "confidence": {
+          "$ref": "#/$defs/Confidence"
+        },
+        "page_ref": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "uniqueItems": true,
+          "description": "Every 1-based PDF page the value is printed on. Non-empty whenever raw is non-null."
+        },
+        "flagged": {
+          "type": "boolean",
+          "default": false
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "raw": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "raw"
+            ]
+          },
+          "then": {
+            "properties": {
+              "page_ref": {
+                "minItems": 1
+              }
+            }
+          },
+          "description": "A printed value names at least one page."
+        },
+        {
+          "if": {
+            "properties": {
+              "raw": {
+                "type": "null"
+              }
+            },
+            "required": [
+              "raw"
+            ]
+          },
+          "then": {
+            "properties": {
+              "parsed": {
+                "type": "null"
+              }
+            }
+          },
+          "description": "Nothing printed, nothing parsed: a value never appears from nowhere."
+        }
+      ]
+    },
+    "DriverStatusValue": {
+      "type": "object",
+      "description": "Driver status. `raw` is the printed wording; `parsed` is the normalised value, or null when the printed wording maps to none of them.",
+      "additionalProperties": false,
+      "required": [
+        "raw",
+        "parsed",
+        "confidence",
+        "page_ref"
+      ],
+      "properties": {
+        "raw": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Exactly as printed; the first occurrence in page order."
+        },
+        "parsed": {
+          "enum": [
+            "rated",
+            "excluded",
+            "listed",
+            "other",
+            null
+          ]
+        },
+        "confidence": {
+          "$ref": "#/$defs/Confidence"
+        },
+        "page_ref": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "uniqueItems": true,
+          "description": "Every 1-based PDF page the value is printed on. Non-empty whenever raw is non-null."
+        },
+        "flagged": {
+          "type": "boolean",
+          "default": false
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "raw": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "raw"
+            ]
+          },
+          "then": {
+            "properties": {
+              "page_ref": {
+                "minItems": 1
+              }
+            }
+          },
+          "description": "A printed value names at least one page."
+        },
+        {
+          "if": {
+            "properties": {
+              "raw": {
+                "type": "null"
+              }
+            },
+            "required": [
+              "raw"
+            ]
+          },
+          "then": {
+            "properties": {
+              "parsed": {
+                "type": "null"
+              }
+            }
+          },
+          "description": "Nothing printed, nothing parsed: a value never appears from nowhere."
+        }
+      ]
+    },
+    "Address": {
+      "type": "object",
+      "description": "Postal address. City, state, ZIP and county are drawn together by the twin generator (SPEC_21 §7.3).",
+      "additionalProperties": false,
+      "minProperties": 1,
+      "properties": {
+        "street": {
+          "$ref": "#/$defs/FieldValue",
+          "fideon:aliases": [
+            "Address",
+            "Street"
+          ],
+          "description": "Street address line."
+        },
+        "street_2": {
+          "$ref": "#/$defs/FieldValue",
+          "description": "Second address line: suite, unit, attention line.",
+          "fideon:aliases": [
+            "Attn",
+            "Suite",
+            "Apt"
+          ]
+        },
+        "city": {
+          "$ref": "#/$defs/FieldValue",
+          "fideon:aliases": [
+            "City"
+          ],
+          "description": "City."
+        },
+        "state": {
+          "$ref": "#/$defs/StateValue",
+          "fideon:aliases": [
+            "State",
+            "ST"
+          ],
+          "description": "State, two-letter USPS code in parsed."
+        },
+        "postal_code": {
+          "$ref": "#/$defs/PostalCodeValue",
+          "fideon:aliases": [
+            "ZIP",
+            "Zip Code",
+            "Postal Code"
+          ],
+          "description": "ZIP code."
+        },
+        "county": {
+          "$ref": "#/$defs/FieldValue",
+          "fideon:aliases": [
+            "County"
+          ],
+          "description": "County."
+        }
+      }
+    },
+    "AdditionalField": {
+      "type": "object",
+      "description": "Overflow tier (SPEC_21 §4.5): a printed value with no core home.",
+      "additionalProperties": false,
+      "minProperties": 1,
+      "properties": {
+        "label": {
+          "type": "string",
+          "description": "The printed label, verbatim."
+        },
+        "value": {
+          "$ref": "#/$defs/FieldValue",
+          "description": "Insured value."
+        },
+        "section_hint": {
+          "type": "string",
+          "description": "Envelope block or building block the value is nearest to, e.g. 'discounts', 'vehicles'."
+        },
+        "page_ref": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "description": "PDF pages the value is printed on, 1-based."
+        }
+      },
+      "required": [
+        "label",
+        "value"
+      ]
+    },
+    "TextSection": {
+      "type": "object",
+      "description": "SPEC_21 §4.6 / SPEC_00 §5.4. Built by synth_core/sections.py, never by hand or by the model.",
+      "additionalProperties": false,
+      "minProperties": 1,
+      "properties": {
+        "section_id": {
+          "type": "string",
+          "description": "Equals the map key: '<form_number or NOFORM>|<top heading>|<sub-path>'."
+        },
+        "form_number": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Form number of the form the section belongs to; null for text outside a form."
+        },
+        "form_title": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Title of the form."
+        },
+        "edition_date": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Edition date of the form, as printed."
+        },
+        "form_type": {
+          "$ref": "#/$defs/FormType",
+          "description": "Kind of form the section belongs to."
+        },
+        "section_path": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Headings from the top of the form down to this section."
+        },
+        "section_title": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Title of the section."
+        },
+        "section_type": {
+          "type": "string",
+          "enum": [
+            "prose",
+            "table",
+            "label",
+            "header_footer",
+            "handwriting",
+            "stamp"
+          ],
+          "description": "Tables are markdown tables in raw_text."
+        },
+        "raw_text": {
+          "type": "string",
+          "description": "Verbatim text. No summarisation."
+        },
+        "page_range": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "minItems": 2,
+          "maxItems": 2,
+          "description": "First and last PDF page, 1-based."
+        }
+      },
+      "required": [
+        "section_id",
+        "form_type",
+        "section_type",
+        "raw_text",
+        "page_range"
+      ]
+    },
+    "FormType": {
+      "type": "string",
+      "enum": [
+        "declarations",
+        "schedule",
+        "coverage_form",
+        "endorsement",
+        "notice",
+        "application",
+        "correspondence",
+        "other"
+      ],
+      "description": "Kind of form (SPEC_21 §4.6)."
+    },
+    "LimitType": {
+      "type": "string",
+      "enum": [
+        "per_occurrence",
+        "aggregate",
+        "products_completed_ops_aggregate",
+        "per_person",
+        "per_accident",
+        "property_damage",
+        "combined_single",
+        "per_claim",
+        "each_employee",
+        "policy_limit",
+        "per_location",
+        "per_item",
+        "per_day",
+        "per_disablement",
+        "sublimit",
+        "blanket",
+        "scheduled_total",
+        "other"
+      ],
+      "description": "SPEC_21 §4.2.2."
+    },
+    "DeductibleType": {
+      "type": "string",
+      "enum": [
+        "flat",
+        "percentage",
+        "waiting_period",
+        "sir",
+        "retention",
+        "franchise"
+      ],
+      "description": "SPEC_21 §4.2.2."
+    },
+    "UnitType": {
+      "type": "string",
+      "enum": [
+        "policy",
+        "part",
+        "coverage",
+        "location",
+        "building",
+        "vehicle",
+        "driver",
+        "watercraft",
+        "scheduled_item",
+        "other"
+      ],
+      "description": "What a premium item is charged for."
+    },
+    "Limit": {
+      "type": "object",
+      "description": "A limit. Always inside the coverage it limits. Split limits (auto 100/300/50) are three entries (per_person, per_accident, property_damage); sublimits are 'sublimit' entries with a description.",
+      "additionalProperties": false,
+      "minProperties": 1,
+      "properties": {
+        "limit_type": {
+          "$ref": "#/$defs/LimitType",
+          "description": "Kind of limit."
+        },
+        "amount": {
+          "$ref": "#/$defs/MoneyValue",
+          "fideon:aliases": [
+            "Limit",
+            "Limit of Liability",
+            "Limit of Insurance",
+            "Amount of Insurance"
+          ],
+          "description": "Amount of the limit."
+        },
+        "percentage": {
+          "$ref": "#/$defs/PercentValue",
+          "description": "When the limit is stated as a percentage of another coverage."
+        },
+        "basis_coverage_code": {
+          "type": "string",
+          "description": "coverage_code the percentage refers to."
+        },
+        "description": {
+          "$ref": "#/$defs/FieldValue",
+          "description": "Printed qualifier, e.g. 'theft of jewelry'. Required in practice for sublimits."
+        }
+      },
+      "required": [
+        "limit_type"
+      ],
+      "dependentRequired": {
+        "percentage": [
+          "basis_coverage_code"
+        ]
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "limit_type": {
+                "const": "sublimit"
+              }
+            },
+            "required": [
+              "limit_type"
+            ]
+          },
+          "then": {
+            "required": [
+              "description"
+            ]
+          },
+          "description": "A sublimit says what it limits ('theft of jewelry')."
+        }
+      ]
+    },
+    "Deductible": {
+      "type": "object",
+      "description": "A deductible, inside a coverage or in the top-level deductibles[] when it applies across coverages or perils.",
+      "additionalProperties": false,
+      "minProperties": 1,
+      "properties": {
+        "deductible_type": {
+          "$ref": "#/$defs/DeductibleType",
+          "description": "Kind of deductible."
+        },
+        "amount": {
+          "$ref": "#/$defs/MoneyValue",
+          "fideon:aliases": [
+            "Deductible",
+            "Ded",
+            "Deductible Amount"
+          ],
+          "description": "Amount of a flat deductible."
+        },
+        "percentage": {
+          "$ref": "#/$defs/PercentValue",
+          "description": "Percentage deductible, e.g. 2 for a 2% hurricane deductible."
+        },
+        "percentage_basis": {
+          "$ref": "#/$defs/FieldValue",
+          "description": "What the percentage is of, as printed (e.g. 'Coverage A limit')."
+        },
+        "peril": {
+          "$ref": "#/$defs/FieldValue",
+          "description": "Peril the deductible applies to (wind/hail, hurricane, all other perils).",
+          "fideon:aliases": [
+            "Peril",
+            "Applies To"
+          ]
+        },
+        "applies_to_coverages": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "coverage_codes it applies to (top-level deductibles only)."
+        },
+        "applies_to": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "unit_ids this element applies to; empty or omitted = the whole policy (or the whole part)."
+        }
+      },
+      "required": [
+        "deductible_type"
+      ],
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "deductible_type": {
+                "const": "flat"
+              }
+            },
+            "required": [
+              "deductible_type"
+            ]
+          },
+          "then": {
+            "required": [
+              "amount"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "deductible_type": {
+                "const": "percentage"
+              }
+            },
+            "required": [
+              "deductible_type"
+            ]
+          },
+          "then": {
+            "required": [
+              "percentage"
+            ]
+          }
+        }
+      ]
+    },
+    "Coverage": {
+      "type": "object",
+      "additionalProperties": false,
+      "minProperties": 1,
+      "properties": {
+        "coverage_id": {
+          "type": "string",
+          "pattern": "^cov_[0-9]+$",
+          "description": "Structural id, unique in the document."
+        },
+        "coverage_code": {
+          "type": "string",
+          "pattern": "^[A-Z][A-Z0-9]*_[A-Z0-9_]+$",
+          "description": "From <lob>.coverage_codes.yaml; LOB-prefixed (HO_COV_A) or shared (X_MED_PAY). Policy comparison aligns coverages by this code."
+        },
+        "coverage_name": {
+          "$ref": "#/$defs/FieldValue",
+          "description": "As printed.",
+          "fideon:aliases": [
+            "Coverage",
+            "Coverage Description"
+          ]
+        },
+        "part": {
+          "type": "string",
+          "description": "lob_parts[].part_id this element belongs to. Omitted on a single-part policy."
+        },
+        "applies_to": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "unit_ids this element applies to; empty or omitted = the whole policy (or the whole part)."
+        },
+        "included": {
+          "$ref": "#/$defs/IncludedValue",
+          "description": "Whether the coverage is included, excluded or not purchased."
+        },
+        "limits": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Limit"
+          },
+          "description": "Limits of the coverage."
+        },
+        "deductibles": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Deductible"
+          },
+          "description": "Deductibles that apply to this coverage only."
+        },
+        "premium": {
+          "$ref": "#/$defs/MoneyValue",
+          "fideon:aliases": [
+            "Premium"
+          ],
+          "description": "Premium for the coverage."
+        },
+        "valuation": {
+          "$ref": "#/$defs/ValuationValue",
+          "fideon:aliases": [
+            "Valuation",
+            "Loss Settlement",
+            "Loss Settlement Building",
+            "Loss Settlement Contents"
+          ],
+          "description": "Valuation basis."
+        },
+        "coinsurance_percent": {
+          "$ref": "#/$defs/PercentValue",
+          "fideon:aliases": [
+            "Coinsurance"
+          ],
+          "description": "Coinsurance percentage that applies to the coverage."
+        },
+        "form_refs": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Form numbers, as printed in forms_and_endorsements[].form_number, that grant or modify it."
+        },
+        "covered_auto_symbols": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/FieldValue"
+          },
+          "fideon:aliases": [
+            "Covered Autos",
+            "Covered Auto Symbol",
+            "Symbol"
+          ],
+          "description": "ISO covered-auto symbols printed against the coverage (1, 2, 7, 8, 9...). Business auto, garage, truckers and package auto parts."
+        }
+      },
+      "required": [
+        "coverage_id",
+        "coverage_code"
+      ]
+    },
+    "document": {
+      "type": "object",
+      "description": "About the document itself.",
+      "additionalProperties": false,
+      "minProperties": 1,
+      "properties": {
+        "doc_type": {
+          "type": "string",
+          "const": "policy_check",
+          "description": "Document type; always policy_check for these schemas."
+        },
+        "modality": {
+          "type": "string",
+          "enum": [
+            "native_pdf",
+            "scanned_pdf"
+          ],
+          "description": "SPEC_01 Step 0. Set by the pipeline, not printed."
+        },
+        "transaction_type": {
+          "$ref": "#/$defs/TransactionTypeValue",
+          "fideon:aliases": [
+            "Transaction Type",
+            "TRANS TYPE",
+            "Transaction"
+          ],
+          "description": "Kind of transaction the document records."
+        },
+        "transaction_date": {
+          "$ref": "#/$defs/DateValue",
+          "description": "Date the transaction was processed.",
+          "fideon:aliases": [
+            "Transaction Date",
+            "Amended Date"
+          ]
+        },
+        "transaction_effective_date": {
+          "$ref": "#/$defs/DateValue",
+          "description": "Date an endorsement, cancellation or reinstatement takes effect.",
+          "fideon:aliases": [
+            "Transaction Effective Date",
+            "Endorsement Effective Date",
+            "Policy Change Effective Date",
+            "Effective Date of Change",
+            "Change Effective",
+            "Effective Date/Transaction"
+          ]
+        },
+        "transaction_reason": {
+          "$ref": "#/$defs/FieldValue",
+          "fideon:aliases": [
+            "Transaction Reason",
+            "Reason for Change",
+            "Reason(s) for Modification",
+            "Description of Change"
+          ],
+          "description": "Reason for the transaction, as printed."
+        },
+        "endorsement_number": {
+          "$ref": "#/$defs/FieldValue",
+          "fideon:aliases": [
+            "Endorsement Number",
+            "Endorsement No",
+            "Policy Change Number",
+            "Change Number",
+            "Term-Seq"
+          ],
+          "description": "Number of the endorsement or policy change."
+        },
+        "title": {
+          "$ref": "#/$defs/FieldValue",
+          "description": "Document title as printed, e.g. 'Homeowners Policy Declarations'.",
+          "fideon:aliases": [
+            "Document Title"
+          ]
+        },
+        "issue_date": {
+          "$ref": "#/$defs/DateValue",
+          "fideon:aliases": [
+            "Date Issued",
+            "Issue Date",
+            "Issued",
+            "Policy Issued"
+          ],
+          "description": "Date the document was issued."
+        },
+        "print_date": {
+          "$ref": "#/$defs/DateValue",
+          "fideon:aliases": [
+            "Print Date",
+            "Date Printed",
+            "Printed",
+            "Process Date",
+            "Processing Date"
+          ],
+          "description": "Date the document was printed."
+        },
+        "mailing_date": {
+          "$ref": "#/$defs/DateValue",
+          "description": "Date the document was mailed; it starts notice periods on cancellation and nonrenewal notices.",
+          "fideon:aliases": [
+            "Date Mailed",
+            "Date of Mailing",
+            "Mailing Date"
+          ]
+        },
+        "page_count": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Number of pages in the document."
+        },
+        "source_file_name": {
+          "type": "string",
+          "description": "File name of the source PDF."
+        }
+      }
+    },
+    "carrier": {
+      "type": "object",
+      "description": "The insurer. Carrier names, addresses, phones and URLs are always protected in twins (SPEC_21 §6.3).",
+      "additionalProperties": false,
+      "minProperties": 1,
+      "properties": {
+        "name": {
+          "$ref": "#/$defs/FieldValue",
+          "description": "The writing company.",
+          "fideon:aliases": [
+            "Insurer",
+            "Carrier",
+            "Insurance Company",
+            "Underwriting Company",
+            "Writing Company",
+            "Issuing Company",
+            "Underwritten by",
+            "Insuring Company",
+            "Issued by"
+          ]
+        },
+        "naic_code": {
+          "$ref": "#/$defs/NaicValue",
+          "fideon:aliases": [
+            "NAIC",
+            "NAIC Code",
+            "NAIC #",
+            "Insurer Name"
+          ],
+          "description": "NAIC company code of the writing company."
+        },
+        "group_name": {
+          "$ref": "#/$defs/FieldValue",
+          "description": "Group or trade name, when printed separately from the writing company."
+        },
+        "address": {
+          "$ref": "#/$defs/Address",
+          "fideon:aliases": [
+            "Home Office",
+            "Administrative Office",
+            "Carrier Address"
+          ],
+          "description": "Address of the writing company."
+        },
+        "phone": {
+          "$ref": "#/$defs/FieldValue",
+          "fideon:aliases": [
+            "Phone",
+            "Telephone",
+            "Carrier Phone"
+          ],
+          "description": "Main phone number of the carrier."
+        },
+        "fax": {
+          "$ref": "#/$defs/FieldValue",
+          "fideon:aliases": [
+            "Fax",
+            "Fax Number"
+          ],
+          "description": "Fax number."
+        },
+        "web_address": {
+          "$ref": "#/$defs/FieldValue",
+          "fideon:aliases": [
+            "Carrier Website"
+          ],
+          "description": "Website address."
+        },
+        "claims_phone": {
+          "$ref": "#/$defs/FieldValue",
+          "fideon:aliases": [
+            "To Report a Claim",
+            "Report a Claim",
+            "Claims Hotline",
+            "24 Hour Claims",
+            "Service and Claims"
+          ],
+          "description": "Phone number for reporting a claim."
+        },
+        "claims_email": {
+          "$ref": "#/$defs/FieldValue",
+          "description": "Address claims are reported to, when printed.",
+          "fideon:aliases": [
+            "Claims Email"
+          ]
+        },
+        "claims_address": {
+          "$ref": "#/$defs/Address",
+          "description": "Where claims and notices are sent, when it differs from the carrier address.",
+          "fideon:aliases": [
+            "Notices to be sent to",
+            "Claims Reporting",
+            "All Other Notices"
+          ]
+        },
+        "admitted_status": {
+          "$ref": "#/$defs/AdmittedStatusValue",
+          "description": "Whether the writing company is admitted or non-admitted in the state."
+        }
+      }
+    },
+    "producer": {
+      "type": "object",
+      "description": "The agency or broker of record.",
+      "additionalProperties": false,
+      "minProperties": 1,
+      "properties": {
+        "agency_name": {
+          "$ref": "#/$defs/FieldValue",
+          "fideon:aliases": [
+            "Agency",
+            "Agent",
+            "Producer",
+            "Broker",
+            "Producer Name",
+            "Agent of Record"
+          ],
+          "description": "Name of the agency or broker of record."
+        },
+        "producer_code": {
+          "$ref": "#/$defs/FieldValue",
+          "fideon:aliases": [
+            "Agent Code",
+            "Producer Code",
+            "Agency Code",
+            "Agent No.",
+            "Agent ID",
+            "Agent Number",
+            "Agency ID",
+            "Agency Number"
+          ],
+          "description": "Code the carrier assigns to the agency."
+        },
+        "contact_name": {
+          "$ref": "#/$defs/FieldValue",
+          "fideon:aliases": [
+            "Agent Name"
+          ],
+          "description": "Contact person at the agency."
+        },
+        "address": {
+          "$ref": "#/$defs/Address",
+          "fideon:aliases": [
+            "Agent Address"
+          ],
+          "description": "Address of the agency."
+        },
+        "phone": {
+          "$ref": "#/$defs/FieldValue",
+          "fideon:aliases": [
+            "Phone",
+            "Telephone",
+            "Agent Phone",
+            "Agency Phone"
+          ],
+          "description": "Phone number of the agency."
+        },
+        "fax": {
+          "$ref": "#/$defs/FieldValue",
+          "fideon:aliases": [
+            "Fax",
+            "Fax Number",
+            "Agency Fax"
+          ],
+          "description": "Fax number."
+        },
+        "email": {
+          "$ref": "#/$defs/FieldValue",
+          "fideon:aliases": [
+            "Agent Email"
+          ],
+          "description": "Email address."
+        },
+        "web_address": {
+          "$ref": "#/$defs/FieldValue",
+          "description": "Website of the agency.",
+          "fideon:aliases": [
+            "Agency Website"
+          ]
+        },
+        "contract_number": {
+          "$ref": "#/$defs/FieldValue",
+          "description": "The agency's contract or sub-code with the carrier.",
+          "fideon:aliases": [
+            "Contract #",
+            "Contract Number",
+            "Producer Sub-Code",
+            "Sub Code"
+          ]
+        }
+      }
+    },
+    "AdditionalNamedInsured": {
+      "type": "object",
+      "additionalProperties": false,
+      "minProperties": 1,
+      "properties": {
+        "name": {
+          "$ref": "#/$defs/FieldValue",
+          "fideon:aliases": [
+            "Additional Named Insured",
+            "Additional Insured(s)"
+          ],
+          "description": "Name of the additional named insured."
+        },
+        "relationship": {
+          "$ref": "#/$defs/FieldValue",
+          "description": "As printed, e.g. 'Spouse', 'Subsidiary'."
+        },
+        "date_of_birth": {
+          "$ref": "#/$defs/DateValue",
+          "fideon:aliases": [
+            "Date of Birth",
+            "DOB",
+            "Birth Date"
+          ],
+          "description": "Date of birth."
+        },
+        "gender": {
+          "$ref": "#/$defs/FieldValue",
+          "fideon:aliases": [
+            "Gender",
+            "Sex"
+          ],
+          "description": "Gender as printed."
+        },
+        "marital_status": {
+          "$ref": "#/$defs/FieldValue",
+          "fideon:aliases": [
+            "Marital Status",
+            "Mar"
+          ],
+          "description": "Marital status as printed."
+        },
+        "occupation": {
+          "$ref": "#/$defs/FieldValue",
+          "fideon:aliases": [
+            "Occupation"
+          ],
+          "description": "Occupation as printed."
+        }
+      }
+    },
+    "named_insured": {
+      "type": "object",
+      "description": "The insured. date_of_birth, gender, marital_status and occupation apply to an individual insured (personal lines insured summaries).",
+      "additionalProperties": false,
+      "minProperties": 1,
+      "properties": {
+        "primary_name": {
+          "$ref": "#/$defs/FieldValue",
+          "fideon:aliases": [
+            "Named Insured",
+            "Insured",
+            "Insured Name",
+            "Policyholder",
+            "Applicant",
+            "Named Insured(s)",
+            "Applicant Name"
+          ],
+          "description": "First named insured."
+        },
+        "additional_named_insureds": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/AdditionalNamedInsured"
+          },
+          "description": "Every insured named besides the primary named insured, in printed order."
+        },
+        "doing_business_as": {
+          "$ref": "#/$defs/FieldValue",
+          "fideon:aliases": [
+            "DBA",
+            "d/b/a"
+          ],
+          "description": "Trade name the insured does business as."
+        },
+        "entity_type": {
+          "$ref": "#/$defs/FieldValue",
+          "description": "As printed: Individual, Corporation, LLC, Partnership, Trust...",
+          "fideon:aliases": [
+            "Form of Business",
+            "Entity Type",
+            "Business Type",
+            "Organization Type"
+          ]
+        },
+        "fein": {
+          "$ref": "#/$defs/FieldValue",
+          "fideon:aliases": [
+            "FEIN",
+            "Federal Employer ID",
+            "FEIN Number"
+          ],
+          "description": "Federal employer identification number."
+        },
+        "business_description": {
+          "$ref": "#/$defs/FieldValue",
+          "fideon:aliases": [
+            "Type of Business",
+            "Nature of Business",
+            "Description of Operations",
+            "Business Description"
+          ],
+          "description": "Nature of the insured's business or operations."
+        },
+        "mailing_address": {
+          "$ref": "#/$defs/Address",
+          "fideon:aliases": [
+            "Mailing Address",
+            "Mail To",
+            "Insured Address",
+            "Named Insured Mailing Address",
+            "Named Insured and Address"
+          ],
+          "description": "Address the insured receives mail at."
+        },
+        "phone": {
+          "$ref": "#/$defs/FieldValue",
+          "fideon:aliases": [
+            "Insured Phone"
+          ],
+          "description": "Phone number of the insured."
+        },
+        "email": {
+          "$ref": "#/$defs/FieldValue",
+          "fideon:aliases": [
+            "Insured Email"
+          ],
+          "description": "Email address of the insured."
+        },
+        "date_of_birth": {
+          "$ref": "#/$defs/DateValue",
+          "fideon:aliases": [
+            "Date of Birth",
+            "DOB",
+            "Birth Date"
+          ],
+          "description": "Date of birth."
+        },
+        "gender": {
+          "$ref": "#/$defs/FieldValue",
+          "fideon:aliases": [
+            "Gender",
+            "Sex"
+          ],
+          "description": "Gender as printed."
+        },
+        "marital_status": {
+          "$ref": "#/$defs/FieldValue",
+          "fideon:aliases": [
+            "Marital Status",
+            "Mar"
+          ],
+          "description": "Marital status as printed."
+        },
+        "occupation": {
+          "$ref": "#/$defs/FieldValue",
+          "fideon:aliases": [
+            "Occupation"
+          ],
+          "description": "Occupation as printed."
+        }
+      }
+    },
+    "policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "minProperties": 1,
+      "properties": {
+        "policy_number": {
+          "$ref": "#/$defs/FieldValue",
+          "fideon:aliases": [
+            "Policy Number",
+            "Policy No.",
+            "Policy #",
+            "Policy ID",
+            "Policy Reference",
+            "PolicyNumber"
+          ],
+          "description": "Policy number."
+        },
+        "prior_policy_number": {
+          "$ref": "#/$defs/FieldValue",
+          "fideon:aliases": [
+            "Prior Policy Number",
+            "Previous Policy Number",
+            "Renewal of",
+            "Replaces Policy"
+          ],
+          "description": "Number of the policy this one renews or replaces."
+        },
+        "certificate_number": {
+          "$ref": "#/$defs/FieldValue",
+          "fideon:aliases": [
+            "Certificate Number",
+            "Certificate No."
+          ],
+          "description": "Certificate number, when the policy is issued as a certificate under a master policy."
+        },
+        "policy_type": {
+          "$ref": "#/$defs/FieldValue",
+          "description": "Product, program or policy form name as printed (e.g. 'Homeowners HO-3', 'Auto Special').",
+          "fideon:aliases": [
+            "Policy Type",
+            "Policy Form"
+          ]
+        },
+        "original_inception_date": {
+          "$ref": "#/$defs/DateValue",
+          "description": "Date the insured first became a policyholder with the carrier.",
+          "fideon:aliases": [
+            "Original Inception Date",
+            "Policyholder Since",
+            "Insured Since"
+          ]
+        },
+        "effective_date": {
+          "$ref": "#/$defs/DateValue",
+          "fideon:aliases": [
+            "Effective Date",
+            "Policy Period From",
+            "Start Date",
+            "Inception Date",
+            "Policy Effective Date",
+            "Eff Date",
+            "Policy Term Effective Date",
+            "Proposed Effective",
+            "EffectiveDate",
+            "InceptionDate"
+          ],
+          "description": "Date coverage starts."
+        },
+        "expiration_date": {
+          "$ref": "#/$defs/DateValue",
+          "fideon:aliases": [
+            "Expiration Date",
+            "Policy Period To",
+            "Expiry Date",
+            "Policy Expiration Date",
+            "Policy Term Expiration Date",
+            "Proposed Expiration",
+            "ExpirationDate"
+          ],
+          "description": "Date coverage ends."
+        },
+        "term_months": {
+          "$ref": "#/$defs/NumberValue",
+          "description": "Term length in months; 'Annual' -> 12.",
+          "fideon:aliases": [
+            "Policy Term",
+            "Term"
+          ]
+        },
+        "coverage_trigger": {
+          "$ref": "#/$defs/CoverageTriggerValue",
+          "description": "What triggers coverage: occurrence or claims made."
+        },
+        "rating_state": {
+          "$ref": "#/$defs/StateValue",
+          "fideon:aliases": [
+            "Rating State",
+            "Policy State",
+            "State of Issue",
+            "Controlling State"
+          ],
+          "description": "State the policy is rated in."
+        },
+        "audit_period": {
+          "$ref": "#/$defs/FieldValue",
+          "description": "As printed: Annual, Semi-Annual, Quarterly, Monthly, Non-Auditable.",
+          "fideon:aliases": [
+            "Audit Period",
+            "Premium Audit Period",
+            "Audit Frequency"
+          ]
+        },
+        "subject_to_audit": {
+          "$ref": "#/$defs/BoolValue",
+          "fideon:aliases": [
+            "Subject to Audit",
+            "Policy may be Subject to Audit"
+          ],
+          "description": "Whether the premium is subject to audit."
+        },
+        "is_package": {
+          "type": "boolean",
+          "description": "True when lob_parts has more than one part."
+        }
+      }
+    },
+    "LobPart": {
+      "type": "object",
+      "description": "One LOB of the document (SPEC_21 §4.2.3). A single-LOB policy has one part.",
+      "additionalProperties": false,
+      "minProperties": 1,
+      "properties": {
+        "part_id": {
+          "type": "string",
+          "pattern": "^part_[0-9]+$",
+          "description": "Structural id of the part, unique in the document."
+        },
+        "lob": {
+          "type": "string",
+          "description": "LOB code from config/canonical_schema/common/lob_registry.yaml."
+        },
+        "title": {
+          "$ref": "#/$defs/FieldValue",
+          "fideon:aliases": [
+            "Coverage Part",
+            "Line of Business"
+          ],
+          "description": "Title of the coverage part as printed."
+        },
+        "coverage_part_form": {
+          "$ref": "#/$defs/FieldValue",
+          "description": "Coverage-part declarations form number.",
+          "fideon:aliases": [
+            "Base Form",
+            "Coverage Part Form",
+            "Policy Form Number"
+          ]
+        },
+        "premium": {
+          "$ref": "#/$defs/MoneyValue",
+          "fideon:aliases": [
+            "Coverage Part Premium"
+          ],
+          "description": "Premium for the part."
+        }
+      },
+      "required": [
+        "part_id",
+        "lob"
+      ]
+    },
+    "InterestedParty": {
+      "type": "object",
+      "additionalProperties": false,
+      "minProperties": 1,
+      "properties": {
+        "role": {
+          "type": "string",
+          "enum": [
+            "mortgagee",
+            "loss_payee",
+            "additional_insured",
+            "lienholder",
+            "certificate_holder",
+            "additional_interest",
+            "other"
+          ],
+          "description": "Role of the party."
+        },
+        "rank": {
+          "$ref": "#/$defs/NumberValue",
+          "description": "1 for first mortgagee, 2 for second..."
+        },
+        "name": {
+          "$ref": "#/$defs/FieldValue",
+          "fideon:aliases": [
+            "Mortgagee",
+            "Loss Payee",
+            "Lienholder",
+            "Additional Interest",
+            "Additional Insured"
+          ],
+          "description": "Name of the interested party."
+        },
+        "address": {
+          "$ref": "#/$defs/Address",
+          "description": "Address of the interested party."
+        },
+        "loan_number": {
+          "$ref": "#/$defs/FieldValue",
+          "fideon:aliases": [
+            "Loan Number",
+            "Loan No.",
+            "Loan #",
+            "Loan",
+            "Account Number"
+          ],
+          "description": "Loan or account number with the interested party."
+        },
+        "is_payor": {
+          "$ref": "#/$defs/BoolValue",
+          "description": "True when this party pays the premium (escrow billing).",
+          "fideon:aliases": [
+            "Payor",
+            "Bill Mortgagee",
+            "Escrow"
+          ]
+        },
+        "applies_to": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "unit_ids this element applies to; empty or omitted = the whole policy (or the whole part)."
+        }
+      },
+      "required": [
+        "role"
+      ]
+    },
+    "PremiumItem": {
+      "type": "object",
+      "description": "A premium line: per coverage, per unit or per part.",
+      "additionalProperties": false,
+      "minProperties": 1,
+      "properties": {
+        "description": {
+          "$ref": "#/$defs/FieldValue",
+          "description": "Description of the premium line as printed."
+        },
+        "amount": {
+          "$ref": "#/$defs/MoneyValue",
+          "description": "Premium amount of the line."
+        },
+        "unit_type": {
+          "$ref": "#/$defs/UnitType",
+          "description": "What the premium item is charged for."
+        },
+        "coverage_code": {
+          "type": "string",
+          "description": "Coverage the premium line is for, when it is for one coverage."
+        },
+        "applies_to": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "unit_ids this element applies to; empty or omitted = the whole policy (or the whole part)."
+        },
+        "part": {
+          "type": "string",
+          "description": "lob_parts[].part_id this element belongs to. Omitted on a single-part policy."
+        }
+      }
+    },
+    "Charge": {
+      "type": "object",
+      "description": "A tax, fee, surcharge or discount.",
+      "additionalProperties": false,
+      "minProperties": 1,
+      "properties": {
+        "description": {
+          "$ref": "#/$defs/FieldValue",
+          "description": "Name of the tax, fee, surcharge or discount as printed."
+        },
+        "amount": {
+          "$ref": "#/$defs/MoneyValue",
+          "description": "Amount of the tax, fee, surcharge or discount."
+        },
+        "percentage": {
+          "$ref": "#/$defs/PercentValue",
+          "description": "Rate of the charge or discount as a percentage, when printed."
+        },
+        "fully_earned": {
+          "$ref": "#/$defs/BoolValue",
+          "fideon:aliases": [
+            "Fully Earned"
+          ],
+          "description": "Whether the charge is fully earned (not refunded on cancellation)."
+        }
+      }
+    },
+    "premium": {
+      "type": "object",
+      "additionalProperties": false,
+      "minProperties": 1,
+      "properties": {
+        "total": {
+          "$ref": "#/$defs/MoneyValue",
+          "fideon:aliases": [
+            "Total Premium",
+            "Total Policy Premium",
+            "Annual Premium",
+            "Policy Premium",
+            "Total Term Premium",
+            "Total Premium for this Policy",
+            "Total Annual Premium",
+            "Total Quoted Premium",
+            "Term Amount"
+          ],
+          "description": "Total premium for the policy."
+        },
+        "deposit": {
+          "$ref": "#/$defs/MoneyValue",
+          "fideon:aliases": [
+            "Deposit Premium"
+          ],
+          "description": "Deposit premium due at inception."
+        },
+        "minimum": {
+          "$ref": "#/$defs/MoneyValue",
+          "description": "The least premium the policy (or part) is written for.",
+          "fideon:aliases": [
+            "Minimum Premium"
+          ]
+        },
+        "minimum_earned": {
+          "$ref": "#/$defs/MoneyValue",
+          "description": "The least premium kept on cancellation; not the same as `minimum`.",
+          "fideon:aliases": [
+            "Minimum Earned Premium"
+          ]
+        },
+        "change": {
+          "$ref": "#/$defs/MoneyValue",
+          "description": "Premium change made by this transaction; negative for a return premium.",
+          "fideon:aliases": [
+            "Premium Change",
+            "Additional Premium",
+            "Return Premium",
+            "Premium Difference",
+            "Net Change Amount",
+            "Premium Adjustment for this Change"
+          ]
+        },
+        "items": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/PremiumItem"
+          },
+          "description": "Premium lines: per coverage, per unit or per part.",
+          "fideon:aliases": [
+            "Unit Premium"
+          ]
+        },
+        "taxes_fees": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Charge"
+          },
+          "fideon:aliases": [
+            "Taxes",
+            "Fees",
+            "Taxes and Fees",
+            "Surplus Lines Tax",
+            "SL Tax",
+            "Stamping Fee",
+            "Policy Fee",
+            "Taxable Fees",
+            "NY Fire Fee",
+            "Fire Fee",
+            "Motor Vehicle Law Enforcement Fee",
+            "Policy Taxes/Fees"
+          ],
+          "description": "Taxes and fees charged."
+        },
+        "surcharges": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Charge"
+          },
+          "fideon:aliases": [
+            "Surcharges"
+          ],
+          "description": "Surcharges applied."
+        },
+        "discounts": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Charge"
+          },
+          "fideon:aliases": [
+            "Discounts",
+            "Credits",
+            "Discounts Applied",
+            "Schedule of Discounts"
+          ],
+          "description": "Discounts and credits applied."
+        }
+      }
+    },
+    "Installment": {
+      "type": "object",
+      "additionalProperties": false,
+      "minProperties": 1,
+      "properties": {
+        "installment_number": {
+          "$ref": "#/$defs/NumberValue",
+          "description": "Number of the installment in the payment plan."
+        },
+        "due_date": {
+          "$ref": "#/$defs/DateValue",
+          "fideon:aliases": [
+            "Due Date"
+          ],
+          "description": "Date the installment is due."
+        },
+        "amount": {
+          "$ref": "#/$defs/MoneyValue",
+          "description": "Amount of the installment."
+        }
+      }
+    },
+    "billing": {
+      "type": "object",
+      "additionalProperties": false,
+      "minProperties": 1,
+      "properties": {
+        "payment_plan": {
+          "$ref": "#/$defs/FieldValue",
+          "fideon:aliases": [
+            "Payment Plan",
+            "Pay Plan",
+            "Billing Plan",
+            "Bill Plan"
+          ],
+          "description": "Payment plan as printed (annual, 2-pay, 12-pay EFT...)."
+        },
+        "bill_type": {
+          "$ref": "#/$defs/FieldValue",
+          "description": "As printed: Direct Bill, Agency Bill.",
+          "fideon:aliases": [
+            "Billing Type",
+            "Bill Type"
+          ]
+        },
+        "payment_method": {
+          "$ref": "#/$defs/FieldValue",
+          "description": "As printed: EFT, recurring card, check...",
+          "fideon:aliases": [
+            "Payment Method",
+            "Pay Method",
+            "Payment Type"
+          ]
+        },
+        "account_number": {
+          "$ref": "#/$defs/FieldValue",
+          "fideon:aliases": [
+            "Billing Account #",
+            "Billing Account Number",
+            "Account Number"
+          ],
+          "description": "Billing account number the carrier bills under."
+        },
+        "amount_due": {
+          "$ref": "#/$defs/MoneyValue",
+          "fideon:aliases": [
+            "Amount Due",
+            "Current Amount Due",
+            "Minimum Amount Due",
+            "Minimum Due"
+          ],
+          "description": "Amount currently due on the bill."
+        },
+        "due_date": {
+          "$ref": "#/$defs/DateValue",
+          "fideon:aliases": [
+            "Due Date",
+            "Payment Due By",
+            "Due By"
+          ],
+          "description": "Date payment is due."
+        },
+        "installments": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Installment"
+          },
+          "description": "Scheduled installments."
+        }
+      }
+    },
+    "Form": {
+      "type": "object",
+      "description": "A form or endorsement listed in the forms schedule or attached to the policy.",
+      "additionalProperties": false,
+      "minProperties": 1,
+      "properties": {
+        "form_number": {
+          "$ref": "#/$defs/FieldValue",
+          "fideon:aliases": [
+            "Form Number",
+            "Form No.",
+            "Form"
+          ],
+          "description": "Form number as printed, e.g. 'HO 00 03'."
+        },
+        "edition_date": {
+          "$ref": "#/$defs/FieldValue",
+          "fideon:aliases": [
+            "Edition",
+            "Edition Date"
+          ],
+          "description": "Edition date of the form as printed (often month and year only, e.g. '05 11')."
+        },
+        "title": {
+          "$ref": "#/$defs/FieldValue",
+          "fideon:aliases": [
+            "Form Name",
+            "Title",
+            "Description",
+            "Form Endorsement Title"
+          ],
+          "description": "Title of the form or endorsement."
+        },
+        "form_type": {
+          "$ref": "#/$defs/FormType",
+          "description": "Kind of form."
+        },
+        "part": {
+          "type": "string",
+          "description": "lob_parts[].part_id this element belongs to. Omitted on a single-part policy."
+        },
+        "applies_to": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "unit_ids this element applies to; empty or omitted = the whole policy (or the whole part)."
+        },
+        "premium": {
+          "$ref": "#/$defs/MoneyValue",
+          "description": "Premium charged for the form or endorsement.",
+          "fideon:aliases": [
+            "Endorsement Premium",
+            "Endorsment Premium"
+          ]
+        },
+        "page_range": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "minItems": 2,
+          "maxItems": 2,
+          "description": "First and last PDF page, 1-based."
+        }
+      }
+    },
+    "Location": {
+      "type": "object",
+      "additionalProperties": false,
+      "minProperties": 1,
+      "properties": {
+        "unit_id": {
+          "type": "string",
+          "pattern": "^[a-z]+_[0-9]+$",
+          "description": "Structural id, unique in the document (e.g. 'veh_2', 'loc_1'). Assigned by the drafter in printed order; never printed. Coverages, interested parties and premium items refer to it."
+        },
+        "part": {
+          "type": "string",
+          "description": "lob_parts[].part_id this element belongs to. Omitted on a single-part policy."
+        },
+        "location_number": {
+          "$ref": "#/$defs/NumberValue",
+          "fideon:aliases": [
+            "Location",
+            "Loc",
+            "Loc #",
+            "Premises No."
+          ],
+          "description": "Location number as printed on the schedule."
+        },
+        "address": {
+          "$ref": "#/$defs/Address",
+          "description": "Address of the premises. A vehicle's printed garaging ZIP or state is recorded as a location whose address holds it; vehicles[].garaging_location_ref points to it.",
+          "fideon:aliases": [
+            "Location Address",
+            "Residence Premises",
+            "Described Location",
+            "Insured Property Location",
+            "Location(s) of Property Insured",
+            "Garaging Address",
+            "Garaging ZIP Code",
+            "Garaging State",
+            "Garage"
+          ]
+        },
+        "territory": {
+          "$ref": "#/$defs/FieldValue",
+          "fideon:aliases": [
+            "Territory",
+            "Rating Territory",
+            "Zone",
+            "Rating Zone",
+            "Territory Code",
+            "Territorial Zone",
+            "Terr"
+          ],
+          "description": "Rating territory or zone."
+        },
+        "protection_class": {
+          "$ref": "#/$defs/FieldValue",
+          "fideon:aliases": [
+            "Protection Class",
+            "PC",
+            "Fire Protection Class",
+            "Protection",
+            "Fire Protection"
+          ],
+          "description": "Fire protection class of the premises."
+        },
+        "fire_district": {
+          "$ref": "#/$defs/FieldValue",
+          "fideon:aliases": [
+            "Fire District",
+            "Fire Protection District"
+          ],
+          "description": "Fire district or fire protection area the premises fall in."
+        },
+        "insured_interest": {
+          "$ref": "#/$defs/FieldValue",
+          "description": "The insured's interest in the premises: Owner, Deeded owner, Tenant, LLC member...",
+          "fideon:aliases": [
+            "Interest",
+            "Policy Interest Type",
+            "Insured's Interest"
+          ]
+        },
+        "distance_to_fire_station": {
+          "$ref": "#/$defs/FieldValue",
+          "fideon:aliases": [
+            "Miles to Fire Station",
+            "Distance to Fire Station",
+            "Miles From Fire Dept"
+          ],
+          "description": "Distance to the responding fire station."
+        },
+        "distance_to_hydrant": {
+          "$ref": "#/$defs/FieldValue",
+          "fideon:aliases": [
+            "Feet to Hydrant",
+            "Distance to Hydrant",
+            "Feet From Hydrant"
+          ],
+          "description": "Distance to the nearest fire hydrant."
+        }
+      },
+      "required": [
+        "unit_id"
+      ]
+    },
+    "Building": {
+      "type": "object",
+      "additionalProperties": false,
+      "minProperties": 1,
+      "properties": {
+        "unit_id": {
+          "type": "string",
+          "pattern": "^[a-z]+_[0-9]+$",
+          "description": "Structural id, unique in the document (e.g. 'veh_2', 'loc_1'). Assigned by the drafter in printed order; never printed. Coverages, interested parties and premium items refer to it."
+        },
+        "part": {
+          "type": "string",
+          "description": "lob_parts[].part_id this element belongs to. Omitted on a single-part policy."
+        },
+        "location_ref": {
+          "type": "string",
+          "description": "unit_id of the locations[] element this belongs to."
+        },
+        "building_number": {
+          "$ref": "#/$defs/NumberValue",
+          "fideon:aliases": [
+            "Building",
+            "Bldg",
+            "Bldg #"
+          ],
+          "description": "Building number as printed on the schedule."
+        },
+        "construction": {
+          "$ref": "#/$defs/FieldValue",
+          "fideon:aliases": [
+            "Construction",
+            "Construction Type"
+          ],
+          "description": "Construction type (frame, masonry, fire resistive...)."
+        },
+        "occupancy": {
+          "$ref": "#/$defs/FieldValue",
+          "fideon:aliases": [
+            "Occupancy",
+            "Usage"
+          ],
+          "description": "How the building is occupied or used."
+        },
+        "year_built": {
+          "$ref": "#/$defs/YearValue",
+          "fideon:aliases": [
+            "Year Built",
+            "Year of Construction"
+          ],
+          "description": "Year the building was built."
+        },
+        "area_sq_ft": {
+          "$ref": "#/$defs/NumberValue",
+          "fideon:aliases": [
+            "Square Feet",
+            "Square Footage",
+            "Total Square Feet",
+            "Sq Ft",
+            "Total Living Area"
+          ],
+          "description": "Floor area in square feet."
+        },
+        "stories": {
+          "$ref": "#/$defs/NumberValue",
+          "fideon:aliases": [
+            "Stories",
+            "Number of Stories"
+          ],
+          "description": "Number of stories."
+        },
+        "number_of_units": {
+          "$ref": "#/$defs/NumberValue",
+          "fideon:aliases": [
+            "Number of Families",
+            "No. of Families",
+            "Number Families",
+            "Units",
+            "Family Units",
+            "Families"
+          ],
+          "description": "Number of dwelling units or families in the building."
+        },
+        "roof_type": {
+          "$ref": "#/$defs/FieldValue",
+          "fideon:aliases": [
+            "Roof Type",
+            "Roof Material",
+            "Roof Covering"
+          ],
+          "description": "Roof type or covering material."
+        },
+        "protective_devices": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/FieldValue"
+          },
+          "fideon:aliases": [
+            "Protective Devices",
+            "Prot. Device",
+            "Alarm",
+            "Burglar Alarm",
+            "Fire Alarm",
+            "Smoke Alarm",
+            "Fire Extinguisher",
+            "Opening Protection"
+          ],
+          "description": "Protective devices fitted (alarms, sprinklers, extinguishers...)."
+        },
+        "basement": {
+          "$ref": "#/$defs/BoolValue",
+          "fideon:aliases": [
+            "Basement"
+          ],
+          "description": "Whether the building has a basement."
+        },
+        "sprinklered": {
+          "$ref": "#/$defs/BoolValue",
+          "fideon:aliases": [
+            "Sprinklered",
+            "Sprinkler",
+            "Sprinklers"
+          ],
+          "description": "Whether the building has an automatic sprinkler system."
+        },
+        "heating_type": {
+          "$ref": "#/$defs/FieldValue",
+          "fideon:aliases": [
+            "Primary Heating Type",
+            "Heating Type",
+            "Heating System"
+          ],
+          "description": "Type of the primary heating system."
+        },
+        "heating_fuel": {
+          "$ref": "#/$defs/FieldValue",
+          "fideon:aliases": [
+            "Fuel Type",
+            "Heating Fuel"
+          ],
+          "description": "Fuel of the primary heating system."
+        },
+        "heating_year_updated": {
+          "$ref": "#/$defs/YearValue",
+          "fideon:aliases": [
+            "Year Primary System Updated",
+            "Heating Updated"
+          ],
+          "description": "Year the primary heating system was last updated."
+        }
+      },
+      "required": [
+        "unit_id"
+      ]
+    },
+    "Vehicle": {
+      "type": "object",
+      "additionalProperties": false,
+      "minProperties": 1,
+      "properties": {
+        "unit_id": {
+          "type": "string",
+          "pattern": "^[a-z]+_[0-9]+$",
+          "description": "Structural id, unique in the document (e.g. 'veh_2', 'loc_1'). Assigned by the drafter in printed order; never printed. Coverages, interested parties and premium items refer to it."
+        },
+        "part": {
+          "type": "string",
+          "description": "lob_parts[].part_id this element belongs to. Omitted on a single-part policy."
+        },
+        "vehicle_number": {
+          "$ref": "#/$defs/NumberValue",
+          "fideon:aliases": [
+            "Veh",
+            "Veh #",
+            "Vehicle",
+            "Auto",
+            "Unit"
+          ],
+          "description": "Vehicle number as printed on the schedule."
+        },
+        "year": {
+          "$ref": "#/$defs/YearValue",
+          "fideon:aliases": [
+            "Year",
+            "Yr"
+          ],
+          "description": "Model year."
+        },
+        "make": {
+          "$ref": "#/$defs/FieldValue",
+          "fideon:aliases": [
+            "Make",
+            "Make/Model",
+            "Year/Make"
+          ],
+          "description": "Manufacturer."
+        },
+        "model": {
+          "$ref": "#/$defs/FieldValue",
+          "fideon:aliases": [
+            "Model"
+          ],
+          "description": "Model."
+        },
+        "vin": {
+          "$ref": "#/$defs/FieldValue",
+          "fideon:aliases": [
+            "VIN",
+            "Vehicle Identification Number",
+            "Serial Number",
+            "VIN Number",
+            "Vehicle Identification"
+          ],
+          "description": "Vehicle identification number."
+        },
+        "body_type": {
+          "$ref": "#/$defs/FieldValue",
+          "description": "A trailer is a vehicle with body_type 'Trailer'.",
+          "fideon:aliases": [
+            "Body Type",
+            "Body Style",
+            "Vehicle Type"
+          ]
+        },
+        "use": {
+          "$ref": "#/$defs/FieldValue",
+          "fideon:aliases": [
+            "Use",
+            "Vehicle Use",
+            "Usage",
+            "Usage Class",
+            "Primary use of the vehicle",
+            "Personal Use"
+          ],
+          "description": "How the vehicle is used (pleasure, commute, business...)."
+        },
+        "annual_mileage": {
+          "$ref": "#/$defs/FieldValue",
+          "description": "As printed; often a band ('10,000 - 11,999').",
+          "fideon:aliases": [
+            "Annual Miles",
+            "Annual Mileage",
+            "Mileage"
+          ]
+        },
+        "commute_miles_one_way": {
+          "$ref": "#/$defs/FieldValue",
+          "fideon:aliases": [
+            "Miles One Way"
+          ],
+          "description": "One-way commuting distance printed for the vehicle."
+        },
+        "engine_displacement": {
+          "$ref": "#/$defs/FieldValue",
+          "description": "Engine size as printed (e.g. '1,745 cc').",
+          "fideon:aliases": [
+            "Engine Displacement",
+            "CC"
+          ]
+        },
+        "garaging_location_ref": {
+          "type": "string",
+          "description": "unit_id of the locations[] element this belongs to."
+        },
+        "attached_to_ref": {
+          "type": "string",
+          "description": "unit_id of the vehicle or watercraft a trailer is used with."
+        },
+        "cost_new": {
+          "$ref": "#/$defs/MoneyValue",
+          "fideon:aliases": [
+            "Cost New",
+            "Original Cost New"
+          ],
+          "description": "Original cost new of the vehicle."
+        },
+        "stated_amount": {
+          "$ref": "#/$defs/MoneyValue",
+          "fideon:aliases": [
+            "Stated Amount",
+            "Stated Value",
+            "Agreed Value",
+            "Guaranteed Value"
+          ],
+          "description": "Stated or agreed value of the vehicle."
+        },
+        "symbols": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/FieldValue"
+          },
+          "fideon:aliases": [
+            "Symbol",
+            "Sym"
+          ],
+          "description": "Rating symbols printed for the vehicle."
+        }
+      },
+      "required": [
+        "unit_id"
+      ]
+    },
+    "Driver": {
+      "type": "object",
+      "additionalProperties": false,
+      "minProperties": 1,
+      "properties": {
+        "unit_id": {
+          "type": "string",
+          "pattern": "^[a-z]+_[0-9]+$",
+          "description": "Structural id, unique in the document (e.g. 'veh_2', 'loc_1'). Assigned by the drafter in printed order; never printed. Coverages, interested parties and premium items refer to it."
+        },
+        "part": {
+          "type": "string",
+          "description": "lob_parts[].part_id this element belongs to. Omitted on a single-part policy."
+        },
+        "driver_number": {
+          "$ref": "#/$defs/NumberValue",
+          "fideon:aliases": [
+            "Driver",
+            "Drv #"
+          ],
+          "description": "Driver number as printed on the schedule."
+        },
+        "name": {
+          "$ref": "#/$defs/FieldValue",
+          "fideon:aliases": [
+            "Driver Name",
+            "Drivers",
+            "Operator"
+          ],
+          "description": "Driver's name."
+        },
+        "date_of_birth": {
+          "$ref": "#/$defs/DateValue",
+          "fideon:aliases": [
+            "Date of Birth",
+            "DOB",
+            "Birth Date"
+          ],
+          "description": "Date of birth."
+        },
+        "age": {
+          "$ref": "#/$defs/NumberValue",
+          "fideon:aliases": [
+            "Age"
+          ],
+          "description": "Driver's age as printed."
+        },
+        "gender": {
+          "$ref": "#/$defs/FieldValue",
+          "fideon:aliases": [
+            "Gender",
+            "Sex"
+          ],
+          "description": "Gender as printed."
+        },
+        "marital_status": {
+          "$ref": "#/$defs/FieldValue",
+          "fideon:aliases": [
+            "Marital Status"
+          ],
+          "description": "Marital status as printed."
+        },
+        "license_state": {
+          "$ref": "#/$defs/StateValue",
+          "fideon:aliases": [
+            "License State",
+            "Lic State"
+          ],
+          "description": "State that issued the driver's licence."
+        },
+        "license_number": {
+          "$ref": "#/$defs/FieldValue",
+          "fideon:aliases": [
+            "License Number",
+            "License #",
+            "Lic No.",
+            "License State Number"
+          ],
+          "description": "Driver's licence number."
+        },
+        "relationship": {
+          "$ref": "#/$defs/FieldValue",
+          "fideon:aliases": [
+            "Relationship",
+            "Relation to Insured",
+            "Relation to Primary"
+          ],
+          "description": "Relationship to the named insured."
+        },
+        "status": {
+          "$ref": "#/$defs/DriverStatusValue",
+          "fideon:aliases": [
+            "Status",
+            "Driver Status",
+            "Driver Type",
+            "Rated Driver"
+          ],
+          "description": "Driver status (rated, excluded, listed)."
+        }
+      },
+      "required": [
+        "unit_id"
+      ]
+    },
+    "Motor": {
+      "type": "object",
+      "additionalProperties": false,
+      "minProperties": 1,
+      "properties": {
+        "year": {
+          "$ref": "#/$defs/YearValue",
+          "description": "Model year of the motor."
+        },
+        "make": {
+          "$ref": "#/$defs/FieldValue",
+          "fideon:aliases": [
+            "Motor Make",
+            "Engine Make"
+          ],
+          "description": "Manufacturer of the motor."
+        },
+        "horsepower": {
+          "$ref": "#/$defs/NumberValue",
+          "fideon:aliases": [
+            "HP",
+            "Horsepower"
+          ],
+          "description": "Horsepower of the motor."
+        },
+        "serial": {
+          "$ref": "#/$defs/FieldValue",
+          "fideon:aliases": [
+            "Motor Serial",
+            "Engine Serial Number"
+          ],
+          "description": "Serial number of the motor."
+        }
+      }
+    },
+    "Watercraft": {
+      "type": "object",
+      "additionalProperties": false,
+      "minProperties": 1,
+      "properties": {
+        "unit_id": {
+          "type": "string",
+          "pattern": "^[a-z]+_[0-9]+$",
+          "description": "Structural id, unique in the document (e.g. 'veh_2', 'loc_1'). Assigned by the drafter in printed order; never printed. Coverages, interested parties and premium items refer to it."
+        },
+        "part": {
+          "type": "string",
+          "description": "lob_parts[].part_id this element belongs to. Omitted on a single-part policy."
+        },
+        "watercraft_number": {
+          "$ref": "#/$defs/NumberValue",
+          "description": "Watercraft number as printed on the schedule."
+        },
+        "hin": {
+          "$ref": "#/$defs/FieldValue",
+          "fideon:aliases": [
+            "HIN",
+            "Hull ID",
+            "Hull Identification Number",
+            "Hull ID #",
+            "Hull Identification #"
+          ],
+          "description": "Hull identification number."
+        },
+        "year": {
+          "$ref": "#/$defs/YearValue",
+          "fideon:aliases": [
+            "Year"
+          ],
+          "description": "Model year of the watercraft."
+        },
+        "make": {
+          "$ref": "#/$defs/FieldValue",
+          "fideon:aliases": [
+            "Make",
+            "Manufacturer"
+          ],
+          "description": "Manufacturer of the watercraft."
+        },
+        "model": {
+          "$ref": "#/$defs/FieldValue",
+          "fideon:aliases": [
+            "Model"
+          ],
+          "description": "Model of the watercraft."
+        },
+        "length": {
+          "$ref": "#/$defs/FieldValue",
+          "fideon:aliases": [
+            "Length",
+            "LOA"
+          ],
+          "description": "Length of the watercraft as printed."
+        },
+        "hull_type": {
+          "$ref": "#/$defs/FieldValue",
+          "fideon:aliases": [
+            "Hull Type",
+            "Hull Material",
+            "Boat Type"
+          ],
+          "description": "Hull type or material."
+        },
+        "hull_value": {
+          "$ref": "#/$defs/MoneyValue",
+          "fideon:aliases": [
+            "Hull Value",
+            "Agreed Hull Value",
+            "Boat Value",
+            "Watercraft and Auxiliary Equipment Value"
+          ],
+          "description": "Insured value of the hull."
+        },
+        "motors": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Motor"
+          },
+          "fideon:aliases": [
+            "Motor",
+            "Engine"
+          ],
+          "description": "Motors or engines fitted to the watercraft."
+        },
+        "navigation_area": {
+          "$ref": "#/$defs/FieldValue",
+          "fideon:aliases": [
+            "Navigation Area",
+            "Navigational Limits",
+            "Cruising Area",
+            "Navigation Limits"
+          ],
+          "description": "Waters the watercraft may navigate under the policy."
+        }
+      },
+      "required": [
+        "unit_id"
+      ]
+    },
+    "ScheduledItem": {
+      "type": "object",
+      "additionalProperties": false,
+      "minProperties": 1,
+      "properties": {
+        "unit_id": {
+          "type": "string",
+          "pattern": "^[a-z]+_[0-9]+$",
+          "description": "Structural id, unique in the document (e.g. 'veh_2', 'loc_1'). Assigned by the drafter in printed order; never printed. Coverages, interested parties and premium items refer to it."
+        },
+        "part": {
+          "type": "string",
+          "description": "lob_parts[].part_id this element belongs to. Omitted on a single-part policy."
+        },
+        "item_number": {
+          "$ref": "#/$defs/NumberValue",
+          "fideon:aliases": [
+            "Item",
+            "Item #"
+          ],
+          "description": "Item number as printed on the schedule."
+        },
+        "category": {
+          "$ref": "#/$defs/FieldValue",
+          "fideon:aliases": [
+            "Class",
+            "Category",
+            "Class of Property"
+          ],
+          "description": "Class or category of the scheduled item (jewelry, fine arts, cameras...)."
+        },
+        "description": {
+          "$ref": "#/$defs/FieldValue",
+          "fideon:aliases": [
+            "Description",
+            "Item Description"
+          ],
+          "description": "Description of the item as printed."
+        },
+        "serial": {
+          "$ref": "#/$defs/FieldValue",
+          "fideon:aliases": [
+            "Serial Number",
+            "Serial #"
+          ],
+          "description": "Serial number."
+        },
+        "value": {
+          "$ref": "#/$defs/MoneyValue",
+          "fideon:aliases": [
+            "Value",
+            "Amount of Insurance",
+            "Scheduled Amount",
+            "Appraised Value"
+          ],
+          "description": "Insured value of the item."
+        },
+        "valuation": {
+          "$ref": "#/$defs/ValuationValue",
+          "description": "Valuation basis of the item."
+        },
+        "location_ref": {
+          "type": "string",
+          "description": "unit_id of the locations[] element this belongs to."
+        }
+      },
+      "required": [
+        "unit_id"
+      ]
+    },
+    "RatingExposure": {
+      "type": "object",
+      "additionalProperties": false,
+      "minProperties": 1,
+      "properties": {
+        "state": {
+          "$ref": "#/$defs/StateValue",
+          "fideon:aliases": [
+            "State"
+          ],
+          "description": "State of the exposure, two-letter USPS code in parsed."
+        },
+        "location_ref": {
+          "type": "string",
+          "description": "unit_id of the locations[] element this belongs to."
+        },
+        "class_code": {
+          "$ref": "#/$defs/FieldValue",
+          "fideon:aliases": [
+            "Class Code",
+            "Class",
+            "Code"
+          ],
+          "description": "Rating classification code (GL, WC or auto class)."
+        },
+        "class_description": {
+          "$ref": "#/$defs/FieldValue",
+          "fideon:aliases": [
+            "Classification",
+            "Class Description"
+          ],
+          "description": "Description of the rating classification."
+        },
+        "exposure_basis": {
+          "$ref": "#/$defs/FieldValue",
+          "description": "Payroll, sales, units, area, receipts...",
+          "fideon:aliases": [
+            "Premium Basis",
+            "Exposure Basis",
+            "Basis"
+          ]
+        },
+        "exposure_amount": {
+          "$ref": "#/$defs/NumberValue",
+          "fideon:aliases": [
+            "Exposure",
+            "Estimated Payroll",
+            "Estimated Annual Remuneration"
+          ],
+          "description": "Rating exposure (payroll, sales, units, area or receipts)."
+        },
+        "rate": {
+          "$ref": "#/$defs/NumberValue",
+          "fideon:aliases": [
+            "Rate"
+          ],
+          "description": "Rate applied to the exposure."
+        },
+        "rate_basis": {
+          "$ref": "#/$defs/FieldValue",
+          "description": "Per $100 of payroll, per $1,000 of sales..."
+        },
+        "premium": {
+          "$ref": "#/$defs/MoneyValue",
+          "fideon:aliases": [
+            "Premium",
+            "Estimated Annual Premium"
+          ],
+          "description": "Premium for the exposure line."
+        },
+        "part": {
+          "type": "string",
+          "description": "lob_parts[].part_id this element belongs to. Omitted on a single-part policy."
+        }
+      }
+    },
+    "RatingModifier": {
+      "type": "object",
+      "additionalProperties": false,
+      "minProperties": 1,
+      "properties": {
+        "modifier_type": {
+          "type": "string",
+          "enum": [
+            "experience_mod",
+            "schedule",
+            "irpm",
+            "multi_policy",
+            "protective_device",
+            "loss_free",
+            "other"
+          ],
+          "description": "Kind of modifier."
+        },
+        "description": {
+          "$ref": "#/$defs/FieldValue",
+          "description": "As printed, e.g. 'Experience Modification', 'Multi-Policy Discount'."
+        },
+        "factor": {
+          "$ref": "#/$defs/NumberValue",
+          "fideon:aliases": [
+            "Factor",
+            "Mod",
+            "Modifier"
+          ],
+          "description": "Modification factor (e.g. 0.85)."
+        },
+        "percent": {
+          "$ref": "#/$defs/PercentValue",
+          "description": "Modifier as a percentage."
+        },
+        "applies_to": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "unit_ids this element applies to; empty or omitted = the whole policy (or the whole part)."
+        }
+      },
+      "required": [
+        "modifier_type"
+      ]
+    },
+    "claims_made_terms": {
+      "type": "object",
+      "additionalProperties": false,
+      "minProperties": 1,
+      "properties": {
+        "retroactive_date": {
+          "$ref": "#/$defs/DateValue",
+          "fideon:aliases": [
+            "Retroactive Date",
+            "Retro Date"
+          ],
+          "description": "Retroactive date for claims-made coverage."
+        },
+        "pending_prior_litigation_date": {
+          "$ref": "#/$defs/DateValue",
+          "fideon:aliases": [
+            "Pending or Prior Litigation Date",
+            "Prior and Pending Litigation Date",
+            "Prior or Pending Date"
+          ],
+          "description": "Pending or prior litigation date for claims-made coverage."
+        },
+        "continuity_date": {
+          "$ref": "#/$defs/DateValue",
+          "fideon:aliases": [
+            "Continuity Date",
+            "Prior Knowledge Date"
+          ],
+          "description": "Continuity or prior-knowledge date for claims-made coverage."
+        },
+        "extended_reporting_period": {
+          "$ref": "#/$defs/FieldValue",
+          "description": "Length, as printed.",
+          "fideon:aliases": [
+            "Extended Reporting Period",
+            "ERP",
+            "Discovery Period"
+          ]
+        },
+        "extended_reporting_premium_percent": {
+          "$ref": "#/$defs/PercentValue",
+          "description": "Premium for the extended reporting period, as a percentage of the annual premium."
+        },
+        "defense_within_limits": {
+          "$ref": "#/$defs/BoolValue",
+          "fideon:aliases": [
+            "Defense Within Limits",
+            "Defense Costs Inside Limits"
+          ],
+          "description": "Whether defence costs reduce the limit of liability."
+        }
+      }
+    },
+    "InsuringAgreement": {
+      "type": "object",
+      "additionalProperties": false,
+      "minProperties": 1,
+      "properties": {
+        "agreement_code": {
+          "type": "string",
+          "description": "e.g. 'SIDE_A', 'FIRST_PARTY_BI'."
+        },
+        "agreement_name": {
+          "$ref": "#/$defs/FieldValue",
+          "fideon:aliases": [
+            "Insuring Agreement",
+            "Insuring Clause"
+          ],
+          "description": "Insuring agreement name as printed."
+        },
+        "coverage_refs": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "coverage_ids under this agreement."
+        },
+        "retention": {
+          "$ref": "#/$defs/MoneyValue",
+          "fideon:aliases": [
+            "Retention"
+          ],
+          "description": "Retention that applies to the insuring agreement."
+        }
+      }
+    },
+    "UnderlyingPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "minProperties": 1,
+      "properties": {
+        "carrier_name": {
+          "$ref": "#/$defs/FieldValue",
+          "fideon:aliases": [
+            "Underlying Carrier",
+            "Underlying Insurer"
+          ],
+          "description": "Insurer of the underlying policy."
+        },
+        "policy_number": {
+          "$ref": "#/$defs/FieldValue",
+          "description": "Policy number of the underlying policy."
+        },
+        "coverage_code": {
+          "type": "string",
+          "description": "Coverage code of the underlying coverage."
+        },
+        "coverage_name": {
+          "$ref": "#/$defs/FieldValue",
+          "fideon:aliases": [
+            "Underlying Coverage",
+            "Type of Coverage"
+          ],
+          "description": "Underlying coverage as printed."
+        },
+        "limits": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Limit"
+          },
+          "description": "Limits of the underlying policy."
+        },
+        "effective_date": {
+          "$ref": "#/$defs/DateValue",
+          "description": "Date the underlying policy starts."
+        },
+        "expiration_date": {
+          "$ref": "#/$defs/DateValue",
+          "description": "Date the underlying policy ends."
+        }
+      }
+    },
+    "attachment": {
+      "type": "object",
+      "additionalProperties": false,
+      "minProperties": 1,
+      "properties": {
+        "retained_amount": {
+          "$ref": "#/$defs/MoneyValue",
+          "description": "Amount the insured retains where no underlying policy applies (SPEC_21 'retained limit').",
+          "fideon:aliases": [
+            "Retained Limit",
+            "Retained Amount"
+          ]
+        },
+        "self_insured_retention": {
+          "$ref": "#/$defs/MoneyValue",
+          "fideon:aliases": [
+            "Self-Insured Retention",
+            "SIR"
+          ],
+          "description": "Self-insured retention."
+        },
+        "attachment_point": {
+          "$ref": "#/$defs/MoneyValue",
+          "fideon:aliases": [
+            "Attachment Point",
+            "Excess of"
+          ],
+          "description": "Point above which the policy attaches."
+        },
+        "follow_form": {
+          "$ref": "#/$defs/BoolValue",
+          "fideon:aliases": [
+            "Follow Form"
+          ],
+          "description": "Whether the policy follows the form of the underlying insurance."
+        }
+      }
+    },
+    "bond": {
+      "type": "object",
+      "additionalProperties": false,
+      "minProperties": 1,
+      "properties": {
+        "bond_type": {
+          "$ref": "#/$defs/FieldValue",
+          "fideon:aliases": [
+            "Bond Type",
+            "Type of Bond"
+          ],
+          "description": "Kind of bond as printed."
+        },
+        "bond_number": {
+          "$ref": "#/$defs/FieldValue",
+          "fideon:aliases": [
+            "Bond Number",
+            "Bond No."
+          ],
+          "description": "Bond number."
+        },
+        "penal_sum": {
+          "$ref": "#/$defs/MoneyValue",
+          "fideon:aliases": [
+            "Penal Sum",
+            "Bond Amount",
+            "Amount of Bond"
+          ],
+          "description": "Penal sum (amount) of the bond."
+        },
+        "principal_name": {
+          "$ref": "#/$defs/FieldValue",
+          "fideon:aliases": [
+            "Principal"
+          ],
+          "description": "Party whose obligation the bond guarantees."
+        },
+        "obligee_name": {
+          "$ref": "#/$defs/FieldValue",
+          "fideon:aliases": [
+            "Obligee"
+          ],
+          "description": "Party the bond protects."
+        },
+        "effective_date": {
+          "$ref": "#/$defs/DateValue",
+          "description": "Date the bond starts."
+        },
+        "expiration_date": {
+          "$ref": "#/$defs/DateValue",
+          "description": "Date the bond ends."
+        }
+      }
+    },
+    "BenefitPlan": {
+      "type": "object",
+      "additionalProperties": false,
+      "minProperties": 1,
+      "properties": {
+        "plan_id": {
+          "type": "string",
+          "description": "Structural id of the plan, unique in the document."
+        },
+        "plan_name": {
+          "$ref": "#/$defs/FieldValue",
+          "fideon:aliases": [
+            "Plan",
+            "Plan Name"
+          ],
+          "description": "Plan name as printed."
+        },
+        "plan_type": {
+          "type": "string",
+          "enum": [
+            "life",
+            "add",
+            "std",
+            "ltd",
+            "medical",
+            "dental",
+            "vision",
+            "other"
+          ],
+          "description": "Kind of benefit."
+        },
+        "eligible_class": {
+          "$ref": "#/$defs/FieldValue",
+          "fideon:aliases": [
+            "Class",
+            "Eligible Class",
+            "Eligibility"
+          ],
+          "description": "Class of employees eligible for the plan."
+        },
+        "benefit": {
+          "$ref": "#/$defs/FieldValue",
+          "description": "Amount or formula as printed.",
+          "fideon:aliases": [
+            "Benefit",
+            "Benefit Amount",
+            "Schedule of Benefits"
+          ]
+        },
+        "maximum_benefit": {
+          "$ref": "#/$defs/MoneyValue",
+          "fideon:aliases": [
+            "Maximum Benefit",
+            "Benefit Maximum"
+          ],
+          "description": "Maximum benefit payable."
+        },
+        "waiting_period": {
+          "$ref": "#/$defs/FieldValue",
+          "fideon:aliases": [
+            "Waiting Period",
+            "Elimination Period"
+          ],
+          "description": "Waiting or elimination period."
+        },
+        "contribution": {
+          "$ref": "#/$defs/FieldValue",
+          "fideon:aliases": [
+            "Contribution",
+            "Employer Contribution"
+          ],
+          "description": "Employer and employee contribution, as printed."
+        },
+        "rate": {
+          "$ref": "#/$defs/NumberValue",
+          "fideon:aliases": [
+            "Rate"
+          ],
+          "description": "Rate charged for the plan."
+        },
+        "rate_basis": {
+          "$ref": "#/$defs/FieldValue",
+          "description": "Per $1,000 of volume, per member per month..."
+        }
+      }
+    },
+    "countersignature": {
+      "type": "object",
+      "description": "Countersignature, when a name or date is actually printed. A blank signature line is wording and belongs in text_sections.",
+      "additionalProperties": false,
+      "minProperties": 1,
+      "properties": {
+        "representative_name": {
+          "$ref": "#/$defs/FieldValue",
+          "fideon:aliases": [
+            "Authorized Representative",
+            "Representative",
+            "Countersigned by",
+            "Countersignature"
+          ],
+          "description": "Name of the authorised representative who countersigned."
+        },
+        "date": {
+          "$ref": "#/$defs/DateValue",
+          "fideon:aliases": [
+            "Countersigned On",
+            "Countersignature Date",
+            "Date Countersigned"
+          ],
+          "description": "Date of the countersignature."
+        }
+      }
+    },
+    "lob_parts": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/LobPart"
+      },
+      "description": "At least one part: a single-LOB policy has one.",
+      "minItems": 1
+    },
+    "coverages": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/Coverage"
+      },
+      "description": "Every coverage and every limit.",
+      "fideon:aliases": [
+        "Coverage",
+        "Coverages",
+        "Schedule of Coverages",
+        "Limits of Insurance",
+        "Limits of Liability",
+        "Policy Coverages",
+        "Coverages/Endorsements"
+      ]
+    },
+    "deductibles": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/Deductible"
+      },
+      "description": "Deductibles that apply across coverages or perils."
+    },
+    "interested_parties": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/InterestedParty"
+      },
+      "fideon:aliases": [
+        "Additional Interests",
+        "Name and Address"
+      ]
+    },
+    "forms_and_endorsements": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/Form"
+      },
+      "fideon:aliases": [
+        "Forms and Endorsements",
+        "Forms Schedule",
+        "Schedule of Forms and Endorsements",
+        "Endorsements",
+        "Forms Endorsements"
+      ]
+    },
+    "locations": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/Location"
+      }
+    },
+    "buildings": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/Building"
+      }
+    },
+    "vehicles": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/Vehicle"
+      },
+      "fideon:aliases": [
+        "Schedule of Vehicles",
+        "Vehicles"
+      ]
+    },
+    "drivers": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/Driver"
+      },
+      "fideon:aliases": [
+        "Named Operators",
+        "Drivers and household residents"
+      ]
+    },
+    "watercraft": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/Watercraft"
+      }
+    },
+    "scheduled_items": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/ScheduledItem"
+      },
+      "fideon:aliases": [
+        "Scheduled Personal Property",
+        "Schedule of Property"
+      ]
+    },
+    "rating_exposures": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/RatingExposure"
+      }
+    },
+    "rating_modifiers": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/RatingModifier"
+      }
+    },
+    "insuring_agreements": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/InsuringAgreement"
+      }
+    },
+    "underlying_insurance": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/UnderlyingPolicy"
+      },
+      "fideon:aliases": [
+        "Schedule of Underlying Insurance"
+      ]
+    },
+    "benefit_plans": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/BenefitPlan"
+      }
+    },
+    "additional_fields": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/AdditionalField"
+      },
+      "fideon:tier": "overflow",
+      "description": "Overflow tier (SPEC_21 §4.5). Every printed value with no core home."
+    },
+    "text_sections": {
+      "type": "object",
+      "fideon:fsm_exclude": true,
+      "additionalProperties": {
+        "$ref": "#/$defs/TextSection"
+      },
+      "propertyNames": {
+        "pattern": "^[^|]+\\|[^|]*\\|"
+      },
+      "description": "Full-text tier (SPEC_21 §4.6): every printed word, keyed by section_id. Excluded from the training target."
+    },
+    "provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "fideon:provenance on a seed or twin gold (SPEC_21 §8.1). Written by synth_core; never extracted. Keys are those synth_core/engine.py writes; 'provenance' is the free-text note on a seed gold.",
+      "properties": {
+        "generator": {},
+        "generator_version": {},
+        "synth_core_version": {},
+        "batch_id": {},
+        "run_config": {},
+        "run_config_git_blob": {},
+        "seed": {},
+        "seed_review": {},
+        "schema_version": {},
+        "seed_modality": {},
+        "twin_modality": {},
+        "mode": {},
+        "twin_index": {},
+        "run_seed": {},
+        "attempt": {},
+        "variation_rate": {},
+        "structure_changes": {},
+        "scan_effects": {},
+        "synthetic": {},
+        "provenance": {}
+      }
+    }
+  }
+}

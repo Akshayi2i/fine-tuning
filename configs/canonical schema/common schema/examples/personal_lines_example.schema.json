@@ -1,0 +1,93 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Example personal-lines LOB schema (homeowners)",
+  "description": "Minimal LOB schema composing the common model by $ref, as a SPEC_21 LOB schema does. It lives under common/examples/, so its references read '../common_model.json'; a real LOB schema in policy_check/<lob>.json references '../common/common_model.json'. Example only: it is not a LOB schema and the registry does not load it.",
+  "fideon:schema_version": "1.0.0",
+  "fideon:common_model_version": "1.0.0",
+  "fideon:lob": "homeowners",
+  "fideon:mandatory_fields": [
+    "carrier.name",
+    "named_insured.primary_name",
+    "policy.policy_number",
+    "policy.effective_date",
+    "policy.expiration_date",
+    "coverages[coverage_code=HO_COV_A].limits[limit_type=per_occurrence].amount"
+  ],
+  "fideon:audit_rules": [
+    "policy.effective_date < policy.expiration_date",
+    "months_between(policy.effective_date, policy.expiration_date) == policy.term_months",
+    "policy.effective_date <= document.transaction_effective_date <= policy.expiration_date",
+    "claims_made_terms.retroactive_date <= policy.effective_date",
+    "len(coverages[].limits[]) >= 1",
+    "`coverages[coverage_code=HO_COV_C].limits[limit_type=per_occurrence].amount` <= `coverages[coverage_code=HO_COV_A].limits[limit_type=per_occurrence].amount`"
+  ],
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "document",
+    "carrier",
+    "named_insured",
+    "policy",
+    "lob_parts",
+    "coverages"
+  ],
+  "properties": {
+    "document": {
+      "$ref": "../common_model.json#/$defs/document"
+    },
+    "carrier": {
+      "$ref": "../common_model.json#/$defs/carrier"
+    },
+    "producer": {
+      "$ref": "../common_model.json#/$defs/producer"
+    },
+    "named_insured": {
+      "$ref": "../common_model.json#/$defs/named_insured"
+    },
+    "policy": {
+      "$ref": "../common_model.json#/$defs/policy"
+    },
+    "lob_parts": {
+      "$ref": "../common_model.json#/$defs/lob_parts"
+    },
+    "coverages": {
+      "$ref": "../common_model.json#/$defs/coverages"
+    },
+    "deductibles": {
+      "$ref": "../common_model.json#/$defs/deductibles"
+    },
+    "interested_parties": {
+      "$ref": "../common_model.json#/$defs/interested_parties"
+    },
+    "premium": {
+      "$ref": "../common_model.json#/$defs/premium"
+    },
+    "billing": {
+      "$ref": "../common_model.json#/$defs/billing"
+    },
+    "forms_and_endorsements": {
+      "$ref": "../common_model.json#/$defs/forms_and_endorsements"
+    },
+    "additional_fields": {
+      "$ref": "../common_model.json#/$defs/additional_fields"
+    },
+    "text_sections": {
+      "$ref": "../common_model.json#/$defs/text_sections"
+    },
+    "locations": {
+      "$ref": "../common_model.json#/$defs/locations"
+    },
+    "buildings": {
+      "$ref": "../common_model.json#/$defs/buildings"
+    },
+    "scheduled_items": {
+      "$ref": "../common_model.json#/$defs/scheduled_items"
+    },
+    "rating_modifiers": {
+      "$ref": "../common_model.json#/$defs/rating_modifiers"
+    },
+    "fideon:provenance": {
+      "$ref": "../common_model.json#/$defs/provenance"
+    }
+  }
+}

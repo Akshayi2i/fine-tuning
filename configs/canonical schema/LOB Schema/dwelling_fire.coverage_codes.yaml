@@ -1,0 +1,159 @@
+# SPEC_21 4.2.4 coverage codes of dwelling_fire (schema 1.0.0, common model 1.0.0).
+# Built from all 16 seed golds of 4 carriers (Dryden Mutual, Leatherstocking Cooperative Insurance Company, NYCM Insurance, North Country Insurance Company).
+# aliases: coverage names as the seeds print them (whitespace collapsed; a dash the text layer has no
+# Unicode for is written '-'). Codes are LOB-prefixed (DF_); a coverage the common model shares across
+# lines uses its X_ code (common_model.json fideon:shared_coverage_codes); shared: true marks those.
+# carriers: how many of the line's carriers print the coverage. replaces_draft_codes: codes used by the
+# engine-test seed golds for the same coverage; those golds are re-coded at seed review (see CHANGELOG).
+lob: dwelling_fire
+schema_version: 1.0.0
+common_model_version: 1.0.0
+code_prefix: DF_
+codes:
+- code: DF_COV_A
+  name: Coverage A - Dwelling / Residence
+  aliases:
+  - Cov A - Dwelling
+  - Coverage A - Residence
+  - Coverage A RESIDENCE FIRE
+  - Residence
+  default_limit_types:
+  - per_occurrence
+  carriers: 4
+  replaces_draft_codes:
+  - HO_COV_A
+- code: DF_COV_B
+  name: Coverage B - Other / Related Private Structures
+  aliases:
+  - Cov B - Related Private Structures
+  - Coverage B - Related Private Structures
+  - Other Structures
+  default_limit_types:
+  - per_occurrence
+  carriers: 3
+  replaces_draft_codes:
+  - HO_COV_B
+- code: DF_COV_C
+  name: Coverage C - Personal Property
+  aliases:
+  - Cov C - Personal Property
+  - Coverage C - Personal Property
+  - Coverage C PERSONAL PROPERTY FIRE
+  - Personal Property
+  default_limit_types:
+  - per_occurrence
+  carriers: 4
+  replaces_draft_codes:
+  - HO_COV_C
+- code: DF_COV_L
+  name: Coverage L - Premises Liability
+  aliases:
+  - Cov L - Premises Liability
+  - Coverage L - Premises Liability
+  - Premises Liability
+  default_limit_types:
+  - per_occurrence
+  - aggregate
+  carriers: 3
+  note: 'Not X_PERSONAL_LIABILITY: the dwelling fire seeds print premises liability, not personal liability.'
+  replaces_draft_codes:
+  - X_PERSONAL_LIABILITY
+- code: DF_EC_LOSS_OF_USE
+  name: Extended coverage - Additional Living Expense / Loss of Rent
+  aliases:
+  - EC - Additional Living Expense / Loss of Rent
+  default_limit_types: []
+  carriers: 1
+- code: DF_EC_OTHER_STRUCTURES
+  name: Extended coverage - Related Private Structures
+  aliases:
+  - EC - Related Private Structures
+  default_limit_types: []
+  carriers: 1
+- code: DF_EC_PERSONAL_PROPERTY
+  name: Extended coverage - Personal Property
+  aliases:
+  - EC - Personal Property
+  default_limit_types: []
+  carriers: 1
+- code: DF_EC_RESIDENCE
+  name: Extended coverage - Residence
+  aliases:
+  - EC - Residence
+  default_limit_types: []
+  carriers: 1
+- code: DF_INCIDENTAL_BUSINESS
+  name: Incidental Business Activities
+  aliases:
+  - FL-16 - Incidental Business Activities
+  default_limit_types: []
+  carriers: 1
+- code: DF_TENANT_VANDALISM
+  name: Tenant Vandalism Endorsement
+  aliases:
+  - FL-VC Tenant Vandalism Endorsement - Related Private Structures
+  - FL-VC Tenant Vandalism Endorsement - Residence
+  default_limit_types: []
+  carriers: 1
+- code: DF_VMM_LOSS_OF_USE
+  name: Vandalism and malicious mischief - Additional Living Expense / Loss of Rent
+  aliases:
+  - VMM - Additional Living Expense / Loss of Rent
+  default_limit_types: []
+  carriers: 1
+- code: DF_VMM_OTHER_STRUCTURES
+  name: Vandalism and malicious mischief - Related Private Structures
+  aliases:
+  - VMM - Related Private Structures
+  default_limit_types: []
+  carriers: 1
+- code: DF_VMM_PERSONAL_PROPERTY
+  name: Vandalism and malicious mischief - Personal Property
+  aliases:
+  - VMM - Personal Property
+  default_limit_types: []
+  carriers: 1
+- code: DF_VMM_RESIDENCE
+  name: Vandalism and malicious mischief - Residence
+  aliases:
+  - VMM - Residence
+  default_limit_types: []
+  carriers: 1
+- code: X_LOSS_OF_USE
+  name: Loss of use / additional living expense / fair rental value
+  aliases:
+  - Addl.Living Exp. and Loss of Rent
+  - Cov D - Addl Living Exp/Loss of Rents
+  - Coverage D - Additional Living Expense / Loss of Rent
+  - Coverage D ADDL LIVING EXP AND LOSS OF RENT FIRE INCL
+  default_limit_types:
+  - per_occurrence
+  - other
+  shared: true
+  carriers: 4
+- code: X_MED_PAY
+  name: Medical payments
+  aliases:
+  - Cov M - Medical Payments
+  - Coverage M - Medical Payments - Per Occurrence
+  - Coverage M - Medical Payments - Per Person
+  - Medical Payments
+  default_limit_types:
+  - per_occurrence
+  - per_person
+  - per_accident
+  shared: true
+  carriers: 3
+- code: X_WATER_BACKUP
+  name: Water or sewer backup
+  aliases:
+  - ML-WD - Water Backup-Sewers and Drains
+  default_limit_types:
+  - per_occurrence
+  - sublimit
+  shared: true
+  carriers: 1
+shared_codes_used:
+- X_LOSS_OF_USE
+- X_MED_PAY
+- X_WATER_BACKUP

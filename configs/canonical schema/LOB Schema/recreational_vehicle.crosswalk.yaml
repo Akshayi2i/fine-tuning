@@ -1,0 +1,29 @@
+# SPEC_21 4.7 crosswalk for recreational_vehicle: every canonical_path declared by the line's policy registry YAMLs
+# (config/document_registry/policy/*/recreational_vehicle.yaml) -> the SPEC_21 schema 1.0.0.
+# new: same concept at its SPEC_21 path; overflow: an additional_fields entry with that label;
+# drop: not a value (needs reviewer approval). Paths already under additional_fields keep their label.
+# Each entry names the registry fields that declare it. Applied by tools/registry_migrate.py --lob recreational_vehicle.
+lob: recreational_vehicle
+from_schema: "1.5.0"
+to_schema: "1.0.0"
+paths:
+  # progressive/recreational_vehicle.yaml:changes
+  additional_fields.change_description: {overflow: "change_description"}
+  # progressive/recreational_vehicle.yaml:changes_requested_on
+  additional_fields.change_requested_at: {overflow: "change_requested_at"}
+  # progressive/recreational_vehicle.yaml:pay_in_installments
+  additional_fields.pay_in_installments_total: {overflow: "pay_in_installments_total"}
+  # progressive/recreational_vehicle.yaml:renewal_payment_due_by
+  billing.due_date: {new: "billing.due_date"}
+  # progressive/recreational_vehicle.yaml:insurer_name
+  carrier.company_name: {new: "carrier.name"}
+  # progressive/recreational_vehicle.yaml:endorsements
+  forms_and_endorsements: {new: "forms_and_endorsements"}
+  # progressive/recreational_vehicle.yaml:form_number
+  policy.policy_form_number: {new: "lob_parts[].coverage_part_form"}
+  # progressive/recreational_vehicle.yaml:pay_in_full
+  premium.pay_in_full_amount: {overflow: "Pay in Full"}
+  # progressive/recreational_vehicle.yaml:total_premium
+  premium.total_policy_premium: {new: "premium.total"}
+  # progressive/recreational_vehicle.yaml:agency_name
+  producer.agency_name: {new: "producer.agency_name"}

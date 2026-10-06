@@ -3,18 +3,22 @@
   "title": "Umbrella policy",
   "fideon:doc_type": "policy_check",
   "fideon:lob": "umbrella",
-  "fideon:note": "Generated from the supplied umbrella.schema.json v1.4.0 by scripts/build_canonical_policy_schemas.py. Do not hand-edit; edit the source and regenerate. Extended by scripts/canonical_schema_extensions.py with fields the supplied skeleton did not carry; re-run it after any regeneration.",
+  "fideon:note": "Generated from the supplied umbrella.schema.json v1.4.0 by scripts/build_canonical_policy.py. Do not hand-edit; edit the source and regenerate. Hand-extended to v1.6.0: see fideon:source.change_log.",
   "fideon:source": {
     "schema_id": "fideon.canonical.umbrella",
-    "version": "1.4.0",
+    "version": "1.6.0",
     "line_of_business_as_supplied": "Umbrella",
     "line_specific_block": "umbrella",
-    "field_count": 340,
+    "field_count": 399,
     "corpus_document_count": 7,
     "corpus_carrier_count": 4,
     "aliased_fields": 49,
     "field_count_as_supplied": 310,
-    "extensions_applied": "scripts/canonical_schema_extensions.py"
+    "repo_additions": 29,
+    "change_log": [
+      "1.5.0 (2026-09-29): added named_insured.all_named_insureds[].name. Every name the declarations' insured block prints, in order (one, two or more) -- the primary first. Built only from that block, never from an insured-summary table; see _header_named_insureds in fideon/l1/registry_extractor.py.",
+      "1.6.0 (2026-09-29): Commercial umbrella / excess declarations in z-cumber (Sutton Specialty excess liability, Utica First commercial umbrella/excess ULCDNY, CNA excess insurance policy G-97360-B) print this. Added carrier.company_structure, carrier.state_of_domicile, carrier.home_office_address, carrier.surplus_lines_broker_address, named_insured.attention, policy.service_of_suit_designee, policy.cancellation_notice_days, premium.association_dues, premium.total_premium_and_fees, signature.officer_signatories, claim_reporting.claims_fax, claim_reporting.claims_website, claim_reporting.other_notices_recipient, claim_reporting.other_notices_address, forms_and_endorsements[].endorsement_number, forms_and_endorsements[].effective_date, umbrella.limits_of_insurance.policy_limit, umbrella.attachment.schedule_of_underlying_form_number, umbrella.underlying_insurance_note, umbrella.claims_made_provisions.prior_acts_exclusion_date, umbrella.schedule_of_underlying_insurance[].layer_type, umbrella.schedule_of_underlying_insurance[].coverage_status, umbrella.schedule_of_underlying_insurance[].policy_period_as_printed, umbrella.schedule_of_underlying_insurance[].retroactive_date, umbrella.schedule_of_underlying_insurance[].parent_company, umbrella.schedule_of_underlying_insurance[].limit_amount, umbrella.schedule_of_underlying_insurance[].deductible_or_retention_amount, umbrella.schedule_of_underlying_insurance[].excess_of_amount. Added fideon:aliases to carrier.company_name ('Coverage Provided By'); policy.account_id ('Account Number'); billing.billing_plan ('Billing Type'); umbrella.attachment.retained_limit_amount ('Your Retained Limit')."
+    ]
   },
   "fideon:mandatory_fields": [
     "carrier",
@@ -24,6 +28,9 @@
   "fideon:audit_rules": {
     "date_ordering": [
       "policy.effective_date <= policy.expiration_date"
+    ],
+    "math": [
+      "sum(coverages[*].premium) ≈ premium.total_policy_premium ± 0.01"
     ]
   },
   "type": "object",
@@ -64,7 +71,6 @@
         "transaction_type": {
           "$ref": "#/$defs/FieldValue",
           "fideon:aliases": [
-            "Renewal Of",
             "TRANS TYPE",
             "Transaction Type"
           ]
@@ -78,7 +84,10 @@
           ]
         },
         "transaction_effective_date": {
-          "$ref": "#/$defs/FieldValue"
+          "$ref": "#/$defs/FieldValue",
+          "fideon:aliases": [
+            "transaction_date"
+          ]
         },
         "issue_date": {
           "$ref": "#/$defs/FieldValue"
@@ -86,13 +95,10 @@
         "print_date": {
           "$ref": "#/$defs/FieldValue",
           "fideon:aliases": [
-            "Date Printed",
             "Date Summary Printed",
             "Last Updated",
-            "Print Date",
-            "Printed On",
-            "Process Date",
-            "PROCESSING DATE"
+            "PROCESSING DATE",
+            "Process Date"
           ]
         },
         "page_count": {
@@ -110,31 +116,17 @@
         "source_system": {
           "$ref": "#/$defs/FieldValue"
         },
-        "copy_type": {
+        "endorsement_number": {
           "$ref": "#/$defs/FieldValue",
-          "fideon:aliases": [
-            "Agent Copy",
-            "Company Copy",
-            "File Copy",
-            "Insured Copy",
-            "Office Copy"
-          ]
+          "fideon:repo_addition": "Printed across the POLICIES-FINAL corpus (277 documents, ~40 carriers) and absent from the supplied schemas. Printed on 11 of the 22 lines. Which endorsement THIS document is. `forms_and_endorsements[]` lists the forms attached to the policy; this names the change the page represents."
         },
-        "batch_number": {
+        "esignature_certificate": {
           "$ref": "#/$defs/FieldValue",
-          "fideon:aliases": [
-            "Batch",
-            "Batch Number",
-            "Control Number"
-          ]
+          "fideon:repo_addition": "Printed across the POLICIES-FINAL corpus (277 documents, ~40 carriers) and absent from the supplied schemas. Printed on 5 of the 22 lines. The e-signature certificate id -- the evidence the document was signed."
         },
-        "summary_of_changes": {
+        "delivery_preference": {
           "$ref": "#/$defs/FieldValue",
-          "fideon:aliases": [
-            "Changes",
-            "Summary of Changes",
-            "Summary of Your Changes"
-          ]
+          "fideon:repo_addition": "Printed across the POLICIES-FINAL corpus (277 documents, ~40 carriers) and absent from the supplied schemas. Printed on 4 of the 22 lines. Paper or electronic. A notice sent the way the policyholder did not choose is a compliance failure."
         }
       }
     },
@@ -142,16 +134,27 @@
       "type": "object",
       "properties": {
         "company_name": {
-          "$ref": "#/$defs/FieldValue"
+          "$ref": "#/$defs/FieldValue",
+          "fideon:aliases": [
+            "Coverage Provided By"
+          ]
         },
         "writing_company_name": {
-          "$ref": "#/$defs/FieldValue"
+          "$ref": "#/$defs/FieldValue",
+          "fideon:aliases": [
+            "underwriting_company",
+            "writing_company",
+            "issuing_company"
+          ]
         },
         "group_name": {
           "$ref": "#/$defs/FieldValue"
         },
         "naic_number": {
-          "$ref": "#/$defs/FieldValue"
+          "$ref": "#/$defs/FieldValue",
+          "fideon:aliases": [
+            "naic_code"
+          ]
         },
         "fein": {
           "$ref": "#/$defs/FieldValue"
@@ -180,8 +183,9 @@
             "country": {
               "$ref": "#/$defs/FieldValue"
             },
-            "county_code": {
-              "$ref": "#/$defs/FieldValue"
+            "full": {
+              "$ref": "#/$defs/FieldValue",
+              "fideon:repo_addition": "The address as the document PRINTS it, unparsed. The supplied schema carries only the split parts, and L1 reads the block whole rather than guessing where the street ends and the city begins."
             }
           }
         },
@@ -219,15 +223,87 @@
         "state_of_issue": {
           "$ref": "#/$defs/FieldValue"
         },
+        "admitted_status": {
+          "$ref": "#/$defs/FieldValue",
+          "fideon:repo_addition": "Printed across the POLICIES-FINAL corpus (277 documents, ~40 carriers) and absent from the supplied schemas. Printed on 5 of the 22 lines. Admitted or surplus lines. `is_surplus_lines` is a boolean; carriers print a status word."
+        },
         "company_structure": {
           "$ref": "#/$defs/FieldValue",
           "fideon:aliases": [
             "A Mutual Company",
-            "A Reciprocal",
-            "A Stock Corporation",
             "Mutual Company",
             "Stock Company"
-          ]
+          ],
+          "fideon:repo_addition": "Commercial umbrella / excess declarations in z-cumber (Sutton Specialty excess liability, Utica First commercial umbrella/excess ULCDNY, CNA excess insurance policy G-97360-B) print this"
+        },
+        "state_of_domicile": {
+          "$ref": "#/$defs/FieldValue",
+          "fideon:aliases": [
+            "Constituted In"
+          ],
+          "fideon:repo_addition": "Commercial umbrella / excess declarations in z-cumber (Sutton Specialty excess liability, Utica First commercial umbrella/excess ULCDNY, CNA excess insurance policy G-97360-B) print this (Utica First: 'Constituted in Ohio as ...')"
+        },
+        "home_office_address": {
+          "type": "object",
+          "properties": {
+            "line_1": {
+              "$ref": "#/$defs/FieldValue"
+            },
+            "line_2": {
+              "$ref": "#/$defs/FieldValue"
+            },
+            "city": {
+              "$ref": "#/$defs/FieldValue"
+            },
+            "state": {
+              "$ref": "#/$defs/FieldValue"
+            },
+            "postal_code": {
+              "$ref": "#/$defs/FieldValue"
+            },
+            "county": {
+              "$ref": "#/$defs/FieldValue"
+            },
+            "country": {
+              "$ref": "#/$defs/FieldValue"
+            },
+            "full": {
+              "$ref": "#/$defs/FieldValue",
+              "fideon:repo_addition": "The address as the document PRINTS it, unparsed. The supplied schema carries only the split parts, and L1 reads the block whole rather than guessing where the street ends and the city begins."
+            }
+          },
+          "fideon:repo_addition": "Commercial umbrella / excess declarations in z-cumber (Sutton Specialty excess liability, Utica First commercial umbrella/excess ULCDNY, CNA excess insurance policy G-97360-B) print this (Utica First 'Home Office:'; carrier.address keeps the mailing address)"
+        },
+        "surplus_lines_broker_address": {
+          "type": "object",
+          "properties": {
+            "line_1": {
+              "$ref": "#/$defs/FieldValue"
+            },
+            "line_2": {
+              "$ref": "#/$defs/FieldValue"
+            },
+            "city": {
+              "$ref": "#/$defs/FieldValue"
+            },
+            "state": {
+              "$ref": "#/$defs/FieldValue"
+            },
+            "postal_code": {
+              "$ref": "#/$defs/FieldValue"
+            },
+            "county": {
+              "$ref": "#/$defs/FieldValue"
+            },
+            "country": {
+              "$ref": "#/$defs/FieldValue"
+            },
+            "full": {
+              "$ref": "#/$defs/FieldValue",
+              "fideon:repo_addition": "The address as the document PRINTS it, unparsed. The supplied schema carries only the split parts, and L1 reads the block whole rather than guessing where the street ends and the city begins."
+            }
+          },
+          "fideon:repo_addition": "Commercial umbrella / excess declarations in z-cumber (Sutton Specialty excess liability, Utica First commercial umbrella/excess ULCDNY, CNA excess insurance policy G-97360-B) print this (Sutton: the NY excess lines broker's address beside its license number)"
         }
       },
       "fideon:aliases": [
@@ -244,11 +320,7 @@
           "$ref": "#/$defs/FieldValue"
         },
         "producer_code": {
-          "$ref": "#/$defs/FieldValue",
-          "fideon:aliases": [
-            "Agency Code",
-            "Agent"
-          ]
+          "$ref": "#/$defs/FieldValue"
         },
         "producer_contact_name": {
           "$ref": "#/$defs/FieldValue"
@@ -277,8 +349,9 @@
             "country": {
               "$ref": "#/$defs/FieldValue"
             },
-            "county_code": {
-              "$ref": "#/$defs/FieldValue"
+            "full": {
+              "$ref": "#/$defs/FieldValue",
+              "fideon:repo_addition": "The address as the document PRINTS it, unparsed. The supplied schema carries only the split parts, and L1 reads the block whole rather than guessing where the street ends and the city begins."
             }
           }
         },
@@ -290,15 +363,12 @@
               "fideon:aliases": [
                 "Home",
                 "Mobile",
-                "Work"
+                "Work",
+                "agency_phone"
               ]
             },
             "fax": {
-              "$ref": "#/$defs/FieldValue",
-              "fideon:aliases": [
-                "Agent Fax",
-                "Fax"
-              ]
+              "$ref": "#/$defs/FieldValue"
             },
             "email": {
               "$ref": "#/$defs/FieldValue"
@@ -329,16 +399,13 @@
           "$ref": "#/$defs/FieldValue"
         },
         "prior_policy_number": {
-          "$ref": "#/$defs/FieldValue",
-          "fideon:aliases": [
-            "Renewal Of",
-            "Renewal of Policy ID"
-          ]
+          "$ref": "#/$defs/FieldValue"
         },
         "account_id": {
           "$ref": "#/$defs/FieldValue",
           "fideon:aliases": [
-            "Account ID"
+            "Account ID",
+            "Account Number"
           ]
         },
         "certificate_number": {
@@ -362,13 +429,22 @@
           }
         },
         "program_name": {
-          "$ref": "#/$defs/FieldValue"
+          "$ref": "#/$defs/FieldValue",
+          "fideon:aliases": [
+            "package_bundle"
+          ]
         },
         "policy_form_name": {
-          "$ref": "#/$defs/FieldValue"
+          "$ref": "#/$defs/FieldValue",
+          "fideon:aliases": [
+            "form_name"
+          ]
         },
         "policy_form_number": {
-          "$ref": "#/$defs/FieldValue"
+          "$ref": "#/$defs/FieldValue",
+          "fideon:aliases": [
+            "form_number"
+          ]
         },
         "policy_form_edition": {
           "$ref": "#/$defs/FieldValue"
@@ -380,23 +456,11 @@
           "$ref": "#/$defs/FieldValue",
           "fideon:aliases": [
             "Both dates",
-            "Effective Date Of Policy",
-            "Inception Date",
-            "Policy Effective Date",
-            "Policy Period From",
-            "Policy Term Effective Date",
             "Start Date"
           ]
         },
         "expiration_date": {
-          "$ref": "#/$defs/FieldValue",
-          "fideon:aliases": [
-            "Expiration Date",
-            "Expiry Date",
-            "Policy Expiration Date",
-            "Policy Period To",
-            "Policy Term Expiration Date"
-          ]
+          "$ref": "#/$defs/FieldValue"
         },
         "effective_time": {
           "$ref": "#/$defs/FieldValue"
@@ -435,36 +499,48 @@
         "minimum_earned_premium_percentage": {
           "$ref": "#/$defs/FieldValue"
         },
-        "plan_type": {
+        "original_inception_date": {
           "$ref": "#/$defs/FieldValue",
-          "fideon:aliases": [
-            "Co-operative Plan",
-            "Cooperative Plan",
-            "Non-Participating",
-            "Participating"
-          ]
+          "fideon:repo_addition": "Printed across the POLICIES-FINAL corpus (277 documents, ~40 carriers) and absent from the supplied schemas. Printed on 13 of the 22 lines. The date the policy FIRST incepted, which a renewal states beside its own term -- North Country prints `Inception Date`. Distinct from `effective_date` and from `anniversary_date`."
         },
-        "is_assessable": {
+        "renewal_offer": {
           "$ref": "#/$defs/FieldValue",
-          "fideon:aliases": [
-            "Assessable",
-            "Non-Assessable"
-          ]
+          "fideon:repo_addition": "Printed across the POLICIES-FINAL corpus (277 documents, ~40 carriers) and absent from the supplied schemas. Printed on 12 of the 22 lines. Whether the carrier is offering renewal, and on what terms. A compliance fact on any non-renewal."
         },
-        "expiration_time": {
+        "rating_state": {
           "$ref": "#/$defs/FieldValue",
-          "fideon:aliases": [
-            "Expiration Time"
-          ]
+          "fideon:repo_addition": "Printed across the POLICIES-FINAL corpus (277 documents, ~40 carriers) and absent from the supplied schemas. Printed on 9 of the 22 lines. The state whose rates apply -- not always where the policy was issued (`carrier.state_of_issue`), nor where the risk sits."
         },
-        "policyholder_since_date": {
+        "policy_tier": {
+          "$ref": "#/$defs/FieldValue",
+          "fideon:repo_addition": "Printed across the POLICIES-FINAL corpus (277 documents, ~40 carriers) and absent from the supplied schemas. Printed on 8 of the 22 lines. NYCM prints `Tier: 9`. A rating tier moves the premium and had no slot, so it travelled in `additional_fields` flagged as unverified."
+        },
+        "cancellation_method": {
+          "$ref": "#/$defs/FieldValue",
+          "fideon:repo_addition": "Printed across the POLICIES-FINAL corpus (277 documents, ~40 carriers) and absent from the supplied schemas. Printed on 8 of the 22 lines. HOW a policy was cancelled -- flat, pro-rata, short rate. `cancellation_date` and `cancellation_reason` exist; the method is what decides the refund."
+        },
+        "non_assessable_cooperative": {
+          "$ref": "#/$defs/FieldValue",
+          "fideon:repo_addition": "Printed across the POLICIES-FINAL corpus (277 documents, ~40 carriers) and absent from the supplied schemas. Printed on 7 of the 22 lines. Whether a co-operative may assess its members. Printed on the face of every Leatherstocking declaration, and a statement about the policyholder's liability rather than the carrier's."
+        },
+        "quote_number": {
+          "$ref": "#/$defs/FieldValue",
+          "fideon:repo_addition": "Printed across the POLICIES-FINAL corpus (277 documents, ~40 carriers) and absent from the supplied schemas. Printed on 4 of the 22 lines. The quote this policy was issued from. NYCM prints `QUOTE #: Q31829763` on every page."
+        },
+        "policy_term_as_printed": {
+          "$ref": "#/$defs/FieldValue",
+          "fideon:repo_addition": "The policy term EXACTLY as the page states it, whichever form that takes. Carriers print two: a duration (`Policy Term: 12 Months`) and a date range (`Policy Term: 02/29/2024 to 02/28/2025`). `policy_term_months` counts months, so a carrier printing the range had its date pair written into a numeric field -- Plymouth Rock shipped `policy_term_months: \"02/29/2024 to 02/28/2025\"`, which is wrong for anyone who trusts the field name, and aliasing the two together would make that the intended behaviour. The alternative was to leave the range in `additional_fields`, flagged. Rejected: every carrier prints the term in one of these two forms, so that is a recurring flagged unknown for a fact the page states plainly. Keeping both fields means `policy_term_months` stays a number and the printed form survives as the audit trail; the date range itself is also in `effective_date`/`expiration_date`, and this says what the page said."
+        },
+        "service_of_suit_designee": {
           "$ref": "#/$defs/FieldValue",
           "fideon:aliases": [
-            "Continuously Insured Since",
-            "Customer Since",
-            "Insured Since",
-            "Policyholder Since"
-          ]
+            "Service of Suit"
+          ],
+          "fideon:repo_addition": "Commercial umbrella / excess declarations in z-cumber (Sutton Specialty excess liability, Utica First commercial umbrella/excess ULCDNY, CNA excess insurance policy G-97360-B) print this"
+        },
+        "cancellation_notice_days": {
+          "$ref": "#/$defs/FieldValue",
+          "fideon:repo_addition": "Commercial umbrella / excess declarations in z-cumber (Sutton Specialty excess liability, Utica First commercial umbrella/excess ULCDNY, CNA excess insurance policy G-97360-B) print this (Sutton cancellation clause SSISCCX CC 01 05 22: 'not less than 10 days')"
         }
       }
     },
@@ -511,13 +587,12 @@
             "country": {
               "$ref": "#/$defs/FieldValue"
             },
-            "county_code": {
-              "$ref": "#/$defs/FieldValue"
+            "full": {
+              "$ref": "#/$defs/FieldValue",
+              "fideon:repo_addition": "The address as the document PRINTS it, unparsed. The supplied schema carries only the split parts, and L1 reads the block whole rather than guessing where the street ends and the city begins."
             }
           },
           "fideon:aliases": [
-            "ATTN",
-            "Attn",
             "Mail To"
           ]
         },
@@ -545,8 +620,9 @@
             "country": {
               "$ref": "#/$defs/FieldValue"
             },
-            "county_code": {
-              "$ref": "#/$defs/FieldValue"
+            "full": {
+              "$ref": "#/$defs/FieldValue",
+              "fideon:repo_addition": "The address as the document PRINTS it, unparsed. The supplied schema carries only the split parts, and L1 reads the block whole rather than guessing where the street ends and the city begins."
             }
           }
         },
@@ -634,13 +710,49 @@
                   "country": {
                     "$ref": "#/$defs/FieldValue"
                   },
-                  "county_code": {
-                    "$ref": "#/$defs/FieldValue"
+                  "full": {
+                    "$ref": "#/$defs/FieldValue",
+                    "fideon:repo_addition": "The address as the document PRINTS it, unparsed. The supplied schema carries only the split parts, and L1 reads the block whole rather than guessing where the street ends and the city begins."
                   }
                 }
               }
             }
           }
+        },
+        "contact_name": {
+          "$ref": "#/$defs/FieldValue",
+          "fideon:repo_addition": "Printed across the POLICIES-FINAL corpus (277 documents, ~40 carriers) and absent from the supplied schemas. Printed on 12 of the 22 lines. `named_insured.contact` models phone, fax, email and website and carries no name, so the PERSON to contact had nowhere to go."
+        },
+        "marital_status": {
+          "$ref": "#/$defs/FieldValue",
+          "fideon:repo_addition": "Printed across the POLICIES-FINAL corpus (277 documents, ~40 carriers) and absent from the supplied schemas. Printed on 5 of the 22 lines. A personal-lines rating factor."
+        },
+        "occupation": {
+          "$ref": "#/$defs/FieldValue",
+          "fideon:repo_addition": "Printed across the POLICIES-FINAL corpus (277 documents, ~40 carriers) and absent from the supplied schemas. Printed on 4 of the 22 lines. A personal-lines rating factor."
+        },
+        "all_named_insureds": {
+          "type": "array",
+          "fideon:repo_addition": "Every name the declarations' insured block prints, in order (one, two or more) -- the primary first. Built only from that block, never from an insured-summary table; see _header_named_insureds in fideon/l1/registry_extractor.py.",
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "$ref": "#/$defs/FieldValue",
+                "fideon:aliases": [
+                  "Named Insured(s)",
+                  "Named Insureds"
+                ]
+              }
+            }
+          }
+        },
+        "attention": {
+          "$ref": "#/$defs/FieldValue",
+          "fideon:aliases": [
+            "Attn"
+          ],
+          "fideon:repo_addition": "Commercial umbrella / excess declarations in z-cumber (Sutton Specialty excess liability, Utica First commercial umbrella/excess ULCDNY, CNA excess insurance policy G-97360-B) print this"
         }
       },
       "fideon:aliases": [
@@ -685,11 +797,9 @@
               "country": {
                 "$ref": "#/$defs/FieldValue"
               },
-              "county_code": {
+              "full": {
                 "$ref": "#/$defs/FieldValue",
-                "fideon:aliases": [
-                  "County Code"
-                ]
+                "fideon:repo_addition": "The address as the document PRINTS it, unparsed. The supplied schema carries only the split parts, and L1 reads the block whole rather than guessing where the street ends and the city begins."
               }
             }
           },
@@ -812,14 +922,6 @@
                 }
               }
             }
-          },
-          "building_description": {
-            "$ref": "#/$defs/FieldValue",
-            "fideon:aliases": [
-              "Building Description",
-              "Description",
-              "Structure Description"
-            ]
           }
         }
       },
@@ -837,15 +939,11 @@
           "party_type": {
             "$ref": "#/$defs/FieldValue",
             "fideon:aliases": [
-              "Interest Type",
-              "Mortgagee or Secured Party"
+              "interest_type"
             ]
           },
           "rank": {
-            "$ref": "#/$defs/FieldValue",
-            "fideon:aliases": [
-              "Rank"
-            ]
+            "$ref": "#/$defs/FieldValue"
           },
           "name": {
             "$ref": "#/$defs/FieldValue"
@@ -874,36 +972,23 @@
               "country": {
                 "$ref": "#/$defs/FieldValue"
               },
-              "county_code": {
-                "$ref": "#/$defs/FieldValue"
+              "full": {
+                "$ref": "#/$defs/FieldValue",
+                "fideon:repo_addition": "The address as the document PRINTS it, unparsed. The supplied schema carries only the split parts, and L1 reads the block whole rather than guessing where the street ends and the city begins."
               }
             }
           },
           "loan_number": {
-            "$ref": "#/$defs/FieldValue",
-            "fideon:aliases": [
-              "Loan #"
-            ]
+            "$ref": "#/$defs/FieldValue"
           },
           "clause_type": {
             "$ref": "#/$defs/FieldValue"
           },
           "applies_to": {
-            "$ref": "#/$defs/FieldValue",
-            "fideon:aliases": [
-              "Assigned To"
-            ]
+            "$ref": "#/$defs/FieldValue"
           },
           "description_of_interest": {
             "$ref": "#/$defs/FieldValue"
-          },
-          "is_payor": {
-            "$ref": "#/$defs/FieldValue",
-            "fideon:aliases": [
-              "Bill To",
-              "Payer",
-              "Payor"
-            ]
           }
         }
       }
@@ -914,16 +999,12 @@
         "total_policy_premium": {
           "$ref": "#/$defs/FieldValue",
           "fideon:aliases": [
-            "Policy Total Premium",
-            "Total Policy Premium"
+            "annual_policy_premium",
+            "annual_premium"
           ]
         },
         "basic_premium": {
-          "$ref": "#/$defs/FieldValue",
-          "fideon:aliases": [
-            "Basic Premium",
-            "Premium At Inception"
-          ]
+          "$ref": "#/$defs/FieldValue"
         },
         "estimated_annual_premium": {
           "$ref": "#/$defs/FieldValue"
@@ -967,9 +1048,6 @@
               },
               "is_fully_earned": {
                 "$ref": "#/$defs/FieldValue"
-              },
-              "applies_to": {
-                "$ref": "#/$defs/FieldValue"
               }
             }
           }
@@ -983,18 +1061,6 @@
                 "$ref": "#/$defs/FieldValue"
               },
               "amount": {
-                "$ref": "#/$defs/FieldValue"
-              },
-              "applies_to": {
-                "$ref": "#/$defs/FieldValue"
-              },
-              "form_reference": {
-                "$ref": "#/$defs/FieldValue"
-              },
-              "edition_date": {
-                "$ref": "#/$defs/FieldValue"
-              },
-              "percentage": {
                 "$ref": "#/$defs/FieldValue"
               }
             }
@@ -1016,17 +1082,11 @@
               },
               "applies_to": {
                 "$ref": "#/$defs/FieldValue"
-              },
-              "form_reference": {
-                "$ref": "#/$defs/FieldValue"
-              },
-              "edition_date": {
-                "$ref": "#/$defs/FieldValue"
-              },
-              "is_applied": {
-                "$ref": "#/$defs/FieldValue"
               }
-            }
+            },
+            "fideon:aliases": [
+              "discounts"
+            ]
           }
         },
         "surplus_lines_tax": {
@@ -1035,12 +1095,9 @@
         "fire_fee": {
           "$ref": "#/$defs/FieldValue",
           "fideon:aliases": [
-            "Fire Insurance Fee",
             "Includes New York Fire Fee Of",
-            "New York Fire Fee",
             "NY Fire Fee",
-            "NYS Fire Insurance Fee",
-            "State Fire Fee"
+            "New York Fire Fee"
           ]
         },
         "motor_vehicle_law_enforcement_fee": {
@@ -1068,8 +1125,6 @@
         "service_fee": {
           "$ref": "#/$defs/FieldValue",
           "fideon:aliases": [
-            "Handling Fee",
-            "Paper Handling Fee",
             "Service Fee"
           ]
         },
@@ -1097,13 +1152,24 @@
         "exposure_amount": {
           "$ref": "#/$defs/FieldValue"
         },
-        "forms_and_endorsements_premium": {
+        "premium_change": {
+          "$ref": "#/$defs/FieldValue",
+          "fideon:repo_addition": "Printed across the POLICIES-FINAL corpus (277 documents, ~40 carriers) and absent from the supplied schemas. Printed on 9 of the 22 lines. The NET change an endorsement makes. `return_premium` and `additional_premium` model the two directions separately; a carrier prints one signed figure."
+        },
+        "pay_in_full_amount": {
+          "$ref": "#/$defs/FieldValue",
+          "fideon:repo_addition": "Printed across the POLICIES-FINAL corpus (277 documents, ~40 carriers) and absent from the supplied schemas. Printed on 7 of the 22 lines. What the policy costs paid at once, printed beside the instalment figure. Neither is the other."
+        },
+        "association_dues": {
           "$ref": "#/$defs/FieldValue",
           "fideon:aliases": [
-            "Endorsement Premium",
-            "Forms/Endorsements Premium",
-            "Total Endorsement Premium"
-          ]
+            "Association Dues"
+          ],
+          "fideon:repo_addition": "Commercial umbrella / excess declarations in z-cumber (Sutton Specialty excess liability, Utica First commercial umbrella/excess ULCDNY, CNA excess insurance policy G-97360-B) print this"
+        },
+        "total_premium_and_fees": {
+          "$ref": "#/$defs/FieldValue",
+          "fideon:repo_addition": "Commercial umbrella / excess declarations in z-cumber (Sutton Specialty excess liability, Utica First commercial umbrella/excess ULCDNY, CNA excess insurance policy G-97360-B) print this (Sutton premium summary total: premium + association dues + surplus lines tax + stamping fee)"
         }
       },
       "fideon:aliases": [
@@ -1164,14 +1230,13 @@
       "type": "object",
       "properties": {
         "billing_plan": {
-          "$ref": "#/$defs/FieldValue"
-        },
-        "payment_plan": {
           "$ref": "#/$defs/FieldValue",
           "fideon:aliases": [
-            "Pay Plan",
-            "Your Policy Pay Plan is"
+            "Billing Type"
           ]
+        },
+        "payment_plan": {
+          "$ref": "#/$defs/FieldValue"
         },
         "payment_method": {
           "$ref": "#/$defs/FieldValue",
@@ -1179,7 +1244,8 @@
             "ELECTRONIC FUND",
             "Electronic Fund Transfer",
             "Pay by Check",
-            "Repetitive EFT"
+            "Repetitive EFT",
+            "billing_method"
           ]
         },
         "payment_frequency": {
@@ -1262,18 +1328,16 @@
           "is_mandatory": {
             "$ref": "#/$defs/FieldValue"
           },
-          "form_group": {
+          "endorsement_number": {
             "$ref": "#/$defs/FieldValue",
             "fideon:aliases": [
-              "Applicable Forms",
-              "Basic Forms",
-              "Forms & Endorsements",
-              "Mandatory Forms",
-              "Optional Forms"
-            ]
+              "Endorsement No"
+            ],
+            "fideon:repo_addition": "Commercial umbrella / excess declarations in z-cumber (Sutton Specialty excess liability, Utica First commercial umbrella/excess ULCDNY, CNA excess insurance policy G-97360-B) print this"
           },
-          "group_premium": {
-            "$ref": "#/$defs/FieldValue"
+          "effective_date": {
+            "$ref": "#/$defs/FieldValue",
+            "fideon:repo_addition": "Commercial umbrella / excess declarations in z-cumber (Sutton Specialty excess liability, Utica First commercial umbrella/excess ULCDNY, CNA excess insurance policy G-97360-B) print this"
           }
         }
       },
@@ -1390,8 +1454,7 @@
           "fideon:aliases": [
             "CUSTOMER CARE",
             "Customer Service",
-            "Report a Claim",
-            "To Report a Claim"
+            "Report a Claim"
           ]
         },
         "claims_email": {
@@ -1421,10 +1484,57 @@
             "country": {
               "$ref": "#/$defs/FieldValue"
             },
-            "county_code": {
-              "$ref": "#/$defs/FieldValue"
+            "full": {
+              "$ref": "#/$defs/FieldValue",
+              "fideon:repo_addition": "The address as the document PRINTS it, unparsed. The supplied schema carries only the split parts, and L1 reads the block whole rather than guessing where the street ends and the city begins."
             }
           }
+        },
+        "claims_fax": {
+          "$ref": "#/$defs/FieldValue",
+          "fideon:repo_addition": "Commercial umbrella / excess declarations in z-cumber (Sutton Specialty excess liability, Utica First commercial umbrella/excess ULCDNY, CNA excess insurance policy G-97360-B) print this"
+        },
+        "claims_website": {
+          "$ref": "#/$defs/FieldValue",
+          "fideon:repo_addition": "Commercial umbrella / excess declarations in z-cumber (Sutton Specialty excess liability, Utica First commercial umbrella/excess ULCDNY, CNA excess insurance policy G-97360-B) print this"
+        },
+        "other_notices_recipient": {
+          "$ref": "#/$defs/FieldValue",
+          "fideon:aliases": [
+            "All Other Notices"
+          ],
+          "fideon:repo_addition": "Commercial umbrella / excess declarations in z-cumber (Sutton Specialty excess liability, Utica First commercial umbrella/excess ULCDNY, CNA excess insurance policy G-97360-B) print this (CNA Item 6 'All other Notices:')"
+        },
+        "other_notices_address": {
+          "type": "object",
+          "properties": {
+            "line_1": {
+              "$ref": "#/$defs/FieldValue"
+            },
+            "line_2": {
+              "$ref": "#/$defs/FieldValue"
+            },
+            "city": {
+              "$ref": "#/$defs/FieldValue"
+            },
+            "state": {
+              "$ref": "#/$defs/FieldValue"
+            },
+            "postal_code": {
+              "$ref": "#/$defs/FieldValue"
+            },
+            "county": {
+              "$ref": "#/$defs/FieldValue"
+            },
+            "country": {
+              "$ref": "#/$defs/FieldValue"
+            },
+            "full": {
+              "$ref": "#/$defs/FieldValue",
+              "fideon:repo_addition": "The address as the document PRINTS it, unparsed. The supplied schema carries only the split parts, and L1 reads the block whole rather than guessing where the street ends and the city begins."
+            }
+          },
+          "fideon:repo_addition": "Commercial umbrella / excess declarations in z-cumber (Sutton Specialty excess liability, Utica First commercial umbrella/excess ULCDNY, CNA excess insurance policy G-97360-B) print this (CNA Item 6 'All other Notices:')"
         }
       }
     },
@@ -1432,14 +1542,15 @@
       "type": "object",
       "properties": {
         "authorized_representative_name": {
-          "$ref": "#/$defs/FieldValue"
-        },
-        "title": {
           "$ref": "#/$defs/FieldValue",
           "fideon:aliases": [
-            "Authorized Representative",
-            "Our Authorized Representative"
+            "authorized_representative",
+            "authorized_rep",
+            "countersigned_by"
           ]
+        },
+        "title": {
+          "$ref": "#/$defs/FieldValue"
         },
         "signature_date": {
           "$ref": "#/$defs/FieldValue"
@@ -1453,10 +1564,26 @@
           ]
         },
         "countersignature_date": {
+          "$ref": "#/$defs/FieldValue"
+        },
+        "has_signature": {
           "$ref": "#/$defs/FieldValue",
-          "fideon:aliases": [
-            "Countersignature Date"
-          ]
+          "fideon:repo_addition": "Whether the declarations page carries a signature at all. The supplied `signature` block models the signature's CONTENTS -- representative name, title, dates -- and has no key for its presence, so a reader that checks for one had nowhere to report it and the answer travelled in `additional_fields` on every document. An unsigned declarations page is a compliance question, so `false` is a finding rather than an absence."
+        },
+        "officer_signatories": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "$ref": "#/$defs/FieldValue"
+              },
+              "title": {
+                "$ref": "#/$defs/FieldValue"
+              }
+            }
+          },
+          "fideon:repo_addition": "Commercial umbrella / excess declarations in z-cumber (Sutton Specialty excess liability, Utica First commercial umbrella/excess ULCDNY, CNA excess insurance policy G-97360-B) print this (Sutton policy jacket: President and Secretary signatures)"
         }
       }
     },
@@ -1486,6 +1613,13 @@
             },
             "crisis_management_limit": {
               "$ref": "#/$defs/FieldValue"
+            },
+            "policy_limit": {
+              "$ref": "#/$defs/FieldValue",
+              "fideon:aliases": [
+                "Policy Limit"
+              ],
+              "fideon:repo_addition": "Commercial umbrella / excess declarations in z-cumber (Sutton Specialty excess liability, Utica First commercial umbrella/excess ULCDNY, CNA excess insurance policy G-97360-B) print this (Utica First 'POLICY LIMIT:')"
             }
           }
         },
@@ -1500,7 +1634,10 @@
               ]
             },
             "retained_limit_amount": {
-              "$ref": "#/$defs/FieldValue"
+              "$ref": "#/$defs/FieldValue",
+              "fideon:aliases": [
+                "Your Retained Limit"
+              ]
             },
             "attachment_point_amount": {
               "$ref": "#/$defs/FieldValue"
@@ -1516,6 +1653,10 @@
             },
             "drop_down_provision": {
               "$ref": "#/$defs/FieldValue"
+            },
+            "schedule_of_underlying_form_number": {
+              "$ref": "#/$defs/FieldValue",
+              "fideon:repo_addition": "Commercial umbrella / excess declarations in z-cumber (Sutton Specialty excess liability, Utica First commercial umbrella/excess ULCDNY, CNA excess insurance policy G-97360-B) print this (Sutton: 'Refer to Form Number ... - Schedule of Underlying, per attached')"
             }
           }
         },
@@ -1555,6 +1696,47 @@
               },
               "required_minimum_limit": {
                 "$ref": "#/$defs/FieldValue"
+              },
+              "layer_type": {
+                "$ref": "#/$defs/FieldValue",
+                "fideon:repo_addition": "Commercial umbrella / excess declarations in z-cumber (Sutton Specialty excess liability, Utica First commercial umbrella/excess ULCDNY, CNA excess insurance policy G-97360-B) print this (CNA Item 4: 'A. Followed Policy' vs 'B. Underlying Excess Policies'; primary lines otherwise)"
+              },
+              "coverage_status": {
+                "$ref": "#/$defs/FieldValue",
+                "fideon:repo_addition": "Commercial umbrella / excess declarations in z-cumber (Sutton Specialty excess liability, Utica First commercial umbrella/excess ULCDNY, CNA excess insurance policy G-97360-B) print this (Sutton prints 'Company: Not Included' for underlying lines not carried)"
+              },
+              "policy_period_as_printed": {
+                "$ref": "#/$defs/FieldValue",
+                "fideon:repo_addition": "Commercial umbrella / excess declarations in z-cumber (Sutton Specialty excess liability, Utica First commercial umbrella/excess ULCDNY, CNA excess insurance policy G-97360-B) print this"
+              },
+              "retroactive_date": {
+                "$ref": "#/$defs/FieldValue",
+                "fideon:aliases": [
+                  "Retroactive Date (If Claims Made)"
+                ],
+                "fideon:repo_addition": "Commercial umbrella / excess declarations in z-cumber (Sutton Specialty excess liability, Utica First commercial umbrella/excess ULCDNY, CNA excess insurance policy G-97360-B) print this"
+              },
+              "parent_company": {
+                "$ref": "#/$defs/FieldValue",
+                "fideon:repo_addition": "Commercial umbrella / excess declarations in z-cumber (Sutton Specialty excess liability, Utica First commercial umbrella/excess ULCDNY, CNA excess insurance policy G-97360-B) print this (CNA underlying excess schedule: 'an AIG Company')"
+              },
+              "limit_amount": {
+                "$ref": "#/$defs/FieldValue",
+                "fideon:repo_addition": "Commercial umbrella / excess declarations in z-cumber (Sutton Specialty excess liability, Utica First commercial umbrella/excess ULCDNY, CNA excess insurance policy G-97360-B) print this (CNA: one limit per followed / underlying excess layer)"
+              },
+              "deductible_or_retention_amount": {
+                "$ref": "#/$defs/FieldValue",
+                "fideon:aliases": [
+                  "Ded/Ret Amount"
+                ],
+                "fideon:repo_addition": "Commercial umbrella / excess declarations in z-cumber (Sutton Specialty excess liability, Utica First commercial umbrella/excess ULCDNY, CNA excess insurance policy G-97360-B) print this"
+              },
+              "excess_of_amount": {
+                "$ref": "#/$defs/FieldValue",
+                "fideon:aliases": [
+                  "Excess of"
+                ],
+                "fideon:repo_addition": "Commercial umbrella / excess declarations in z-cumber (Sutton Specialty excess liability, Utica First commercial umbrella/excess ULCDNY, CNA excess insurance policy G-97360-B) print this"
               }
             }
           },
@@ -1608,6 +1790,10 @@
                 "Report a Claim",
                 "Send Claims related notices to"
               ]
+            },
+            "prior_acts_exclusion_date": {
+              "$ref": "#/$defs/FieldValue",
+              "fideon:repo_addition": "Commercial umbrella / excess declarations in z-cumber (Sutton Specialty excess liability, Utica First commercial umbrella/excess ULCDNY, CNA excess insurance policy G-97360-B) print this (CNA GSL7194XX prior acts exclusion: no coverage for wrongful acts prior to the stated date)"
             }
           }
         },
@@ -1679,6 +1865,49 @@
               "$ref": "#/$defs/FieldValue"
             }
           }
+        },
+        "underlying_insurance_note": {
+          "$ref": "#/$defs/FieldValue",
+          "fideon:repo_addition": "Commercial umbrella / excess declarations in z-cumber (Sutton Specialty excess liability, Utica First commercial umbrella/excess ULCDNY, CNA excess insurance policy G-97360-B) print this (Utica First: umbrella coverage for WC/EL not applicable where an employee is subject to the NY Workers Compensation Law)"
+        }
+      }
+    },
+    "coverages": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/CoverageSection"
+      },
+      "fideon:aliases": [
+        "Coverage",
+        "Coverages",
+        "Coverage Part",
+        "Schedule of Coverages",
+        "Limits of Insurance"
+      ]
+    },
+    "text_sections": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/TextSection"
+      },
+      "fideon:fsm_exclude": true,
+      "description": "Raw text blocks for SLM/LLM-based policy comparison — populated by the text extraction path, not the VLM FSM. These are what the Comparison API reads."
+    },
+    "additional_fields": {
+      "type": "array",
+      "description": "Captures the schema has no home for. SPEC_02 §5.1: nothing a reader found is dropped.",
+      "items": {
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "value": {
+            "$ref": "#/$defs/FieldValue"
+          }
         }
       }
     }
@@ -1736,6 +1965,79 @@
           "type": "boolean"
         }
       }
+    },
+    "CoverageSection": {
+      "type": "object",
+      "properties": {
+        "coverage_type": {
+          "$ref": "#/$defs/FieldValue"
+        },
+        "coverage_name": {
+          "$ref": "#/$defs/FieldValue"
+        },
+        "covered_auto_symbols": {
+          "$ref": "#/$defs/FieldValue"
+        },
+        "limit": {
+          "$ref": "#/$defs/FieldValue"
+        },
+        "aggregate_limit": {
+          "$ref": "#/$defs/FieldValue"
+        },
+        "deductible": {
+          "$ref": "#/$defs/FieldValue"
+        },
+        "retention": {
+          "$ref": "#/$defs/FieldValue"
+        },
+        "sublimit": {
+          "$ref": "#/$defs/FieldValue"
+        },
+        "premium": {
+          "$ref": "#/$defs/FieldValue"
+        },
+        "endorsement_refs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/FieldValue"
+          }
+        }
+      }
+    },
+    "TextSection": {
+      "type": "object",
+      "required": [
+        "section_id",
+        "raw_text",
+        "page_range"
+      ],
+      "properties": {
+        "section_id": {
+          "type": "string",
+          "description": "Standard keys: conditions, exclusions, endorsements, insuring_agreement, definitions. Endorsements may be keyed by ISO form number (e.g. 'CG 21 47')."
+        },
+        "raw_text": {
+          "type": "string"
+        },
+        "page_range": {
+          "type": "array",
+          "items": {
+            "type": "integer"
+          }
+        },
+        "form_number": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
     }
+  },
+  "fideon:verification": {
+    "registry_entries": 31,
+    "corpus_samples": 1,
+    "verified_against_documents": true,
+    "note": "1 sample document(s) across 31 registry entries"
   }
 }

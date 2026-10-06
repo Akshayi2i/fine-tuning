@@ -1,0 +1,699 @@
+# Schema-side map of every L1 line of business (HANDOFF item 1; project-owner decisions D-A, D-B).
+#
+# Keyed by the 48 `code` values of config/lob_registry.yaml, in that file's order. That L1 file stays the
+# only list of LOBs and is not edited here; this map says which canonical schema each L1 code is read
+# against, which adapter and layout family it uses, and which common-model blocks its schema composes.
+#
+# schema_lob    canonical schema id: config/canonical_schema/policy_check/<schema_lob>.json. Equals code,
+#               except watercraft -> ocean_marine: watercraft is part of the ocean_marine line, not a
+#               separate line (D-B: L1 detects personal boat policies as watercraft).
+#               TBD where no layout family is known, so no schema is planned yet. SchemaRegistry routes
+#               a code whose schema_lob differs from it to that schema.
+# layout_family, adapter   SPEC_09 adapter table; SPEC_06 LOB_TO_LAYOUT_FAMILY where it names the line.
+# lob_code      batch code, SYNTHETIC_DATA_PROCESS.md section 2.
+# routing_key   the SPEC_06 LOB_TO_LAYOUT_FAMILY key, or null.
+# blocks_used   common-model building blocks the schema composes. Envelope blocks (SPEC_21 4.2.1) are
+#               used by every LOB and are not listed. From the SPEC_21 4.2.2 'Typical LOBs' column,
+#               narrowed by the 4.2.5 family table.
+# source_pdfs   seed PDFs for the line under synth_core/fideon/synth_core/data/source data/<Carrier>/<folder>/
+#               (de-identified per SPEC_21 D2). Package folders (cgl_prop, bopgl_boppr...) are not counted.
+# holdout_carrier   SPEC_21 10.3 holds one carrier per LOB out of training, so a LOB needs 2+ carriers.
+#
+# TBD marks a value no source gives. Every TBD is listed under open_items at the end.
+
+version: "1.0.0"
+common_model_version: "1.0.0"
+
+lobs:
+  - code: reinsurance
+    display: "Reinsurance"
+    schema_lob: TBD
+    layout_family: TBD
+    adapter: TBD
+    lob_code: TBD
+    routing_key: null
+    coverage_code_prefix: TBD
+    blocks_used: TBD
+    seeds: pending
+    source_pdfs: {folder: TBD, carriers: TBD, files: TBD}
+    holdout_carrier: TBD
+
+  - code: annuities
+    display: "Annuities"
+    schema_lob: TBD
+    layout_family: TBD
+    adapter: TBD
+    lob_code: TBD
+    routing_key: null
+    coverage_code_prefix: TBD
+    blocks_used: TBD
+    seeds: pending
+    source_pdfs: {folder: TBD, carriers: TBD, files: TBD}
+    holdout_carrier: TBD
+
+  - code: long_term_care
+    display: "Long-Term Care"
+    schema_lob: TBD
+    layout_family: TBD
+    adapter: TBD
+    lob_code: TBD
+    routing_key: null
+    coverage_code_prefix: TBD
+    blocks_used: TBD
+    seeds: pending
+    source_pdfs: {folder: TBD, carriers: TBD, files: TBD}
+    holdout_carrier: TBD
+
+  - code: statutory_disability
+    display: "Statutory Disability"
+    schema_lob: TBD
+    layout_family: TBD
+    adapter: TBD
+    lob_code: TBD
+    routing_key: null
+    coverage_code_prefix: TBD
+    blocks_used: TBD
+    seeds: pending
+    source_pdfs: {folder: TBD, carriers: TBD, files: TBD}
+    holdout_carrier: TBD
+
+  - code: disability
+    display: "Disability"
+    schema_lob: TBD
+    layout_family: TBD
+    adapter: TBD
+    lob_code: TBD
+    routing_key: null
+    coverage_code_prefix: TBD
+    blocks_used: TBD
+    seeds: pending
+    source_pdfs: {folder: TBD, carriers: TBD, files: TBD}
+    holdout_carrier: TBD
+
+  - code: group_accident_sickness
+    display: "Group Accident & Sickness"
+    schema_lob: group_accident_sickness
+    layout_family: benefits_misc
+    adapter: policy_check_benefits_misc_v1
+    lob_code: TBD
+    routing_key: null
+    coverage_code_prefix: TBD
+    blocks_used: [benefit_plans]
+    seeds: pending
+    source_pdfs: {folder: TBD, carriers: TBD, files: TBD}
+    holdout_carrier: TBD
+
+  - code: health
+    display: "Health Insurance"
+    schema_lob: health
+    layout_family: benefits_misc
+    adapter: policy_check_benefits_misc_v1
+    lob_code: TBD
+    routing_key: null
+    coverage_code_prefix: TBD
+    blocks_used: TBD
+    seeds: pending
+    source_pdfs: {folder: TBD, carriers: TBD, files: TBD}
+    holdout_carrier: TBD
+
+  - code: life
+    display: "Life Insurance"
+    schema_lob: life
+    layout_family: benefits_misc
+    adapter: policy_check_benefits_misc_v1
+    lob_code: TBD
+    routing_key: life
+    coverage_code_prefix: TBD
+    blocks_used: [benefit_plans]
+    seeds: pending
+    source_pdfs: {folder: life, carriers: 2, files: 2}
+    holdout_carrier: TBD
+
+  - code: title
+    display: "Title Insurance"
+    schema_lob: TBD
+    layout_family: TBD
+    adapter: TBD
+    lob_code: TBD
+    routing_key: null
+    coverage_code_prefix: TBD
+    blocks_used: TBD
+    seeds: pending
+    source_pdfs: {folder: TBD, carriers: TBD, files: TBD}
+    holdout_carrier: TBD
+
+  - code: surety
+    display: "Surety"
+    schema_lob: surety
+    layout_family: exec_specialty
+    adapter: policy_check_exec_specialty_v1
+    lob_code: TBD
+    routing_key: null
+    coverage_code_prefix: TBD
+    blocks_used: TBD
+    seeds: pending
+    source_pdfs: {folder: TBD, carriers: TBD, files: TBD}
+    holdout_carrier: TBD
+
+  - code: watercraft
+    display: "Watercraft"
+    schema_lob: ocean_marine
+    layout_family: personal_lines
+    adapter: policy_check_personal_lines_v1
+    lob_code: OM
+    routing_key: null
+    coverage_code_prefix: OM_
+    blocks_used: [watercraft, drivers, rating_modifiers]
+    seeds: available
+    source_pdfs: {folder: boat, carriers: 3, files: 4}
+    holdout_carrier: TBD
+
+  - code: ocean_marine
+    display: "Ocean Marine"
+    schema_lob: ocean_marine
+    layout_family: personal_lines
+    adapter: policy_check_personal_lines_v1
+    lob_code: OM
+    routing_key: null
+    coverage_code_prefix: OM_
+    blocks_used: [watercraft, drivers, rating_modifiers]
+    seeds: available
+    source_pdfs: {folder: boat, carriers: 3, files: 4}
+    holdout_carrier: TBD
+
+  - code: aviation
+    display: "Aviation"
+    schema_lob: TBD
+    layout_family: TBD
+    adapter: TBD
+    lob_code: TBD
+    routing_key: null
+    coverage_code_prefix: TBD
+    blocks_used: TBD
+    seeds: pending
+    source_pdfs: {folder: TBD, carriers: TBD, files: TBD}
+    holdout_carrier: TBD
+
+  - code: energy
+    display: "Energy"
+    schema_lob: TBD
+    layout_family: TBD
+    adapter: TBD
+    lob_code: TBD
+    routing_key: null
+    coverage_code_prefix: TBD
+    blocks_used: TBD
+    seeds: pending
+    source_pdfs: {folder: TBD, carriers: TBD, files: TBD}
+    holdout_carrier: TBD
+
+  - code: medical_malpractice
+    display: "Medical Malpractice"
+    schema_lob: TBD
+    layout_family: TBD
+    adapter: TBD
+    lob_code: TBD
+    routing_key: null
+    coverage_code_prefix: TBD
+    blocks_used: TBD
+    seeds: pending
+    source_pdfs: {folder: TBD, carriers: TBD, files: TBD}
+    holdout_carrier: TBD
+
+  - code: epli
+    display: "Employment Practices Liability"
+    schema_lob: epli
+    layout_family: exec_specialty
+    adapter: policy_check_exec_specialty_v1
+    lob_code: TBD
+    routing_key: epli
+    coverage_code_prefix: TBD
+    blocks_used: [claims_made_terms]
+    seeds: pending
+    source_pdfs: {folder: epli, carriers: 1, files: 1}
+    holdout_carrier: TBD
+
+  - code: management_liability
+    display: "Management Liability"
+    schema_lob: TBD
+    layout_family: TBD
+    adapter: TBD
+    lob_code: TBD
+    routing_key: null
+    coverage_code_prefix: TBD
+    blocks_used: TBD
+    seeds: pending
+    source_pdfs: {folder: TBD, carriers: TBD, files: TBD}
+    holdout_carrier: TBD
+
+  - code: directors_officers
+    display: "Directors & Officers"
+    schema_lob: directors_officers
+    layout_family: exec_specialty
+    adapter: policy_check_exec_specialty_v1
+    lob_code: TBD
+    routing_key: do
+    coverage_code_prefix: TBD
+    blocks_used: [claims_made_terms, insuring_agreements]
+    seeds: pending
+    source_pdfs: {folder: do, carriers: 7, files: 9}
+    holdout_carrier: TBD
+
+  - code: cyber
+    display: "Cyber Insurance"
+    schema_lob: cyber
+    layout_family: exec_specialty
+    adapter: policy_check_exec_specialty_v1
+    lob_code: TBD
+    routing_key: cyber
+    coverage_code_prefix: TBD
+    blocks_used: [claims_made_terms, insuring_agreements]
+    seeds: pending
+    source_pdfs: {folder: cyber, carriers: 5, files: 11}
+    holdout_carrier: TBD
+
+  - code: crime_fidelity
+    display: "Crime & Fidelity"
+    schema_lob: crime_fidelity
+    layout_family: exec_specialty
+    adapter: policy_check_exec_specialty_v1
+    lob_code: TBD
+    routing_key: crime
+    coverage_code_prefix: TBD
+    blocks_used: [insuring_agreements, bond]
+    seeds: pending
+    source_pdfs: {folder: none, carriers: 0, files: 0}
+    holdout_carrier: TBD
+
+  - code: environmental
+    display: "Environmental / Pollution"
+    schema_lob: TBD
+    layout_family: TBD
+    adapter: TBD
+    lob_code: TBD
+    routing_key: null
+    coverage_code_prefix: TBD
+    blocks_used: TBD
+    seeds: pending
+    source_pdfs: {folder: TBD, carriers: TBD, files: TBD}
+    holdout_carrier: TBD
+
+  - code: flood
+    display: "Flood"
+    schema_lob: flood
+    layout_family: property_pkg
+    adapter: policy_check_property_pkg_v1
+    lob_code: TBD
+    routing_key: flood
+    coverage_code_prefix: TBD
+    blocks_used: [locations, buildings]
+    seeds: pending
+    source_pdfs: {folder: flood, carriers: 3, files: 34}
+    holdout_carrier: TBD
+
+  - code: earthquake
+    display: "Earthquake"
+    schema_lob: earthquake
+    layout_family: property_pkg
+    adapter: policy_check_property_pkg_v1
+    lob_code: TBD
+    routing_key: eq
+    coverage_code_prefix: TBD
+    blocks_used: [locations, buildings]
+    seeds: pending
+    source_pdfs: {folder: none, carriers: 0, files: 0}
+    holdout_carrier: TBD
+
+  - code: homeowners
+    display: "Homeowners"
+    schema_lob: homeowners
+    layout_family: personal_lines
+    adapter: policy_check_personal_lines_v1
+    lob_code: HO
+    routing_key: home
+    coverage_code_prefix: HO_
+    blocks_used: [locations, buildings, scheduled_items, rating_modifiers]
+    seeds: available
+    source_pdfs: {folder: home, carriers: 11, files: 37}
+    holdout_carrier: TBD
+
+  - code: agriculture_farm
+    display: "Agriculture / Farm"
+    schema_lob: TBD
+    layout_family: TBD
+    adapter: TBD
+    lob_code: TBD
+    routing_key: null
+    coverage_code_prefix: TBD
+    blocks_used: TBD
+    seeds: pending
+    source_pdfs: {folder: TBD, carriers: TBD, files: TBD}
+    holdout_carrier: TBD
+
+  - code: builders_risk
+    display: "Builders Risk"
+    schema_lob: TBD
+    layout_family: TBD
+    adapter: TBD
+    lob_code: TBD
+    routing_key: null
+    coverage_code_prefix: TBD
+    blocks_used: TBD
+    seeds: pending
+    source_pdfs: {folder: TBD, carriers: TBD, files: TBD}
+    holdout_carrier: TBD
+
+  - code: construction
+    display: "Construction"
+    schema_lob: TBD
+    layout_family: TBD
+    adapter: TBD
+    lob_code: TBD
+    routing_key: null
+    coverage_code_prefix: TBD
+    blocks_used: TBD
+    seeds: pending
+    source_pdfs: {folder: TBD, carriers: TBD, files: TBD}
+    holdout_carrier: TBD
+
+  - code: inland_marine
+    display: "Inland Marine"
+    schema_lob: inland_marine
+    layout_family: property_pkg
+    adapter: policy_check_property_pkg_v1
+    lob_code: TBD
+    routing_key: im
+    coverage_code_prefix: TBD
+    blocks_used: [locations, scheduled_items]
+    seeds: pending
+    source_pdfs: {folder: inmrc, carriers: 4, files: 10}
+    holdout_carrier: TBD
+
+  - code: product_liability
+    display: "Product Liability"
+    schema_lob: TBD
+    layout_family: TBD
+    adapter: TBD
+    lob_code: TBD
+    routing_key: null
+    coverage_code_prefix: TBD
+    blocks_used: TBD
+    seeds: pending
+    source_pdfs: {folder: TBD, carriers: TBD, files: TBD}
+    holdout_carrier: TBD
+
+  - code: professional_eo
+    display: "Professional Liability / E&O"
+    schema_lob: professional_eo
+    layout_family: exec_specialty
+    adapter: policy_check_exec_specialty_v1
+    lob_code: TBD
+    routing_key: eo
+    coverage_code_prefix: TBD
+    blocks_used: [claims_made_terms]
+    seeds: pending
+    source_pdfs: {folder: eo, carriers: 5, files: 15}
+    holdout_carrier: TBD
+
+  - code: specialty
+    display: "Specialty"
+    schema_lob: specialty
+    layout_family: benefits_misc
+    adapter: policy_check_benefits_misc_v1
+    lob_code: TBD
+    routing_key: null
+    coverage_code_prefix: TBD
+    blocks_used: TBD
+    seeds: pending
+    source_pdfs: {folder: TBD, carriers: TBD, files: TBD}
+    holdout_carrier: TBD
+
+  - code: classic_auto                  # one canonical schema with personal_auto (project decision, 04 Oct 2026)
+    display: "Classic Auto"
+    schema_lob: personal_auto           # L1 keeps routing "Classic Automobile" here; it reads personal_auto.json
+    layout_family: personal_lines
+    adapter: policy_check_personal_lines_v1
+    lob_code: PA
+    routing_key: null
+    coverage_code_prefix: PA_
+    blocks_used: [locations, vehicles, drivers, rating_modifiers]
+    seeds: available
+    source_pdfs: {folder: autop, carriers: 1, files: 4}   # Hagerty, among the personal_auto seeds
+    holdout_carrier: TBD
+
+  - code: motorcycle
+    display: "Motorcycle"
+    schema_lob: motorcycle
+    layout_family: personal_lines
+    adapter: policy_check_personal_lines_v1
+    lob_code: MC
+    routing_key: null
+    coverage_code_prefix: MC_
+    blocks_used: [locations, vehicles, drivers, rating_modifiers]
+    seeds: available
+    source_pdfs: {folder: cycle, carriers: 3, files: 8}
+    holdout_carrier: TBD
+
+  - code: recreational_vehicle
+    display: "Recreational Vehicle"
+    schema_lob: recreational_vehicle
+    layout_family: personal_lines
+    adapter: policy_check_personal_lines_v1
+    lob_code: RV
+    routing_key: null
+    coverage_code_prefix: RV_
+    blocks_used: [locations, vehicles, drivers, watercraft, rating_modifiers]
+    seeds: available
+    source_pdfs: {folder: recv, carriers: 4, files: 22}
+    holdout_carrier: TBD
+
+  - code: personal_auto
+    display: "Personal Auto"
+    schema_lob: personal_auto
+    layout_family: personal_lines
+    adapter: policy_check_personal_lines_v1
+    lob_code: PA
+    routing_key: personal_auto
+    coverage_code_prefix: PA_
+    blocks_used: [locations, vehicles, drivers, rating_modifiers]
+    seeds: available
+    source_pdfs: {folder: autop, carriers: 9, files: 22}
+    holdout_carrier: TBD
+
+  - code: dwelling_fire
+    display: "Dwelling Fire"
+    schema_lob: dwelling_fire
+    layout_family: personal_lines
+    adapter: policy_check_personal_lines_v1
+    lob_code: DF
+    routing_key: null
+    coverage_code_prefix: DF_
+    blocks_used: [locations, buildings, rating_modifiers]
+    seeds: available
+    source_pdfs: {folder: dfire, carriers: 4, files: 16}
+    holdout_carrier: TBD
+
+  - code: personal_property
+    display: "Personal Property"
+    schema_lob: TBD
+    layout_family: TBD
+    adapter: TBD
+    lob_code: TBD
+    routing_key: null
+    coverage_code_prefix: TBD
+    blocks_used: TBD
+    seeds: pending
+    source_pdfs: {folder: TBD, carriers: TBD, files: TBD}
+    holdout_carrier: TBD
+
+  - code: bopgl
+    display: "Businessowners Liability"
+    schema_lob: bopgl
+    layout_family: property_pkg
+    adapter: policy_check_property_pkg_v1
+    lob_code: TBD
+    routing_key: null
+    coverage_code_prefix: TBD
+    blocks_used: TBD
+    seeds: pending
+    source_pdfs: {folder: TBD, carriers: TBD, files: TBD}
+    holdout_carrier: TBD
+
+  - code: boppr
+    display: "Businessowners Property"
+    schema_lob: boppr
+    layout_family: property_pkg
+    adapter: policy_check_property_pkg_v1
+    lob_code: TBD
+    routing_key: null
+    coverage_code_prefix: TBD
+    blocks_used: TBD
+    seeds: pending
+    source_pdfs: {folder: TBD, carriers: TBD, files: TBD}
+    holdout_carrier: TBD
+
+  - code: commercial_package
+    display: "Commercial Package"
+    schema_lob: TBD
+    layout_family: TBD
+    adapter: TBD
+    lob_code: TBD
+    routing_key: null
+    coverage_code_prefix: TBD
+    blocks_used: TBD
+    seeds: pending
+    source_pdfs: {folder: TBD, carriers: TBD, files: TBD}
+    holdout_carrier: TBD
+
+  - code: business_owners
+    display: "Businessowners"
+    schema_lob: business_owners
+    layout_family: property_pkg
+    adapter: policy_check_property_pkg_v1
+    lob_code: TBD
+    routing_key: null
+    coverage_code_prefix: TBD
+    blocks_used: TBD
+    seeds: pending
+    source_pdfs: {folder: TBD, carriers: TBD, files: TBD}
+    holdout_carrier: TBD
+
+  - code: personal_umbrella
+    display: "Personal Umbrella"
+    schema_lob: personal_umbrella
+    layout_family: personal_lines
+    adapter: policy_check_personal_lines_v1
+    lob_code: PU
+    routing_key: null
+    coverage_code_prefix: PU_
+    blocks_used: [underlying_insurance, attachment, rating_modifiers]
+    seeds: available
+    source_pdfs: {folder: pumbr, carriers: 2, files: 4}
+    holdout_carrier: TBD
+
+  - code: equipment_breakdown
+    display: "Equipment Breakdown"
+    schema_lob: TBD
+    layout_family: TBD
+    adapter: TBD
+    lob_code: TBD
+    routing_key: null
+    coverage_code_prefix: TBD
+    blocks_used: TBD
+    seeds: pending
+    source_pdfs: {folder: TBD, carriers: TBD, files: TBD}
+    holdout_carrier: TBD
+
+  - code: wc
+    display: "Workers' Compensation"
+    schema_lob: wc
+    layout_family: casualty_fleet
+    adapter: policy_check_casualty_fleet_v1
+    lob_code: WC
+    routing_key: wc
+    coverage_code_prefix: WC_
+    blocks_used: [locations, rating_exposures, rating_modifiers]
+    seeds: pending
+    source_pdfs: {folder: wc, carriers: 4, files: 40}
+    holdout_carrier: TBD
+
+  - code: gl
+    display: "General Liability"
+    schema_lob: gl
+    layout_family: casualty_fleet
+    adapter: policy_check_casualty_fleet_v1
+    lob_code: GL
+    routing_key: cgl
+    coverage_code_prefix: GL_
+    blocks_used: [locations, rating_exposures, rating_modifiers]
+    seeds: pending
+    source_pdfs: {folder: cgl, carriers: 11, files: 51}
+    holdout_carrier: TBD
+
+  - code: auto
+    display: "Commercial Auto"
+    schema_lob: auto
+    layout_family: casualty_fleet
+    adapter: policy_check_casualty_fleet_v1
+    lob_code: AU
+    routing_key: auto
+    coverage_code_prefix: AU_
+    blocks_used: [locations, vehicles, drivers, rating_exposures, rating_modifiers]
+    seeds: pending
+    source_pdfs: {folder: autob, carriers: 5, files: 11}
+    holdout_carrier: TBD
+
+  - code: property
+    display: "Commercial Property"
+    schema_lob: property
+    layout_family: property_pkg
+    adapter: policy_check_property_pkg_v1
+    lob_code: PR
+    routing_key: property
+    coverage_code_prefix: PR_
+    blocks_used: [locations, buildings, rating_modifiers]
+    seeds: pending
+    source_pdfs: {folder: prop, carriers: 3, files: 11}
+    holdout_carrier: TBD
+
+  - code: umbrella
+    display: "Umbrella & Excess Liability"
+    schema_lob: umbrella
+    layout_family: casualty_fleet
+    adapter: policy_check_casualty_fleet_v1
+    lob_code: UM
+    routing_key: umbrella
+    coverage_code_prefix: UM_
+    blocks_used: [underlying_insurance, attachment]
+    seeds: pending
+    source_pdfs: {folder: cumbr, carriers: 3, files: 4}
+    holdout_carrier: TBD
+
+open_items:
+  - item: Layout family for 19 L1 codes
+    detail: >-
+      SPEC_09 places none of these, so schema_lob, layout_family, adapter, lob_code,
+      coverage_code_prefix and blocks_used are TBD until a family is assigned: reinsurance, annuities, long_term_care, statutory_disability, disability, title, aviation, energy, medical_malpractice, management_liability, environmental, agriculture_farm, builders_risk, construction, product_liability, classic_auto, personal_property, commercial_package, equipment_breakdown.
+  - item: SPEC_06 group
+    detail: >-
+      LOB_TO_LAYOUT_FAMILY has a key group that must be pointed at health or group_accident_sickness.
+      Both are benefits_misc with routing_key null until then.
+  - item: LOB codes
+    detail: >-
+      SYNTHETIC_DATA_PROCESS.md section 2 gives batch codes for the seven personal lines and for gl, auto,
+      wc, property and umbrella only. lob_code and coverage_code_prefix are TBD for every other code.
+  - item: SPEC_06 routing keys for personal lines
+    detail: >-
+      LOB_TO_LAYOUT_FAMILY has keys only for homeowners (home) and personal_auto. dwelling_fire,
+      motorcycle, recreational_vehicle, personal_umbrella and watercraft have routing_key null until
+      SPEC_06 adds them.
+  - item: blocks_used beyond the 22 described lines
+    detail: >-
+      blocks_used is TBD for business_owners, bopgl, boppr, surety, health and specialty although their
+      family is known, and for every code without a family.
+  - item: Seed-based additions to blocks_used
+    detail: >-
+      drivers for recreational_vehicle and watercraft, and locations (garaging) for personal_auto and
+      motorcycle, are not named for those LOBs in the SPEC_21 section 4.2.2 tables. The seeds or the
+      vehicles block need them. The project owner confirms.
+  - item: Personal umbrella exposure schedules
+    detail: >-
+      Personal umbrella declarations often schedule residences, vehicles and watercraft. SPEC_21 lists
+      only underlying_insurance and attachment for personal umbrella; whether locations, vehicles and
+      watercraft join blocks_used is a project-owner decision.
+  - item: Hold-out carrier per LOB
+    detail: >-
+      holdout_carrier is TBD for every code and is named by the project owner before schema work
+      (SPEC_21 section 10.3; Lakshman review #22). Not possible today for epli (1 carrier), earthquake
+      and crime_fidelity (no source PDFs). personal_umbrella and life have 2 carriers, so holding one out
+      leaves a single training carrier. source_pdfs is TBD for codes outside the 22 described lines.
+  - item: The other LOBs of the 38
+    detail: >-
+      SPEC_21 counts 38 LOBs; config/lob_registry.yaml has 48 codes. Which codes become schema LOBs is
+      settled as their layout families are assigned.
+  - item: Seed availability outside personal lines
+    detail: >-
+      The seed folder also holds PDFs for several non-personal lines (gl, wc, directors_officers,
+      professional_eo, cyber, flood and others). seeds stays pending for them because the Common Model
+      Developer Brief documents seeds for the personal lines only; set it to available when the project
+      owner assigns those lines.

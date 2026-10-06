@@ -1,0 +1,181 @@
+# SPEC_21 4.2.4 coverage codes of motorcycle (schema 1.0.0, common model 1.0.0).
+# Built from all 9 seed golds of 3 carriers (All State, Progressive, RT Specialty).
+# aliases: coverage names as the seeds print them (whitespace collapsed; a dash the text layer has no
+# Unicode for is written '-'). Codes are LOB-prefixed (MC_); a coverage the common model shares across
+# lines uses its X_ code (common_model.json fideon:shared_coverage_codes); shared: true marks those.
+# carriers: how many of the line's carriers print the coverage. replaces_draft_codes: codes used by the
+# engine-test seed golds for the same coverage; those golds are re-coded at seed review (see CHANGELOG).
+lob: motorcycle
+schema_version: 1.0.0
+common_model_version: 1.0.0
+code_prefix: MC_
+codes:
+- code: MC_ACCESSORIES
+  name: Accessories / optional equipment
+  aliases:
+  - ACCESSORIES
+  - Accessory Coverage
+  - Optional Equipment
+  default_limit_types:
+  - per_occurrence
+  - other
+  carriers: 3
+- code: MC_GUEST_LIABILITY
+  name: Guest Liability
+  aliases:
+  - Guest Liability
+  default_limit_types:
+  - per_person
+  - per_accident
+  carriers: 1
+- code: MC_OPTIONAL_BASIC_ECONOMIC_LOSS
+  name: Optional basic economic loss (OBEL)
+  aliases:
+  - OPT BASIC ECON LOSS
+  - OPTIONAL BASIC ECON LOSS
+  - Optional Basic Economic Loss
+  default_limit_types:
+  - per_person
+  carriers: 2
+  note: See CR-PA-01 (split X_PIP).
+  replaces_draft_codes:
+  - X_PIP
+- code: MC_PASSENGER_LIABILITY
+  name: PASSENGER LIABILITY
+  aliases:
+  - PASSENGER LIABILITY
+  default_limit_types:
+  - per_person
+  - per_accident
+  carriers: 1
+- code: MC_PEDESTRIAN_PIP
+  name: Pedestrian personal injury protection
+  aliases:
+  - Mandatory Pedestrian Personal Injury Protection
+  - PEDESTRIAN PIP
+  default_limit_types:
+  - aggregate
+  - per_person
+  - per_day
+  - sublimit
+  carriers: 2
+- code: MC_SAFETY_CLOTHING_TOWING
+  name: SAFETY CLOTHING & TOWING
+  aliases:
+  - SAFETY CLOTHING & TOWING
+  default_limit_types: []
+  carriers: 1
+- code: MC_SUPPLEMENTAL_SPOUSAL_LIABILITY
+  name: Supplemental spousal liability
+  aliases:
+  - Including Supplemental Spousal Liability
+  - Supplemental Spousal Liability
+  - Supplemental Spousal liability
+  default_limit_types: []
+  carriers: 2
+  note: Shared code proposed (CR-PA-02).
+- code: MC_WRONGFUL_DEATH
+  name: WRONGFUL DEATH
+  aliases:
+  - WRONGFUL DEATH
+  default_limit_types:
+  - per_person
+  - per_accident
+  carriers: 1
+- code: X_COLLISION
+  name: Collision
+  aliases:
+  - Collision
+  - COLLISION
+  default_limit_types:
+  - other
+  shared: true
+  carriers: 3
+- code: X_COMPREHENSIVE
+  name: Comprehensive / other than collision
+  aliases:
+  - Comprehensive
+  - OTHER THAN COLLISION
+  default_limit_types:
+  - other
+  shared: true
+  carriers: 3
+- code: X_MED_PAY
+  name: Medical payments
+  aliases:
+  - MEDICAL PAYMENT
+  - MEDICAL PAYMENTS
+  - Medical Payments
+  default_limit_types:
+  - per_occurrence
+  - per_person
+  - per_accident
+  shared: true
+  carriers: 2
+- code: X_PIP
+  name: Personal injury protection / no-fault
+  aliases:
+  - Personal Injury Protection Coverage
+  default_limit_types:
+  - per_person
+  - other
+  shared: true
+  carriers: 1
+- code: X_TOWING
+  name: Towing and roadside assistance
+  aliases:
+  - Roadside Assistance
+  - Roadside Coverage(Occ)
+  default_limit_types:
+  - per_occurrence
+  - other
+  shared: true
+  carriers: 2
+- code: X_UIM
+  name: Underinsured / supplementary uninsured motorist
+  aliases:
+  - SUPPLE UM/UIM
+  - Supplementary Uninsured / Underinsured Motorist
+  - Supplementary Uninsured/Underinsured Motorist
+  default_limit_types:
+  - per_person
+  - per_accident
+  - combined_single
+  shared: true
+  carriers: 3
+  replaces_draft_codes:
+  - X_UM
+- code: X_UM
+  name: Uninsured motorist / boater
+  aliases:
+  - Mandatory Uninsured Motorist
+  - UNINSURED BI
+  - UNINSURED MOTORIST
+  default_limit_types:
+  - per_person
+  - per_accident
+  - combined_single
+  shared: true
+  carriers: 2
+- code: X_VEHICLE_LIABILITY
+  name: Liability (bodily injury and property damage) for an auto, motorcycle, RV or boat
+  aliases:
+  - Bodily Injury Liability
+  - Liability To Others
+  - Property Damage Liability
+  default_limit_types:
+  - per_person
+  - per_accident
+  - property_damage
+  - combined_single
+  shared: true
+  carriers: 3
+shared_codes_used:
+- X_COLLISION
+- X_COMPREHENSIVE
+- X_MED_PAY
+- X_PIP
+- X_TOWING
+- X_UIM
+- X_UM
+- X_VEHICLE_LIABILITY
