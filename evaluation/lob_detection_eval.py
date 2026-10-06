@@ -99,13 +99,16 @@ def detection_cases(
     """The frozen policies with one known line, as requests in ``mode``.
 
     Built as :func:`evaluation.golden_eval.evaluate` builds its requests - the
-    same pages, the same seeded corruption for ``noisy_ocr_image``, no text for
-    ``image_only`` - with the type sent and the line not. A package naming
-    several lines, and a line no longer registered, have no one right answer
-    and are left out.
+    same pages, no text for ``image_only`` - with the type sent and the line
+    not. ``noisy_ocr_image`` corrupts only the pages the classifier reads, as
+    the classify rows it is trained on do (build_jsonl.classify_rows, the same
+    seed): the document's budget spread over a long policy would rarely touch
+    its opening pages, and the noisy measurement would read clean text. A
+    package naming several lines, and a line no longer registered, have no one
+    right answer and are left out.
     """
     from data_pipeline.dataset_builder.noisy_ocr_augment import corrupt_ocr_pages
-    from serving.doc_type_classifier import known_line
+    from serving.doc_type_classifier import CLASSIFIER_PAGES, known_line
     from serving.pipeline import ExtractionRequest
 
     cases = []
@@ -115,8 +118,10 @@ def detection_cases(
             continue
         texts = dict(doc.page_texts)
         if mode == "noisy_ocr_image":
-            corrupted, _details = corrupt_ocr_pages([texts[p] for p in sorted(texts)], doc.source_id, seed=seed)
-            texts = dict(zip(sorted(texts), corrupted, strict=True))
+            opening = sorted(texts)[:CLASSIFIER_PAGES]
+            corrupted, _details = corrupt_ocr_pages(
+                [texts[p] for p in opening], f"{doc.source_id}#classify", seed=seed)
+            texts.update(zip(opening, corrupted, strict=True))
         request = ExtractionRequest(
             source_id=doc.source_id,
             image_paths=[local_images[key] for key in doc.image_keys],

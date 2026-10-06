@@ -10,6 +10,12 @@ the canonical policy schemas from two independent signals - the name, and the
 values the gold labels actually hold - and marks each field where they disagree,
 or where the labels hold too few values to say, for a person to decide.
 
+A field the common model declares a type for (a ``MoneyValue`` is money) is
+not proposed: serving and fitting type it from the schema on the seven
+common-model lines, and a row in the table - read first, for every line, by
+bare path - would override that declaration and re-type the same path on the
+self-contained lines. It is listed as a comment naming the declared type.
+
 The output is a proposal: nothing reads it until it is reviewed and committed.
 """
 
@@ -131,8 +137,15 @@ def from_values(values: list) -> tuple[str | None, str]:
 
 
 def propose(path: str, values: list) -> dict:
-    from calibration.features import infer_field_type
+    """The proposed type of ``path``, or - when the common model declares one -
+    that type with ``declared`` set: not a row for the table, which would
+    override the declaration on every line."""
+    from calibration.features import common_model_field_types, infer_field_type
 
+    declared = common_model_field_types().get(normalise(path))
+    if declared:
+        return {"type": declared, "by_name": declared, "values": "declared by the common model",
+                "review": False, "declared": True, "examples": [str(v)[:30] for v in values[:3]]}
     leaf = path.rsplit(".", 1)[-1].casefold()
     by_name = infer_field_type(path)
     by_values, why = from_values(values)
@@ -164,7 +177,7 @@ def propose(path: str, values: list) -> dict:
     # Where they agree - or the labels hold too few values to say - the name stands.
     review = proposed != by_name
     return {"type": proposed, "by_name": by_name, "values": why, "review": review,
-            "examples": [str(v)[:30] for v in values[:3]]}
+            "declared": False, "examples": [str(v)[:30] for v in values[:3]]}
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -179,17 +192,25 @@ def main(argv: list[str] | None = None) -> int:
              "# One line per canonical policy field. `review: true` = name and label values",
              "# disagree, or the labels hold too few values: decide those by hand.",
              "# Types: identifier money date number enum entity address free_text",
-             "# (free_text is never accepted without review).", "fields:"]
+             "# (free_text is never accepted without review).",
+             "# A field the common model types (`# path: declared ...`) is not tabled: a row",
+             "# would override its declared type, and re-type the path on every line.", "fields:"]
     for path, p in proposals.items():
+        if p["declared"]:
+            lines.append(f"  # {path}: {p['type']}  (declared by the common model; not tabled)")
+            continue
         note = f"name says {p['by_name']}; {p['values']}; e.g. {p['examples']}"
         flag = "  # REVIEW: " if p["review"] else "  # "
         lines.append(f"  {path}: {p['type']}{flag}{note}")
     args.out.write_text("\n".join(lines) + "\n", encoding="utf-8")
     review = sum(p["review"] for p in proposals.values())
+    declared = sum(p["declared"] for p in proposals.values())
     counts: dict[str, int] = defaultdict(int)
     for p in proposals.values():
-        counts[p["type"]] += 1
-    print(f"{len(proposals)} fields -> {args.out}; {review} to review")
+        if not p["declared"]:
+            counts[p["type"]] += 1
+    print(f"{len(proposals)} fields -> {args.out}; {declared} declared by the common model, "
+          f"not tabled; {review} to review")
     print("by type:", dict(sorted(counts.items(), key=lambda kv: -kv[1])))
     return 0
 

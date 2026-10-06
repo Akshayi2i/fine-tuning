@@ -684,6 +684,24 @@ def iter_validation_errors(
         yield f"{where}: {err.message}"
 
 
+def iter_validation_errors_by_keyword(
+    instance: Any, doc_type: str, acord_form: str | None = None,
+    lob: str | list[str] | None = None, *, keywords: tuple[str, ...],
+) -> Iterator[str]:
+    """:func:`iter_validation_errors`, only those a rule in ``keywords`` raised.
+
+    Selected by the rule's keyword (``minProperties``), never by the wording of
+    its message, which belongs to the jsonschema release installed. Only the
+    errors validation reports at the top: a rule inside an ``anyOf`` or a
+    ``oneOf`` branch fails its alternation, not itself.
+    """
+    wanted = set(keywords)
+    for err in sorted(validator_for(doc_type, acord_form, lob).iter_errors(instance), key=str):
+        if err.validator in wanted:
+            where = "/".join(str(p) for p in err.absolute_path) or "<root>"
+            yield f"{where}: {err.message}"
+
+
 def old_shape_hint(
     label: Any, doc_type: str, acord_form: str | None = None, lob: str | list[str] | None = None,
 ) -> str | None:

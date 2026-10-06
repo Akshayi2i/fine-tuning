@@ -52,6 +52,7 @@ from common.schemas import (
     is_common_model,
     is_valid,
     iter_validation_errors,
+    iter_validation_errors_by_keyword,
     required_fields,
     resolved_schema,
     with_page_bounds,
@@ -1114,6 +1115,7 @@ def extract(
     # all — the model form it was generated in is ours, the contract is theirs.
     filled = None
     unwritten: list[str] = []
+    empty: list[str] = []
     if common_model:
         # A common-model line's model view is looser than the client's schema on
         # purpose (common.model_view): a window may hold a flat deductible whose
@@ -1128,12 +1130,20 @@ def extract(
             name for name in required_fields(route_.schema_doc_type, route_.schema_acord_form, lob)
             if name not in extraction
         ]
+        # The fill would also pass off an object written with nothing in it - a
+        # carrier: {} the decoder allows, since it drops the client's
+        # minProperties, or a [{}] row - as a row of nulls the client's rule
+        # accepts. Emptiness is judged on the answer before the fill, after the
+        # system fields (document and policy carry those, so are never empty).
+        empty = list(iter_validation_errors_by_keyword(
+            output, route_.schema_doc_type, route_.schema_acord_form, lob,
+            keywords=("minProperties",)))
     judged = output if filled is None else filled
-    schema_valid = not unwritten and is_valid(
+    schema_valid = not unwritten and not empty and is_valid(
         judged, route_.schema_doc_type, route_.schema_acord_form, lob)
     validation_errors: list[str] = []
     if not schema_valid:
-        validation_errors = [f"{name}: a required section no window wrote" for name in unwritten] + list(
+        validation_errors = [f"{name}: a required section no window wrote" for name in unwritten] + empty + list(
             iter_validation_errors(judged, route_.schema_doc_type, route_.schema_acord_form, lob)
         )
         if strict_schema:
