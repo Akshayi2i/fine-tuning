@@ -109,13 +109,26 @@ def _hold_out(stats: Any) -> list[str]:
     held = policy.get("held_out_carriers_by_line") or {}
     if not policy:
         return out + ["Not recorded.", ""]
+    if policy.get("frozen_eval_set"):
+        out += ["The eval set is frozen: its documents are the test set, and the carriers below are "
+                "the ones held out when it was frozen.", ""]
     rows = [[doc_type, line, carrier] for doc_type, by_line in sorted(held.items())
             for line, carrier in sorted(by_line.items())]
-    out += (_table(["Doc type", "Line", "Carrier held out of train and val"], rows) if rows
-            else ["No carrier held out."])
+    whole = {k: v for k, v in (policy.get("held_out_carriers") or {}).items() if v}
+    out += (_table(["Doc type", "Line", "Carrier held out of train and val in this line"], rows) if rows
+            else [] if whole else ["No carrier held out."])
+    if whole:
+        out += ["", "Held out of every line: " + "; ".join(
+            f"{k}: {', '.join(v)}" for k, v in sorted(whole.items())) + "."]
     single = {k: v for k, v in (policy.get("single_carrier_lines") or {}).items() if v}
+    kept = {k: v for k, v in (policy.get("lines_not_held_out") or {}).items() if v}
+    unnamed = {k: v for k, v in (policy.get("lines_without_carrier") or {}).items() if v}
     out += ["", "Lines with one carrier, none held out: "
             + ("; ".join(f"{k}: {', '.join(v)}" for k, v in sorted(single.items())) or "none") + ".",
+            "Lines whose only train or validation carrier could not be held out: "
+            + ("; ".join(f"{k}: {', '.join(sorted(v))}" for k, v in sorted(kept.items())) or "none") + ".",
+            "Lines with no carrier named: "
+            + ("; ".join(f"{k}: {', '.join(v)}" for k, v in sorted(unnamed.items())) or "none") + ".",
             f"Families moved into test by the hold-out: "
             f"{sum((policy.get('moved_to_test') or {}).values())}.",
             f"Twin cap per seed and render mode: {_value(policy.get('twin_cap'))}; twins it left out "

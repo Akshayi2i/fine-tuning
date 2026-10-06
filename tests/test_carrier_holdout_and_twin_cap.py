@@ -24,17 +24,41 @@ def _record(group, carrier, line="homeowners", size=11):
 # Carrier hold-out per line
 # --------------------------------------------------------------------------
 
-def test_the_smallest_carrier_of_each_line_is_held_out_and_single_carrier_lines_listed():
+def test_the_carrier_costing_train_and_val_least_is_held_out_and_single_carrier_lines_listed():
     records = [_record("a", "big co", size=30), _record("b", "small co", size=5), _record("c", "big co"),
-               _record("d", "only co", line="motorcycle")]
-    held, single = held_out_carrier_per_line(records, seed=42)
-    assert held == {"homeowners": "small co"} and single == ["motorcycle"]
+               _record("v", "big co"), _record("d", "only co", line="motorcycle")]
+    splits = {"a": "train", "b": "train", "c": "train", "v": "val", "d": "train"}
+    choice = held_out_carrier_per_line(records, seed=42, split_of=splits)
+    assert choice.held == {"homeowners": "small co"} and choice.single == ["motorcycle"]
+
+
+def test_test_documents_cost_nothing_when_choosing():
+    # zenith has the most documents, but most are already test: holding it out costs 22.
+    records = [_record("a", "acme", size=10), _record("a2", "acme", size=15),
+               _record("t1", "zenith", size=40), _record("t2", "zenith", size=40),
+               _record("tr", "zenith"), _record("v", "zenith")]
+    splits = {"a": "train", "a2": "val", "t1": "test", "t2": "test", "tr": "train", "v": "val"}
+    assert held_out_carrier_per_line(records, seed=42, split_of=splits).held == {"homeowners": "zenith"}
+
+
+def test_a_line_keeps_its_only_validation_carrier():
+    """motorcycle on the delivered data: Progressive was its only validation carrier."""
+    records = [_record("m1", "allstate", line="motorcycle"), _record("m2", "progressive", line="motorcycle"),
+               _record("m3", "progressive", line="motorcycle")]
+    splits = {"m1": "train", "m2": "val", "m3": "test"}
+    choice = held_out_carrier_per_line(records, seed=42, split_of=splits)
+    assert choice.held == {} and "motorcycle" in choice.not_held_out      # either choice empties train or val
+    records.append(_record("m4", "honda", line="motorcycle"))
+    splits["m4"] = "train"
+    choice = held_out_carrier_per_line(records, seed=42, split_of=splits)
+    assert choice.held["motorcycle"] in {"allstate", "honda"}            # never progressive
 
 
 def test_a_held_out_carrier_goes_to_test_whatever_split_it_was_delivered_in():
-    splits = {"a": "train", "b": "val", "c": "val", "d": "test", "e": "train"}
+    splits = {"a": "train", "b": "val", "c": "val", "d": "test", "z": "train", "e": "train"}
     groups = {"policy": [_record("a", "acme"), _record("b", "acme"), _record("c", "zenith", size=40),
-                         _record("d", "zenith", size=40), _record("e", "solo", line="motorcycle")]}
+                         _record("d", "zenith", size=40), _record("z", "zenith", size=40),
+                         _record("e", "solo", line="motorcycle")]}
     result = assign_delivered_splits(groups, splits)
     assert result.held_out_carriers_by_line["policy"] == {"homeowners": "acme"}
     assert result.assignment["a"] == "test" and result.assignment["b"] == "test"     # moved out of train and val
@@ -44,6 +68,21 @@ def test_a_held_out_carrier_goes_to_test_whatever_split_it_was_delivered_in():
     assert set(result.held_out_source_ids) == {f"a-{i}" for i in range(11)} | {f"b-{i}" for i in range(11)}
     recorded = result.as_dict()
     assert recorded["held_out_carriers_by_line"] == {"policy": {"homeowners": "acme"}}
+    # Held out of its line, not of the doc type: it is not recorded as a carrier
+    # placed entirely in test, which the frozen-set warning reads.
+    assert not result.held_out_carriers
+
+
+def test_lines_that_hold_none_out_or_name_no_carrier_are_recorded():
+    splits = {"m1": "train", "m2": "val", "m3": "test", "n1": "train", "n2": "val"}
+    groups = {"policy": [_record("m1", "allstate", line="motorcycle"),
+                         _record("m2", "progressive", line="motorcycle"),
+                         _record("m3", "allstate", line="motorcycle"),
+                         _record("n1", None, line="ocean_marine"), _record("n2", None, line="ocean_marine")]}
+    result = assign_delivered_splits(groups, splits)
+    assert "motorcycle" in result.lines_not_held_out["policy"]
+    assert result.lines_without_carrier["policy"] == ["ocean_marine"]
+    assert result.assignment["m2"] == "val"                                          # its validation kept
 
 
 def test_the_hold_out_can_be_turned_off_and_is_skipped_once_the_eval_set_is_frozen():
@@ -141,3 +180,15 @@ def test_held_out_carrier_documents_are_a_reported_subset_with_their_own_match()
     metrics = build_report("v", [(golden, golden, seen), (golden, {"insured_name": "A"}, unseen)]).gate_metrics()
     assert metrics["held_out_carrier_match"] == 0.5
     assert "held_out_carrier_match" not in GATING_METRICS                    # reported, never gated
+
+
+def test_after_freezing_a_carrier_held_out_of_a_line_is_watched_in_that_line(caplog):
+    from orchestration.pipeline_dag import warn_on_held_out_carriers
+
+    manifest = {"held_out_carriers": {}, "held_out_carriers_by_line": {"policy": {"homeowners": "acme"}}}
+    other_line = SimpleNamespace(carrier="acme", doc_type="policy", lob="personal_auto")
+    warn_on_held_out_carriers(manifest, [other_line])
+    assert "held out" not in caplog.text                                     # it trains in its other lines
+    same_line = SimpleNamespace(carrier="acme", doc_type="policy", lob="homeowners")
+    warn_on_held_out_carriers(manifest, [same_line])
+    assert "acme (homeowners)" in caplog.text

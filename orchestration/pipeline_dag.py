@@ -537,7 +537,12 @@ def split_policy(split: dict[str, Any]) -> dict[str, Any]:
     """What the split held out and capped, for the run manifest."""
     return {
         "held_out_carriers_by_line": split.get("held_out_carriers_by_line") or {},
+        # A drawn split's hold-out: carriers placed entirely in test, per doc type.
+        "held_out_carriers": split.get("held_out_carriers") or {},
         "single_carrier_lines": split.get("single_carrier_lines") or {},
+        "lines_not_held_out": split.get("lines_not_held_out") or {},
+        "lines_without_carrier": split.get("lines_without_carrier") or {},
+        "frozen_eval_set": bool(split.get("frozen_eval_set")),
         "moved_to_test": split.get("moved_to_test") or {},
         "twin_cap": split.get("twin_cap"),
         "twins_dropped": sum((split.get("twins_dropped") or {}).values()),
@@ -763,8 +768,14 @@ def warn_on_held_out_carriers(manifest: dict[str, Any], documents: list[Any]) ->
     numbers mean anything. Training on a later document of theirs is allowed —
     the data is real — but from then on those numbers measure a seen carrier.
     """
+    from data_pipeline.dataset_builder.split_groups import line_of
+
     held = {c for carriers in (manifest.get("held_out_carriers") or {}).values() for c in carriers}
-    seen = sorted({d.carrier for d in documents if d.carrier in held})
+    by_line = manifest.get("held_out_carriers_by_line") or {}
+    seen = sorted({d.carrier for d in documents if d.carrier in held} | {
+        f"{d.carrier} ({line_of(getattr(d, 'lob', None))})" for d in documents
+        if d.carrier and (by_line.get(d.doc_type) or {}).get(line_of(getattr(d, "lob", None))) == d.carrier
+    })
     if seen:
         log.warning(
             "carrier(s) %s are held out in the frozen eval set but now have documents in this "
@@ -830,6 +841,13 @@ def plan_corpus(ctx: StageContext) -> CorpusPlan:
         log.info("using the delivered split: %s", assignment.counts_by_doc_type)
     else:
         assignment = assign_group_splits(by_type, seed=ctx.seed, with_test=not frozen)
+    if frozen:
+        # The test set is the frozen one; so are the carriers it holds out. Recorded
+        # so the run manifest and model card say what the gate's documents hold out.
+        manifest = frozen_manifest(ctx.client)
+        assignment.frozen_eval_set = True
+        assignment.held_out_carriers_by_line = dict(manifest.get("held_out_carriers_by_line") or {})
+        assignment.held_out_carriers = dict(manifest.get("held_out_carriers") or {})
     # One modality draw per train document per epoch (arch v2.1 §6.1). This is
     # the only sampling step: v1's down-sampler discarded rows to fix a 33/33/33
     # expansion, and running it over epoch rows would drop documents from epochs.

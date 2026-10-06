@@ -104,6 +104,15 @@ class GroupSplitAssignment:
     #: which cannot hold one out.
     held_out_carriers_by_line: dict[str, dict[str, str]] = field(default_factory=dict)
     single_carrier_lines: dict[str, list[str]] = field(default_factory=dict)
+    #: Per doc type, lines with two or more carriers where none was held out,
+    #: and why: every choice would have left the line no train or no
+    #: validation family.
+    lines_not_held_out: dict[str, dict[str, str]] = field(default_factory=dict)
+    #: Per doc type, lines none of whose documents names a carrier.
+    lines_without_carrier: dict[str, list[str]] = field(default_factory=dict)
+    #: The eval set was frozen when this split was made: its test set is the
+    #: frozen one, and the carriers held out are the ones recorded at freezing.
+    frozen_eval_set: bool = False
     #: Families the hold-out moved into test from the split they were delivered in.
     moved_to_test: dict[str, int] = field(default_factory=dict)
     #: Every document of a held-out carrier: evaluation reports them apart.
@@ -157,6 +166,10 @@ class GroupSplitAssignment:
             "held_out_carriers_by_line": {k: dict(sorted(v.items()))
                                           for k, v in sorted(self.held_out_carriers_by_line.items())},
             "single_carrier_lines": {k: sorted(v) for k, v in sorted(self.single_carrier_lines.items())},
+            "lines_not_held_out": {k: dict(sorted(v.items()))
+                                   for k, v in sorted(self.lines_not_held_out.items())},
+            "lines_without_carrier": {k: sorted(v) for k, v in sorted(self.lines_without_carrier.items())},
+            "frozen_eval_set": self.frozen_eval_set,
             "moved_to_test": dict(sorted(self.moved_to_test.items())),
             "held_out_source_ids": sorted(self.held_out_source_ids),
             "twin_cap": self.twin_cap,
@@ -386,24 +399,63 @@ HOLD_OUT_CARRIER_PER_LINE = True
 MAX_TWINS_PER_SEED = 20
 
 
-def held_out_carrier_per_line(records: list[GroupRecord], seed: int) -> tuple[dict[str, str], list[str]]:
-    """``({line: carrier held out}, [lines with one carrier])``.
+@dataclass
+class CarrierHoldOut:
+    """Which carrier each line holds out, and the lines that hold none out."""
 
-    The carrier with the fewest documents in the line is held out - it costs
-    training the least - with ties broken by a seeded hash so the choice is
-    reproducible. A line needs two carriers to hold one out.
+    held: dict[str, str] = field(default_factory=dict)
+    #: Lines with one carrier: none can be held out.
+    single: list[str] = field(default_factory=list)
+    #: Lines where every carrier is the line's only train or only validation
+    #: carrier, so holding any out would leave the line untrained or unvalidated.
+    not_held_out: dict[str, str] = field(default_factory=dict)
+    #: Lines none of whose documents names a carrier.
+    no_carrier: list[str] = field(default_factory=list)
+
+
+def held_out_carrier_per_line(records: list[GroupRecord], seed: int,
+                              split_of: dict[str, str] | None = None) -> CarrierHoldOut:
+    """The carrier each line holds out of train and validation.
+
+    Only a carrier whose families can all go to test while the line keeps at
+    least one train family and one validation family (``split_of``, the
+    delivered split): a line that loses its only validation carrier has no
+    validation at all. Among those, the one with the fewest train and
+    validation documents - what holding it out costs; its test documents cost
+    nothing - with ties broken by a seeded hash so the choice is reproducible.
     """
-    sizes: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))
+    families: dict[str, dict[str, list[GroupRecord]]] = defaultdict(lambda: defaultdict(list))
+    lines: set[str] = set()
     for record in records:
-        if record.line and record.carrier:
-            sizes[record.line][record.carrier] += record.size
-    held, single = {}, []
-    for line, carriers in sorted(sizes.items()):
-        if len(carriers) < 2:
-            single.append(line)
+        if not record.line:
             continue
-        held[line] = min(carriers, key=lambda c: (carriers[c], _stable_hash(c, seed, f"carrier:{line}")))
-    return held, single
+        lines.add(record.line)
+        if record.carrier:
+            families[record.line][record.carrier].append(record)
+    result = CarrierHoldOut(no_carrier=sorted(lines - set(families)))
+    split_of = split_of or {}
+
+    def splits_without(carriers: dict[str, list[GroupRecord]], held: str) -> set[str]:
+        return {split_of.get(r.group_id, "train") for c, rs in carriers.items() if c != held for r in rs}
+
+    for line, carriers in sorted(families.items()):
+        if len(carriers) < 2:
+            result.single.append(line)
+            continue
+        eligible = [c for c in carriers if {"train", "val"} <= splits_without(carriers, c)]
+        if not eligible:
+            result.not_held_out[line] = (
+                "every carrier is the line's only train or only validation carrier; holding one out "
+                "would leave the line untrained or unvalidated")
+            continue
+
+        cost = {
+            c: (sum(r.size for r in carriers[c] if split_of.get(r.group_id, "train") != "test"),
+                _stable_hash(c, seed, f"carrier:{line}"))
+            for c in eligible
+        }
+        result.held[line] = min(eligible, key=cost.__getitem__)
+    return result
 
 
 def cap_twins(documents: list[Any], assignment: GroupSplitAssignment, *,
@@ -453,9 +505,15 @@ def assign_delivered_splits(
 
     One exception to "as given": with ``hold_out_carriers`` (the default), one
     carrier per line with two or more carriers is held out - every family of
-    it goes to test, whatever split it was delivered in (Fideon SPEC_09
-    amendment item 4). Not once the eval set is frozen: the frozen set is the
-    test set and takes no new documents.
+    it in that line goes to test, whatever split it was delivered in (Fideon
+    SPEC_09 amendment item 4) - unless that would leave the line no train or
+    no validation family (:func:`held_out_carrier_per_line`). Not once the eval
+    set is frozen: the frozen set is the test set and takes no new documents.
+
+    Held out of its LINE: the carrier still trains in its other lines, so its
+    test documents measure a line layout the model has not seen, not a carrier
+    it has never seen. Recorded per line (``held_out_carriers_by_line``), never
+    as a carrier held out of the whole doc type (``held_out_carriers``).
     """
     result = GroupSplitAssignment(seed=seed, delivered=True)
     for doc_type, records in sorted(groups_by_doc_type.items()):
@@ -464,12 +522,18 @@ def assign_delivered_splits(
             continue
         held: dict[str, str] = {}
         if hold_out_carriers and with_test:
-            held, single = held_out_carrier_per_line(unique, seed)
+            choice = held_out_carrier_per_line(unique, seed, split_of_group)
+            held = choice.held
             if held:
                 result.held_out_carriers_by_line[doc_type] = held
-                result.held_out_carriers[doc_type] = sorted(set(held.values()))
-            if single:
-                result.single_carrier_lines[doc_type] = single
+            if choice.single:
+                result.single_carrier_lines[doc_type] = choice.single
+            if choice.not_held_out:
+                result.lines_not_held_out[doc_type] = choice.not_held_out
+                log.warning("%s: no carrier held out of %s - %s", doc_type, sorted(choice.not_held_out),
+                            next(iter(choice.not_held_out.values())))
+            if choice.no_carrier:
+                result.lines_without_carrier[doc_type] = choice.no_carrier
         buckets: dict[str, list[str]] = {name: [] for name in DELIVERED_SPLITS}
         documents = dict.fromkeys(DELIVERED_SPLITS, 0)
         by_line: dict[str, dict[str, int]] = defaultdict(lambda: dict.fromkeys(DELIVERED_SPLITS, 0))
