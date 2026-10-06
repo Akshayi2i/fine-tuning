@@ -59,7 +59,7 @@ def test_a_held_out_carrier_goes_to_test_whatever_split_it_was_delivered_in():
     groups = {"policy": [_record("a", "acme"), _record("b", "acme"), _record("c", "zenith", size=40),
                          _record("d", "zenith", size=40), _record("z", "zenith", size=40),
                          _record("e", "solo", line="motorcycle")]}
-    result = assign_delivered_splits(groups, splits)
+    result = assign_delivered_splits(groups, splits, hold_out_carriers=True)
     assert result.held_out_carriers_by_line["policy"] == {"homeowners": "acme"}
     assert result.assignment["a"] == "test" and result.assignment["b"] == "test"     # moved out of train and val
     assert result.assignment["e"] == "train"                                         # single-carrier line: untouched
@@ -79,18 +79,24 @@ def test_lines_that_hold_none_out_or_name_no_carrier_are_recorded():
                          _record("m2", "progressive", line="motorcycle"),
                          _record("m3", "allstate", line="motorcycle"),
                          _record("n1", None, line="ocean_marine"), _record("n2", None, line="ocean_marine")]}
-    result = assign_delivered_splits(groups, splits)
+    result = assign_delivered_splits(groups, splits, hold_out_carriers=True)
     assert "motorcycle" in result.lines_not_held_out["policy"]
     assert result.lines_without_carrier["policy"] == ["ocean_marine"]
     assert result.assignment["m2"] == "val"                                          # its validation kept
 
 
-def test_the_hold_out_can_be_turned_off_and_is_skipped_once_the_eval_set_is_frozen():
+def test_a_delivered_split_is_kept_as_delivered_unless_the_hold_out_is_asked_for():
+    """Off by default (decided 2026-10-07): the delivery already keeps whole
+    seeds out of training. Asked for, it is still skipped once the eval set is
+    frozen."""
     splits = {"a": "train", "b": "val", "c": "test"}
     groups = {"policy": [_record("a", "acme"), _record("b", "zenith", size=40), _record("c", "zenith", size=40)]}
+    result = assign_delivered_splits(groups, splits)
+    assert result.assignment == splits and not result.held_out_carriers_by_line
     assert assign_delivered_splits(groups, splits, hold_out_carriers=False).assignment == splits
     frozen = {"a": "train", "b": "val"}
-    result = assign_delivered_splits({"policy": groups["policy"][:2]}, frozen, with_test=False)
+    result = assign_delivered_splits({"policy": groups["policy"][:2]}, frozen, with_test=False,
+                                     hold_out_carriers=True)
     assert result.assignment == frozen and not result.held_out_carriers_by_line
 
 

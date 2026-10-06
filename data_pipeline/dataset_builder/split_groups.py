@@ -391,8 +391,13 @@ DELIVERED_SPLITS = ("train", "val", "test")
 
 
 #: Fideon SPEC_09 amendment item 4: at least one carrier per line is kept out
-#: of train and validation, and reported apart in evaluation.
-HOLD_OUT_CARRIER_PER_LINE = True
+#: of train and validation, and reported apart in evaluation. Off for a
+#: delivered split, by decision (2026-10-07): the SPEC_21 delivery already keeps
+#: whole seeds - layouts the model never trains on - in validation and test,
+#: and with 2 to 28 train seeds a line, holding a carrier out as well would
+#: move 13 seeds' families out of training. Pass ``hold_out_carriers=True`` to
+#: assign_delivered_splits to apply it.
+HOLD_OUT_CARRIER_PER_LINE = False
 
 #: Fideon SPEC_09 amendment item 5: at most this many synthetic twins of one
 #: seed, per render mode, train.
