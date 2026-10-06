@@ -19,6 +19,17 @@ A scope's configured shares are applied here too: per line, its synthetic
 fraction and scanned share decide which synthetic documents train, the same
 ones in every epoch (:mod:`training.data_mix`, Fideon SPEC_09 amendment items 6
 and 7). Every real document trains.
+
+**Render rotation** (``render_rotation: true`` in the training config): a
+twin delivered as a digital and a scanned PDF with one gold trains in ONE of
+them per epoch, the other the next (:func:`plan_render_rotation`). Both renders
+carry the same answer, so training both in one epoch repeats it; rotated, every
+twin still trains every epoch and both renders over the run, in about half the
+documents. Half of a seed's twins start digital and half scanned, so each epoch
+stays about half and half. Real documents and twins with one render train every
+epoch, and a line that rotation would take under the line-balance floor keeps
+both renders - distinct inputs before repeated rows. Validation and test keep
+every render.
 """
 
 from __future__ import annotations
@@ -60,8 +71,11 @@ class CorpusView:
     data_mix: dict[str, dict] = field(default_factory=dict)
     rested_documents: int = 0
     #: split -> line -> documents, real, synthetic and rows (train: one epoch,
-    #: after the shares, before line balance repeats anything).
+    #: after the shares and render rotation, before line balance repeats anything).
     examples_by_line: dict[str, dict[str, dict[str, int]]] = field(default_factory=dict)
+    #: Render rotation as applied: on or off, and per line its documents, the
+    #: documents of one epoch and the twins rotated (empty when off).
+    render_rotation: dict = field(default_factory=dict)
 
     @property
     def train_rows(self) -> int:
@@ -110,11 +124,14 @@ def _balance_settings(scope: Scope) -> dict[str, int]:
             "max_repeat": int(settings.get("max_repeat") or 1)}
 
 
-def line_repeats(rows: list[dict], *, min_documents: int, max_repeat: int) -> dict[str, int]:
+def line_repeats(rows: list[dict], *, min_documents: int, max_repeat: int,
+                 target: int | None = None) -> dict[str, int]:
     """How many times each line's rows go into an epoch file (``line_balance``).
 
     Counted in DOCUMENTS, not rows: a line of long policies has many rows per
-    document and is not small for it.
+    document and is not small for it. ``target`` is the documents a line is
+    raised toward when the caller has fixed it (render rotation); by default it
+    is ``min_documents``, capped at the largest line.
     """
     documents: dict[str, set] = {}
     for row in rows:
@@ -124,11 +141,96 @@ def line_repeats(rows: list[dict], *, min_documents: int, max_repeat: int) -> di
     # Toward the largest line, never past it: when every line is small (a smoke
     # corpus), repeating all of them alike would multiply the run's length and
     # change nothing about the balance.
-    target = min(min_documents, max(len(ids) for ids in documents.values()))
+    if target is None:
+        target = min(min_documents, max(len(ids) for ids in documents.values()))
     return {
         line: 1 if len(ids) >= target else min(max_repeat, -(-target // len(ids)))
         for line, ids in documents.items()
     }
+
+
+@dataclass
+class RenderRotation:
+    """Which documents rest in which epoch, and what each line came to."""
+
+    #: epoch -> source_ids that do not train in it (their twin's other render does).
+    rested: dict[int, set[str]] = field(default_factory=dict)
+    #: The documents a line is raised toward by line balance (0: balance is off).
+    target: int = 0
+    #: line -> documents, documents_per_epoch, twins_rotated, both_renders.
+    lines: dict[str, dict] = field(default_factory=dict)
+
+    def as_dict(self) -> dict:
+        return {"enabled": True, "balance_target": self.target, "lines": self.lines}
+
+
+def _rotation_enabled(scope: Scope) -> bool:
+    from common.config import training_config
+
+    return bool(training_config(scope.training_config).get("render_rotation"))
+
+
+def plan_render_rotation(rows: list[dict], *, seed: int, epochs: int = EPOCH_FILES,
+                         min_documents: int = 0) -> RenderRotation:
+    """One render per twin per epoch, from one epoch's train rows.
+
+    A twin is a synthetic document's (line, family, twin_index); the documents
+    sharing one are its renders, which share one gold. Each epoch trains one of
+    them, the next epoch the next. A family's twins are ordered by a seeded
+    hash and start on alternate renders, so every epoch holds about as many of
+    each render. A line whose documents per epoch would fall under the balance
+    target - ``min_documents``, capped at the largest line after rotation, as
+    line balance counts it - is not rotated: both renders are distinct inputs,
+    where line balance would repeat identical rows.
+    """
+    import hashlib
+
+    docs: dict[str, dict] = {}
+    for row in rows:
+        docs.setdefault(str(row.get("source_id")), row)
+    by_line: dict[str, set[str]] = {}
+    twins: dict[tuple[str, str, int], list[str]] = {}
+    for source_id, row in docs.items():
+        line = _line_of(row)
+        by_line.setdefault(line, set()).add(source_id)
+        if row.get("synthetic") and row.get("twin_index") is not None:
+            key = (line, str(row.get("group_id") or source_id), int(row["twin_index"]))
+            twins.setdefault(key, []).append(source_id)
+    rotating = {key: ids for key, ids in twins.items() if len(ids) > 1}
+    per_epoch = {line: len(ids) - sum(len(r) - 1 for (ln, _, _), r in rotating.items() if ln == line)
+                 for line, ids in by_line.items()}
+    plan = RenderRotation()
+    if min_documents > 0 and per_epoch:
+        plan.target = min(min_documents, max(per_epoch.values()))
+    small = {line for line, n in per_epoch.items() if n < plan.target}
+
+    def order(source_id: str) -> tuple:
+        row = docs[source_id]                    # digital first, then scanned
+        return (bool(row.get("is_scanned")), str(row.get("render_mode") or ""), source_id)
+
+    def position(key: tuple[str, str, int]) -> str:
+        return hashlib.sha256(f"{seed}:render_rotation:{key[1]}:{key[2]}".encode()).hexdigest()
+
+    families: dict[tuple[str, str], list[tuple[str, str, int]]] = {}
+    for key in rotating:
+        if key[0] not in small:
+            families.setdefault(key[:2], []).append(key)
+    for keys in families.values():
+        for index, key in enumerate(sorted(keys, key=lambda k: (position(k), k[2]))):
+            renders = sorted(rotating[key], key=order)
+            for epoch in range(1, epochs + 1):
+                chosen = renders[(index + epoch - 1) % len(renders)]
+                plan.rested.setdefault(epoch, set()).update(r for r in renders if r != chosen)
+    for line, ids in sorted(by_line.items()):
+        rotated = line not in small
+        twins_of_line = sum(1 for key in rotating if key[0] == line)
+        plan.lines[line] = {
+            "documents": len(ids),
+            "documents_per_epoch": per_epoch[line] if rotated else len(ids),
+            "twins_rotated": twins_of_line if rotated else 0,
+            "both_renders": not rotated and twins_of_line > 0,
+        }
+    return plan
 
 
 def _rows_of(body: str) -> list[dict]:
@@ -201,8 +303,15 @@ def materialize(
                 "epoch files are the corpus's own. Small lines train once per epoch; run a "
                 "line-scoped scope (e.g. personal_lines) to repeat them."
             )
+        if _rotation_enabled(scope):
+            log.warning(
+                "render_rotation is configured but is not applied to the unified scope: its "
+                "epoch files are the corpus's own, so both renders of a twin train every epoch. "
+                "Run a line-scoped scope (e.g. personal_lines) to rotate them."
+            )
         return view
 
+    rotation: RenderRotation | None = None
     for epoch in range(1, EPOCH_FILES + 1):
         source = paths.corpus_epoch_file(corpus_version, epoch, tenant_id)
         if not client.exists(source):
@@ -214,7 +323,8 @@ def materialize(
         if epoch == 1:
             # One choice of documents and one set of repeat counts for every
             # epoch, from the documents of the first: every epoch file holds
-            # every training document once.
+            # every training document once - or, with render rotation, every
+            # twin once, in the render that epoch gives it.
             from common.config import training_config
             from training.data_mix import mix_settings, select_documents
 
@@ -228,15 +338,28 @@ def materialize(
             if settings.steers:
                 log.info("data mix: %s", {line: (m.real, m.synthetic_kept, m.synthetic_available)
                                           for line, m in mix.items()})
-            view.examples_by_line["train"] = examples_by_line(kept_rows)
             balance = _balance_settings(scope)
-            view.line_repeats = line_repeats(kept_rows, **balance)
+            if _rotation_enabled(scope):
+                # After the shares (they choose documents, rotation chooses a
+                # render per epoch) and before balance, which counts one epoch.
+                rotation = plan_render_rotation(
+                    kept_rows, seed=seed,
+                    min_documents=balance["min_documents"] if balance["max_repeat"] > 1 else 0)
+                view.render_rotation = rotation.as_dict()
+                log.info("render rotation: documents per epoch %s", {
+                    line: (r["documents"], r["documents_per_epoch"]) for line, r in rotation.lines.items()})
+            first = rotation.rested.get(1, set()) if rotation else set()
+            epoch_rows = [row for row in kept_rows if str(row.get("source_id")) not in first]
+            view.examples_by_line["train"] = examples_by_line(epoch_rows)
+            view.line_repeats = line_repeats(epoch_rows, **balance,
+                                             target=(rotation.target or None) if rotation else None)
             for line, record in view.data_mix.items():
                 record["repeats"] = view.line_repeats.get(line, 1)
             boosted = {line: n for line, n in view.line_repeats.items() if n > 1}
             if boosted:
                 log.info("line balance: repeating %s in every epoch file", boosted)
-        body, kept = _keep(body, keep)
+        rested = rotation.rested.get(epoch, set()) if rotation else set()
+        body, kept = _keep(body, keep - rested)
         body, kept = _balance(body, view.line_repeats)
         target = paths.corpus_scope_epoch_file(corpus_version, epoch, scope.name, tenant_id)
         client.write_text(target, body)

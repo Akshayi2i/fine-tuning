@@ -88,7 +88,17 @@ def _mix(stats: Any) -> list[str]:
             f"{line} (synthetic_fraction {_value(configured[line].get('synthetic_fraction'))}, "
             f"scanned_share {_value(configured[line].get('scanned_share'))})" for line in unused)]
     rested = mix.get("rested_documents") or 0
-    return out + ["", f"Train documents the shares left out: {rested}. Every real document trains.", ""]
+    out += ["", f"Train documents the shares left out: {rested}. Every real document trains.", ""]
+    rotation = mix.get("render_rotation") or {}
+    if not rotation.get("enabled"):
+        return out + ["Render rotation: off - both renders of a twin train in every epoch.", ""]
+    out += ["Render rotation: on - each twin trains in one render per epoch, the other the next "
+            "epoch. Per line:", ""]
+    out += _table(["Line", "Train documents", "Documents per epoch", "Twins rotated", "Both renders kept"],
+                  [[line, r.get("documents"), r.get("documents_per_epoch"), r.get("twins_rotated"),
+                    "yes (under the balance floor)" if r.get("both_renders") else "no"]
+                   for line, r in sorted((rotation.get("lines") or {}).items())])
+    return out + [""]
 
 
 def _modes(stats: Any) -> list[str]:

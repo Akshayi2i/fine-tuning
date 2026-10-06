@@ -505,6 +505,9 @@ def build_corpus(
             # row (the seed is group_id). twin_index is None for real documents.
             row["carrier"] = document.carrier
             row["twin_index"] = document.twin_index
+            # Which render of its twin it is (digital / scanned): a scope's view
+            # trains one render of a twin per epoch (training.corpus_view).
+            row["render_mode"] = document.render_mode
             # What a scope's scanned_share counts (training.data_mix), and the
             # scanned subset of a validation report.
             row["is_scanned"] = document.is_scanned

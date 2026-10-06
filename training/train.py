@@ -809,7 +809,8 @@ def train(
                    # The shares configured and reached, per line, for the
                    # manifest and the model card.
                    "data_mix": {"settings": view.mix_settings, "lines": view.data_mix,
-                                "rested_documents": view.rested_documents},
+                                "rested_documents": view.rested_documents,
+                                "render_rotation": view.render_rotation},
                    "examples_by_line": view.examples_by_line}
     data_stats = data_stats.model_copy(update=update)
 

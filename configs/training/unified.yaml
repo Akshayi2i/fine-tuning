@@ -166,6 +166,17 @@ line_balance:
   min_documents: 100
   max_repeat: 3
 
+# One render per twin per epoch (training.corpus_view.plan_render_rotation). A
+# twin's digital and scanned PDFs share one gold, so training both in an epoch
+# repeats its answer: rotated, each twin trains in one render, the other the
+# next epoch - every twin every epoch and both renders over the run, in about
+# 60% of the documents. Each epoch stays about half digital, half scanned. Real
+# documents always train; a line rotation would take under line_balance's floor
+# keeps both renders. Validation and test keep every render. Like line_balance,
+# applied in a line-scoped view (personal_lines), not to the unified scope.
+# false trains both renders every epoch.
+render_rotation: true
+
 distributed:
   # One H200 SXM 141GB in this deployment (sized originally for an A100 80GB). If a task cap does not fit, ms-swift SEQUENCE
   # PARALLELISM comes first (§9.3) - DeepSpeed ZeRO is not used unless that is
