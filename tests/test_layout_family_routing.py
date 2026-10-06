@@ -46,16 +46,42 @@ def test_the_keys_equal_the_l1_codes_once_the_registry_is_here():
     assert set(lob_to_layout_family()) == codes
 
 
-def test_the_router_and_lob_schema_map_agree_once_it_carries_families():
-    schema_map = ROOT / "config" / "lob_schema_map.yaml"
-    if not schema_map.exists():
-        pytest.skip("lob_schema_map.yaml (layout_family column) is not in this repository")
+#: The delivered SPEC_21 map: the 48 L1 codes, each with its schema and layout family.
+LOB_SCHEMA_MAP = CONFIG_DIR / "canonical schema" / "common schema" / "lob_schema_map.yaml"
+
+#: L1 codes the map gives a layout family but no schema file was delivered for:
+#: this repository cannot read them yet. A new one here is a gap to close.
+NO_SCHEMA_DELIVERED = {"health", "life", "earthquake", "specialty"}
+
+
+def _map_rows():
     import yaml
 
-    rows = yaml.safe_load(schema_map.read_text(encoding="utf-8")) or {}
-    for line, row in rows.items():
-        if isinstance(row, dict) and "layout_family" in row:
-            assert layout_family_of(line) == row["layout_family"], line
+    from common.lob import merge_line
+    from common.schemas import LOB_SCHEMA_ALIASES
+
+    for row in yaml.safe_load(LOB_SCHEMA_MAP.read_text(encoding="utf-8"))["lobs"]:
+        line = merge_line(row["code"])
+        named = row.get("layout_family") not in (None, "TBD")
+        yield row["code"], LOB_SCHEMA_ALIASES.get(line, line), row.get("layout_family") if named else None
+
+
+def test_the_router_and_lob_schema_map_agree_on_every_family_both_name():
+    """No L1 code gets one family from the map and another here. Where the map
+    says TBD, this repository's own table decides (builders_risk, agriculture_farm...)."""
+    rows = list(_map_rows())
+    assert len(rows) == 48
+    known = lob_to_layout_family()
+    conflicts = [(code, line, family, known[line]) for code, line, family in rows
+                 if family and line in known and known[line] != family]
+    assert conflicts == []
+    assert sum(1 for _code, line, family in rows if family and line in known) >= 26
+
+
+def test_every_l1_code_the_map_gives_a_family_is_a_line_here_or_a_known_gap():
+    known = lob_to_layout_family()
+    unreadable = {code for code, line, family in _map_rows() if family and line not in known}
+    assert unreadable == NO_SCHEMA_DELIVERED
 
 
 @pytest.mark.parametrize("line,family", [
