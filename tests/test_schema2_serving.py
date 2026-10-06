@@ -166,6 +166,9 @@ def test_a_link_its_window_could_not_see_is_lost_but_the_rows_are_not():
     assert len(coverages) == 4
     assert all(not c.get("applies_to") for c in coverages)
     assert result.schema_valid
+    # Served as "the whole policy" by the client's reading: two vehicles, so each
+    # is flagged for a person (serving.pipeline.unit_link_flags).
+    assert {f"coverages[{i}].applies_to:unit_link_unknown" for i in range(4)} <= set(result.review_flags)
     assert list(iter_validation_errors(result.extraction, "policy", None, "personal_auto")) == []
 
 
@@ -349,3 +352,24 @@ def test_the_ceiling_counts_links_apart_from_values():
     assert split.dangling == 5
     summary = ceiling([split, compact])
     assert summary["reference_recall"] == round(9 / 14, 4) and summary["dangling_references"] == 5
+
+
+def test_a_one_dwelling_homeowners_policy_raises_no_unit_link_flag():
+    """Its liability and its mortgagee apply to the whole policy, and with one
+    dwelling the policy and the unit are the same thing."""
+    import json as _json
+
+    from serving.pipeline import unit_link_flags
+
+    example = _json.loads(Path("configs/canonical schema/common schema/examples/homeowners_minimal.json")
+                          .read_text(encoding="utf-8"))
+    unlinked = {key: [{k: v for k, v in row.items() if k != "applies_to"} if isinstance(row, dict) else row
+                      for row in value] if isinstance(value, list) else value
+                for key, value in example.items()}
+    assert unit_link_flags(unlinked) == []
+    one_vehicle = {"vehicles": [{"unit_id": "veh_1"}], "drivers": [{"unit_id": "drv_1"}, {"unit_id": "drv_2"}],
+                   "coverages": [{"coverage_code": "X_COLLISION"}]}
+    assert unit_link_flags(one_vehicle) == []                                   # drivers do not count
+    partial = {"vehicles": [{"unit_id": "veh_1"}],
+               "coverages": [{"coverage_code": "X_COLLISION", "applies_to": ["veh_1"]}, {"coverage_code": "X_COLLISION"}]}
+    assert unit_link_flags(partial) == ["coverages[1].applies_to:unit_link_unknown"]   # its twin is linked

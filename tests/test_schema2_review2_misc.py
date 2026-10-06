@@ -58,14 +58,24 @@ def test_a_carrier_and_an_insured_written_empty_fail_strict_validation():
     assert not [e for e in result.validation_errors if e.startswith(("document:", "policy:"))]
 
 
-def test_an_empty_row_the_model_wrote_fails_validation():
-    """A [{}] row was served as a phantom row of nulls, judged valid."""
-    with pytest.raises(PipelineError, match=r"forms_and_endorsements/1: \{\} should be non-empty"):
-        _serve_replay(_compact_auto(), 3, strict=True, edit=_empty_form_row)
+def test_an_empty_row_the_model_wrote_is_dropped_not_served():
+    """A [{}] row was served as a phantom row of nulls, judged valid; then it
+    refused the whole document. It is a row nobody read: dropped from the answer
+    itself, so it is neither served nor fatal. A required section written empty
+    still fails (test_a_carrier_and_an_insured_written_empty_fail_strict_validation)."""
+    result, _backend, _answers = _serve_replay(_compact_auto(), 3, strict=True, edit=_empty_form_row)
+    perfect, _backend, _answers = _serve_replay(_compact_auto(), 3, strict=True)
+    assert result.schema_valid and "schema:invalid" not in result.review_flags
+    assert len(result.extraction["forms_and_endorsements"]) == len(perfect.extraction["forms_and_endorsements"])
 
-    result, _backend, _answers = _serve_replay(_compact_auto(), 3, edit=_empty_form_row)
-    assert not result.schema_valid and "schema:invalid" in result.review_flags
-    assert "forms_and_endorsements/1: {} should be non-empty" in result.validation_errors
+
+def test_an_empty_optional_object_is_dropped_not_served():
+    from serving.pipeline import _without_empty
+
+    answer = {"carrier": {}, "interested_parties": [{"name": {"raw": "Bank"}, "address": {}}, {}],
+              "billing": {"installments": [{}]}}
+    assert _without_empty(answer, keep=frozenset({"carrier"})) == {
+        "carrier": {}, "interested_parties": [{"name": {"raw": "Bank"}}], "billing": {"installments": []}}
 
 
 def test_the_perfect_replay_and_the_flat_deductible_still_pass_strict_validation():

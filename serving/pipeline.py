@@ -481,6 +481,57 @@ def _extract_policy_windows(
     return merged.extraction, merged.spans, round(wall_ms, 1), sorted(routed), flags
 
 
+#: A coverage served with no unit while the answer holds several units of a kind.
+UNIT_LINK_FLAG = "applies_to:unit_link_unknown"
+
+#: The unit tables a coverage is written per unit of. Not drivers (coverages are
+#: not per driver), locations (a building is the insured unit) or scheduled
+#: items (they carry their own coverage; Coverage A is not theirs).
+COVERAGE_UNIT_TABLES = ("vehicles", "watercraft", "buildings")
+
+
+def unit_link_flags(extraction: dict[str, Any]) -> list[str]:
+    """Review flags for common-model coverages that may have lost their unit.
+
+    A window links a coverage to the vehicle (boat, building) it applies to only
+    when both are on its pages; read apart, the link is dropped - a window
+    cannot cite a unit it cannot see - and the merged row has no
+    ``applies_to``, which the client reads as "the whole policy". That cannot
+    be told from a coverage that does apply to the whole policy, so the row is
+    flagged for a person, not changed: when its unit table holds two or more
+    units (with one vehicle or one dwelling, the policy and the unit are the
+    same thing), or when another row of its code does carry a link - the plain
+    sign of one that was lost.
+    """
+    coverages = [row for row in extraction.get("coverages") or [] if isinstance(row, dict)]
+    several = any(len(extraction.get(table) or []) >= 2 for table in COVERAGE_UNIT_TABLES)
+    linked = {row.get("coverage_code") for row in coverages if row.get("applies_to")}
+    return [f"coverages[{index}].{UNIT_LINK_FLAG}"
+            for index, row in enumerate(extraction.get("coverages") or [])
+            if isinstance(row, dict) and not row.get("applies_to")
+            and (several or row.get("coverage_code") in linked)]
+
+
+def _without_empty(node: Any, keep: frozenset[str] = frozenset()) -> Any:
+    """``node`` without the objects written with nothing in them: an empty
+    optional object, or an empty row. The decoder lets a window write ``{}``
+    (it drops the client's minProperties); served, it is a row of nulls nobody
+    read, and judged, it refuses the whole document. ``keep`` names the
+    required top-level sections, which stay so that one written empty still
+    fails as a section nobody read."""
+    if isinstance(node, dict):
+        pruned = {}
+        for key, value in node.items():
+            value = _without_empty(value)
+            if value == {} and key not in keep:
+                continue
+            pruned[key] = value
+        return pruned
+    if isinstance(node, list):
+        return [item for item in (_without_empty(v) for v in node) if item != {}]
+    return node
+
+
 #: A policy read by the base model against _fallback.json (Fideon SPEC_06 §9a).
 LOB_FALLBACK_FLAG = "route:lob_fallback_used"
 
@@ -1064,6 +1115,9 @@ def extract(
 
     if not window_latencies and latency is not None:
         window_latencies.append(latency)                  # read in one call
+    if common_model:
+        # A coverage whose unit was read in another window comes back unlinked.
+        merge_flags.extend(unit_link_flags(extraction))
     if route_.schema_doc_type == "lossrun":
         if reconciliation is None:
             from serving.lossrun_merge import reconcile_extraction
@@ -1181,6 +1235,10 @@ def extract(
         # section the model view requires that no window wrote (its declarations
         # windows all failed) still fails: the system fields and the fill would
         # pass it off as an empty section nobody read.
+        # Empty optional objects and empty rows are dropped from the answer
+        # itself - judged and served without them - not only from a copy.
+        output = _without_empty(output, keep=frozenset(
+            required_fields(route_.schema_doc_type, route_.schema_acord_form, lob)))
         filled = _with_every_key(output, route_, lob)
         unwritten = [
             name for name in required_fields(route_.schema_doc_type, route_.schema_acord_form, lob)
