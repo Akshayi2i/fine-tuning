@@ -292,3 +292,21 @@ def test_a_package_line_matches_in_any_order():
     settings = parse_settings({"lines": {"personal_auto,homeowners": {"synthetic_fraction": 0.7}}},
                               lines=PERSONAL.lines)
     assert settings.for_line("homeowners,personal_auto") == (0.7, None)
+
+
+def test_a_waived_pass_reads_as_one_and_the_held_out_carrier_score_is_recorded(client, monkeypatch):
+    from evaluation.gating import GATING_METRICS, GateOverrideRecord, apply_to_manifest, promotion_gate
+    from registry_utils.model_card import render_model_card
+
+    manifest = _scoped_manifest(client, monkeypatch)
+    metrics = {name: 0.96 for name in GATING_METRICS}
+    metrics.update(schema_validity_rate=1.0, ece_confidence=0.04, confusable_misattribution_rate=0.02,
+                   false_null_rate=0.03, auto_accept_error_rate=0.01, field_normalized_match=0.89,
+                   field_exact_match=0.89, doc_type_classifier_accuracy=0.90, held_out_carrier_match=0.71)
+    result = promotion_gate(metrics, None, override=GateOverrideRecord(
+        "A. Reviewer", "classifier retrain tracked in FID-118, shipping anyway",
+        ["doc_type_classifier_accuracy"]))
+    apply_to_manifest(result, manifest, metrics=metrics)
+    card = render_model_card(manifest)
+    assert "Verdict: passed with a waiver, interim release." in card
+    assert manifest.eval_metrics.held_out_carrier_match == 0.71 and "| held_out_carrier_match | 0.71 |" in card

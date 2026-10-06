@@ -61,11 +61,42 @@ def test_no_gpu_is_no_reading(monkeypatch):
     assert release_measurements.peak_gpu_memory_mb() is None
 
 
-def test_extract_records_one_latency_per_window(client):
+def test_extract_records_one_latency_per_generation_round(client):
+    """A round's windows run together and vLLM gives each the round's time, so one
+    entry per round - not one per window, which counted it once per window."""
     from tests.test_lossrun_windows_and_table_f1 import _serve, _Windows
 
-    assert len(_serve(client, _Windows()).window_latencies_ms) == 3          # three windows
+    assert len(_serve(client, _Windows()).window_latencies_ms) == 1          # three windows, one round
     assert len(_serve(client, _Windows(), pages=2).window_latencies_ms) == 1  # one call
+
+    class _FailsFirst(_Windows):
+        def generate(self, messages, config, adapter=None):
+            result = super().generate(messages, config, adapter)
+            if self.windows[-1] == [1, 2, 3]:
+                result.finish_reason = "length"                              # cut off: split and retried
+            return result
+
+    assert len(_serve(client, _FailsFirst()).window_latencies_ms) == 2       # a second round for the halves
+
+
+def test_a_call_with_no_adapter_is_labelled_with_the_model_the_eval_loaded():
+    scored = [({}, {}, {"adapter": None, "window_latencies_ms": [120.0]})]
+    assert latency_by_adapter(scored, served_as="personal_lines-v3") == {
+        "personal_lines-v3": {"p95_ms": 120.0, "calls": 1}}
+
+
+def test_memory_is_the_peak_sampled_while_the_eval_runs(monkeypatch):
+    readings = iter([1000.0, 5000.0, 3000.0, 2000.0, 2000.0, 2000.0])
+    monkeypatch.setattr(release_measurements, "peak_gpu_memory_mb", lambda: next(readings, 2000.0))
+    import time
+
+    with release_measurements.GpuMemorySampler(interval_s=0.01) as sampler:
+        time.sleep(0.15)
+    assert sampler.peak_mb == 5000.0
+    monkeypatch.setattr(release_measurements, "peak_gpu_memory_mb", lambda: None)
+    with release_measurements.GpuMemorySampler(interval_s=0.01) as none:
+        pass
+    assert none.peak_mb is None
 
 
 def test_the_golden_eval_keeps_the_adapter_and_each_calls_latency(client, monkeypatch):
@@ -80,7 +111,7 @@ def test_the_golden_eval_keeps_the_adapter_and_each_calls_latency(client, monkey
                          page_texts={p: _page_text(p) for p in range(1, PAGES + 1)})
     model = load_model("base", client, backend_impl=_Windows())
     (_, _, metadata), = golden_eval.evaluate([doc], model, client, "/tmp", modes=("ocr_plus_image",))
-    assert "adapter" in metadata and len(metadata["window_latencies_ms"]) == 3
+    assert "adapter" in metadata and len(metadata["window_latencies_ms"]) == 1   # one round of windows
 
 
 # --------------------------------------------------------------------------
@@ -88,9 +119,11 @@ def test_the_golden_eval_keeps_the_adapter_and_each_calls_latency(client, monkey
 # --------------------------------------------------------------------------
 
 def _candidate(release_id="release-2026.11.1", **over):
+    from tests.test_release_router import BASE
+
     bundle = _bundle(release_id=release_id, scope="personal_lines", doc_types=["policy"],
                      lines=sorted(PERSONAL.lines), created_at="2026-11-01T00:00:00+00:00",
-                     adapter="personal_lines-v3", **over)
+                     adapter="personal_lines-v3", **{"base_model": BASE, **over})
     return bundle
 
 
@@ -135,4 +168,24 @@ def test_the_release_step_writes_the_measurements_and_the_table_or_stops(client)
     narrow["lines"] = ["homeowners"]
     client.write_json(paths.release_bundle("release-2026.10.9"), narrow)
     with pytest.raises(PipelineError, match="is not released: routing check failed"):
+        record_release_measurements(ctx, _candidate())
+
+
+def test_a_release_on_another_base_than_the_promoted_ones_is_stopped(client):
+    from orchestration.pipeline_dag import PipelineError, record_release_measurements
+
+    _promote_personal(client, "release-2026.10.9")
+    ctx = SimpleNamespace(client=client, out_version="v3", scope=PERSONAL, tenant_id=None)
+    with pytest.raises(PipelineError, match="different base models"):
+        record_release_measurements(ctx, _candidate(base_model="Qwen/Qwen3-VL-8B-Instruct@other"))
+
+
+def test_the_check_routes_as_the_endpoint_will_with_its_rollback_pins(client, monkeypatch):
+    from orchestration.pipeline_dag import PipelineError, record_release_measurements
+    from tests.test_release_router import promote
+
+    promote(client, "release-2026.9.1", scope="unified")
+    monkeypatch.setattr("serving.vllm_entrypoint.release_pins", lambda: {"policy": "release-2026.9.1"})
+    ctx = SimpleNamespace(client=client, out_version="v3", scope=PERSONAL, tenant_id=None)
+    with pytest.raises(PipelineError, match="routes to release-2026.9.1"):
         record_release_measurements(ctx, _candidate())

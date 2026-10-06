@@ -218,6 +218,10 @@ class EvalMetrics(_Base):
     table_f1: float | None = None
     lossrun_totals_reconciliation_rate: float | None = None
 
+    #: Field match on the documents of carriers held out of train and val in
+    #: their line (Fideon SPEC_09 amendment item 4). Reported, not gated.
+    held_out_carrier_match: float | None = None
+
     latency_ms_per_doc: float | None = None
 
 

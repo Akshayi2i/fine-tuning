@@ -1459,8 +1459,9 @@ def stage_evaluation_gate(ctx: StageContext) -> StageResult:
         "improved_metrics": result.improved_metrics,
         "waived_gates": sorted(result.waived),
         "override": result.override.as_dict() if result.override else None,
-        # Fideon SPEC_09 §6: production (field match >= 0.92) or interim; None if blocked.
-        "tier": result.tier,
+        # Fideon SPEC_09 §6: production (field match >= 0.92) or interim; None if
+        # blocked, by the gate or by the cascade.
+        "tier": result.tier if not cascade_blocked else None,
     }
     decision["scope"] = ctx.scope.name
     decision["doc_types"] = list(ctx.scope.doc_types)
@@ -1476,6 +1477,8 @@ def stage_evaluation_gate(ctx: StageContext) -> StageResult:
     )
 
     apply_to_manifest(result, foundation, metrics=candidate)
+    if cascade_blocked:
+        foundation.promotion.tier = None
     from registry_utils.write_run_manifest import write_manifest
 
     write_manifest(foundation, ctx.client)
@@ -2073,11 +2076,16 @@ def record_release_measurements(ctx: StageContext, bundle: Any) -> None:
         log.warning("%s: no release measurements in %s; latency and GPU memory are not recorded",
                     bundle.release_id, report_key)
 
-    plan = plan_with_candidate(build_serving_plan(ctx.client, tenant_id=ctx.tenant_id),
-                               json.loads(bundle.model_dump_json()))
+    from serving.release_router import ServingPlanError
+    from serving.vllm_entrypoint import release_pins
+
     try:
+        # With the serving config's rollback pins, as the endpoint will route.
+        plan = plan_with_candidate(
+            build_serving_plan(ctx.client, tenant_id=ctx.tenant_id, pins=release_pins()),
+            json.loads(bundle.model_dump_json()))
         bundle.routing = routing_table(plan, bundle.release_id, bundle.lines)
-    except RoutingCheckError as exc:
+    except (RoutingCheckError, ServingPlanError) as exc:
         raise PipelineError(f"{bundle.release_id} is not released: {exc}") from exc
 
 
@@ -2205,6 +2213,10 @@ def stage_push(ctx: StageContext) -> StageResult:
 
     assert_gate_passed(ctx)
     assert_staged(ctx)
+    # Built - and its routing check run - before anything is pushed: a release the
+    # check stops must not leave weights in Blob and manifests marked published
+    # with no bundle. It records paths only, so it needs nothing pushed yet.
+    bundle, not_promoted = build_release_bundle(ctx)
     pushed: dict[str, str] = {}
 
     # ONE adapter and ONE merged model (arch v2.1 §4.1). v1 fanned this out per
@@ -2280,7 +2292,6 @@ def stage_push(ctx: StageContext) -> StageResult:
 
     # The unit of promotion (arch v2.1 §12.3). Built after the artifacts are
     # pushed, so every path it pins exists in Blob.
-    bundle, not_promoted = build_release_bundle(ctx)
     write_release_bundle(ctx, bundle)
     for reason in not_promoted:
         log.warning("%s is %s, not promoted: %s", bundle.release_id, bundle.status, reason)

@@ -124,8 +124,9 @@ class ExtractionResult:
     #: A Loss Run's claims against its printed totals (calibration.reconciliation);
     #: None for every other type.
     reconciliation: dict[str, Any] | None = None
-    #: Milliseconds of every generation call this document took - one per
-    #: window, or one for a document read in one call (release measurements).
+    #: Milliseconds of every generation round this document took - one per round
+    #: of windows (a round's windows run together), or one for a document read
+    #: in one call (release measurements).
     window_latencies_ms: list[float] = field(default_factory=list)
 
     @property
@@ -432,7 +433,12 @@ def _extract_policy_windows(
         ]
         started = time.perf_counter()
         results = generate_batch(model, requests, adapter=route_.adapter)
-        wall_ms += (time.perf_counter() - started) * 1000
+        round_ms = (time.perf_counter() - started) * 1000
+        wall_ms += round_ms
+        if latencies is not None:
+            # One entry per round: its windows run together, and vLLM gives each
+            # the round's wall time, so one per window would count it n times.
+            latencies.append(round(round_ms, 1))
 
         retry: list[tuple[str, list[int]]] = []
         for (group, pages), result in zip(pending, results, strict=True):
@@ -457,8 +463,6 @@ def _extract_policy_windows(
                     )
                 continue
             windows.append(PolicyWindow(group, pages, extraction, spans, result.latency_ms))
-            if latencies is not None and result.latency_ms is not None:
-                latencies.append(result.latency_ms)
         pending = retry
 
     if not windows:
@@ -663,7 +667,12 @@ def _extract_lossrun_windows(
         ]
         started = time.perf_counter()
         results = generate_batch(model, requests, adapter=route_.adapter)
-        wall_ms += (time.perf_counter() - started) * 1000
+        round_ms = (time.perf_counter() - started) * 1000
+        wall_ms += round_ms
+        if latencies is not None:
+            # One entry per round: its windows run together, and vLLM gives each
+            # the round's wall time, so one per window would count it n times.
+            latencies.append(round(round_ms, 1))
         retry: list[list[int]] = []
         for pages, result in zip(pending, results, strict=True):
             try:
@@ -678,8 +687,6 @@ def _extract_lossrun_windows(
                     failed.append(f"claims:p{pages[0]}")
                 continue
             read.append((pages, extraction, spans))
-            if latencies is not None and result.latency_ms is not None:
-                latencies.append(result.latency_ms)
         pending = retry
 
     if not read:

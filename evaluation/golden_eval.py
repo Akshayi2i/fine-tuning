@@ -251,10 +251,13 @@ def evaluate_version(
             f"the frozen eval set holds no {list(scope.doc_types)} documents, so there is "
             "nothing to gate on"
         )
-    triples = evaluate(
-        documents, model, client, paths.staging_train_images_dir(f"golden-{corpus_version}"),
-        calibrators=calibrators, thresholds=thresholds,
-    )
+    from evaluation.release_measurements import GpuMemorySampler
+
+    with GpuMemorySampler() as memory:
+        triples = evaluate(
+            documents, model, client, paths.staging_train_images_dir(f"golden-{corpus_version}"),
+            calibrators=calibrators, thresholds=thresholds,
+        )
     failed = sum(1 for _e, _g, meta in triples if meta.get("error"))
     report = build_report(version, triples, corpus_version=corpus_version, scope=scope)
     body = report.as_dict()
@@ -269,7 +272,10 @@ def evaluate_version(
     # (recorded, not gated; evaluation.release_measurements).
     from evaluation.release_measurements import measurements
 
-    body["release_measurements"] = measurements(triples)
+    # A call with no adapter here ran on the model this eval loaded: the
+    # release's merged model, named by its run.
+    body["release_measurements"] = measurements(triples, served_as=scope.run_id(version),
+                                                peak_mb=memory.peak_mb)
     client.write_json(paths.eval_report(version, scope=scope.name), body)
     log.info("golden eval of %s: %d document-mode run(s), %d failed", version, len(triples), failed)
     return body

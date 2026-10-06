@@ -112,3 +112,9 @@ def test_no_target_contains_text_sections(schema_with_both):
     label = {**LABEL, "text_sections": [{"heading": "Conditions", "text": "...", "page_ref": [1]}]}
     assert "text_sections" not in window_target(label, "gl", _plan([1, 2, 3]))
     assert "text_sections" in policy_windows.EXCLUDED_FROM_TARGETS
+
+
+def test_an_additional_field_whose_envelope_states_nothing_is_not_taught():
+    empty = [{"label": "Roof age", "value": {"raw": None, "parsed": None, "page_ref": [2]}, "page_ref": [2]}]
+    assert _additional_within(empty, "additional_fields", {1, 2, 3}, _plan([1, 2, 3]), None,
+                              common_model=True) == []

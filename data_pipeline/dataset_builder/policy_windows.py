@@ -525,7 +525,10 @@ def _additional_within(
         return []
     kept = []
     for index, entry in enumerate(node):
-        if not isinstance(entry, dict) or entry.get("value") in (None, "", [], {}):
+        value = entry.get("value") if isinstance(entry, dict) else None
+        if value in (None, "", [], {}) or (
+                is_field_value(value) and value.get("raw") is None and value.get("parsed") is None):
+            # Nothing stated: an empty SPEC_21 envelope is no value either.
             continue
         where = f"{path}[{index}]"
         placed = (_entry_on_pages(entry, where, pages, plan, report) if common_model

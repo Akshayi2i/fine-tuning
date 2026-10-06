@@ -16,7 +16,7 @@ from __future__ import annotations
 from typing import Any
 
 from common.constants import ACTIVE_DOC_TYPES
-from serving.release_router import ServingPlan, UnservedDocType, _as_release, _best
+from serving.release_router import ServingPlan, UnservedDocType, _as_release, _best, assert_one_base_model
 
 
 class RoutingCheckError(RuntimeError):
@@ -24,7 +24,12 @@ class RoutingCheckError(RuntimeError):
 
 
 def plan_with_candidate(plan: ServingPlan, bundle: dict[str, Any], fmt: str = "bf16") -> ServingPlan:
-    """``plan`` as it stands once ``bundle`` is promoted, by the same precedence rule."""
+    """``plan`` as it stands once ``bundle`` is promoted, by the same precedence rule.
+
+    Whatever the bundle's own status: the table says where each line would go
+    if this release is served, which is the question a gated release raises too.
+    A type pinned in ``plan`` stays pinned.
+    """
     candidate = _as_release(bundle, fmt)
     grown = ServingPlan(releases={**plan.releases, candidate.release_id: candidate},
                         pinned=set(plan.pinned))
@@ -35,6 +40,8 @@ def plan_with_candidate(plan: ServingPlan, bundle: dict[str, Any], fmt: str = "b
         covering = [r for r in grown.releases.values() if doc_type in r.covers and not r.lines]
         if covering:
             grown.by_doc_type[doc_type] = _best(covering)
+    # The endpoint refuses a plan whose releases sit on different bases; so does the check.
+    assert_one_base_model(grown)
     return grown
 
 
