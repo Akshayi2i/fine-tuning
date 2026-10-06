@@ -45,8 +45,17 @@ DATE = re.compile(r"^\d{1,2}/\d{1,2}/\d{2,4}$|^\d{4}-\d{2}-\d{2}$")
 NUMERIC = re.compile(r"^-?\$?\(?-?[\d,]+(\.\d+)?\)?%?$")
 
 
-def schema_fields() -> set[str]:
-    """Every canonical policy field, as a path with list markers removed."""
+def schema_fields(lines: tuple[str, ...] = LINES) -> set[str]:
+    """Every canonical policy field of ``lines``, as a path with list markers removed.
+
+    A value is one field, never its ``raw``/``parsed``/``page_ref``: a
+    ``FieldValue``, and on a common-model line each typed value too
+    (``MoneyValue``, ``DateValue``, ...). Those are the money and date fields
+    whose type matters most, so missing them leaves exactly those fields with no
+    row to review. A row written as variants (a common-model ``Limit`` or
+    ``Deductible``) holds the fields of every variant, as
+    :func:`common.schemas.row_keys` reads it.
+    """
     from common import schemas
 
     def walk(node, defs, path, out, depth=0):
@@ -54,18 +63,21 @@ def schema_fields() -> set[str]:
             return
         if "$ref" in node:
             name = node["$ref"].rsplit("/", 1)[-1]
-            if name == "FieldValue":
+            node = defs.get(name, {})
+            # A value type has raw, parsed and page_ref (common.model_view).
+            if name == "FieldValue" or {"raw", "parsed", "page_ref"} <= set(node.get("properties") or {}):
                 out.add(path)
                 return
-            node = defs.get(name, {})
         if node.get("type") == "array":
             walk(node.get("items", {}), defs, path, out, depth + 1)
             return
         for key, value in (node.get("properties") or {}).items():
             walk(value, defs, f"{path}.{key}" if path else key, out, depth + 1)
+        for variant in [*(node.get("anyOf") or []), *(node.get("oneOf") or [])]:
+            walk(variant, defs, path, out, depth + 1)
 
     out: set[str] = set()
-    for line in LINES:
+    for line in lines:
         schema = schemas.resolved_schema("policy", None, line, None)
         walk(schema, schema.get("$defs", {}), "", out)
     return out

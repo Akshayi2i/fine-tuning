@@ -14,7 +14,9 @@ Two sources, doing different jobs:
 
 * **The canonical schemas** (``configs/canonical schema/LOB Schema/``) carry
   ``fideon:aliases`` — the labels forms print for each field. They say what to
-  look for.
+  look for. A SPEC_21 line overlay is read through the bundle it loads as
+  (:func:`walk_bundle`): its fields are the common model's, and so are most of
+  its aliases, with the overlay's own listed by field path.
 * **The original documents** (``training data/original data/``) say which of
   those labels real pages actually print, and how often. An alias with no
   document evidence is either a phrasing this book of business does not use, or
@@ -48,7 +50,7 @@ import argparse
 import json
 import re
 import sys
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 from pathlib import Path
 from typing import Any
 
@@ -191,18 +193,130 @@ def unify(field_path: str, line_block: str | None) -> str:
     return field_path
 
 
+def common_model_bundle(line: str) -> dict[str, Any] | None:
+    """The bundle a SPEC_21 line overlay loads as, or ``None`` for any other file.
+
+    Only a file the loader selects for its own line counts. ``classic_auto`` is
+    read as personal auto, so the common-model switch answers for personal
+    auto's overlay, while ``classic_auto.json`` is a self-contained file of its
+    own; ``_common`` and ``_fallback`` are no line's file. All three are read as
+    they are.
+    """
+    from common import schemas
+
+    if schemas.schema_key("policy", None, line) != f"policy:{line}":
+        return None
+    if not schemas.is_common_model("policy", None, line):
+        return None
+    return schemas.load_schema("policy", None, line)
+
+
+def walk_bundle(bundle: dict[str, Any]) -> list[tuple[str, str, list[str]]]:
+    """:func:`walk` for a SPEC_21 line, read through the bundle its overlay loads as.
+
+    Each block of an overlay is a ``$ref`` into the common model, so :func:`walk`
+    would record every block as a leaf with no aliases and reach none of the
+    line's fields. Here each ``#/$defs/...`` reference is followed into the
+    definition it names; a value (``FieldValue`` or a typed one, ``MoneyValue``,
+    ``DateValue``...) is one leaf; and the ``fideon:`` properties (provenance)
+    are not fields.
+
+    SPEC_21 keeps aliases in two places, and both are read: on the common
+    model's fields and blocks, and in the overlay's ``fideon:aliases``, keyed by
+    field path. An overlay alias for a path the line does not declare is refused
+    rather than dropped, since nothing else would show it was lost.
+    """
+    defs = bundle.get("$defs") or {}
+    rows = [
+        row
+        for key, node in (bundle.get("properties") or {}).items()
+        if not key.startswith("fideon:")
+        for row in _walk_refs(node, defs, key, frozenset())
+    ]
+    line_aliases: dict[str, list[str]] = bundle.get("fideon:aliases") or {}
+    if unknown := sorted(set(line_aliases) - {field_path for field_path, _, _ in rows}):
+        raise ValueError(
+            f"{bundle.get('fideon:lob')}: fideon:aliases names fields the schema does not "
+            f"declare: {unknown}"
+        )
+    return [
+        (field_path, kind, [*aliases, *line_aliases.get(field_path, [])])
+        for field_path, kind, aliases in rows
+    ]
+
+
+def _walk_refs(
+    node: Any, defs: dict[str, Any], path: str, open_defs: frozenset[str]
+) -> Iterator[tuple[str, str, list[str]]]:
+    """:func:`walk` for one field of a bundle, following its local references."""
+    if not isinstance(node, dict):
+        return
+    aliases = list(node.get("fideon:aliases") or [])
+
+    ref = node.get("$ref")
+    if isinstance(ref, str) and ref.startswith("#/$defs/"):
+        name = ref.split("/")[2]
+        target = defs.get(name)
+        # A value is one field, never its raw/parsed/page_ref. A definition
+        # already open on this path contains itself: recorded, not entered again.
+        if not isinstance(target, dict) or _is_value(target) or name in open_defs:
+            yield path, "leaf", aliases
+            return
+        # A block's aliases sit on its definition; a field's beside its reference.
+        merged = {**target, **{k: v for k, v in node.items() if k != "$ref"},
+                  "fideon:aliases": [*aliases, *(target.get("fideon:aliases") or [])]}
+        yield from _walk_refs(merged, defs, path, open_defs | {name})
+        return
+    if node.get("type") == "array":
+        items = node.get("items")
+        if isinstance(items, dict):
+            yield path, "table", aliases
+            yield from _walk_refs(items, defs, f"{path}[]", open_defs)
+        return
+
+    properties = {
+        key: value for key, value in (node.get("properties") or {}).items()
+        if not key.startswith("fideon:")
+    }
+    yield path, "section" if properties else "leaf", aliases
+    for key, value in properties.items():
+        yield from _walk_refs(value, defs, f"{path}.{key}", open_defs)
+
+
+def _is_value(definition: dict[str, Any]) -> bool:
+    """A value has ``raw``, ``parsed`` and ``page_ref``: ``FieldValue`` and every
+    typed value alike, the test :mod:`common.model_view` reads them by."""
+    return {"raw", "parsed", "page_ref"} <= set(definition.get("properties") or {})
+
+
 def collect_schemas() -> tuple[dict[str, dict[str, Any]], dict[str, str]]:
-    """Every canonical field, keyed by the field itself rather than by location."""
+    """Every canonical field, keyed by the field itself rather than by location.
+
+    A SPEC_21 line overlay is read through its bundle (:func:`walk_bundle`) and
+    versioned as one; every other file is read as it is (:func:`walk`).
+    """
+    from common.schemas import BUNDLE_VERSION_KEY
+
     fields: dict[str, dict[str, Any]] = {}
     versions: dict[str, str] = {}
 
     for path in sorted(CANONICAL.glob("*.json")):
-        schema = json.loads(path.read_text(encoding="utf-8"))
-        source = schema.get("fideon:source") or {}
-        versions[path.stem] = str(source.get("version", "unknown"))
-        line_block = source.get("line_specific_block")
+        bundle = common_model_bundle(path.stem)
+        found: Iterable[tuple[str, str, list[str]]]
+        if bundle is not None:
+            # The overlay's version and the common model's together. An overlay
+            # has no per-line block to strip: its fields are the common model's.
+            versions[path.stem] = str(bundle.get(BUNDLE_VERSION_KEY, "unknown"))
+            line_block = None
+            found = walk_bundle(bundle)
+        else:
+            schema = json.loads(path.read_text(encoding="utf-8"))
+            source = schema.get("fideon:source") or {}
+            versions[path.stem] = str(source.get("version", "unknown"))
+            line_block = source.get("line_specific_block")
+            found = walk(schema)
 
-        for field_path, kind, aliases in walk(schema):
+        for field_path, kind, aliases in found:
             unified = unify(field_path, line_block)
             name = field_name(unified)
             if not name:
