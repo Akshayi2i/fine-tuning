@@ -170,13 +170,76 @@ def drifted(root: Path = PROMPTS_DIR) -> list[str]:
     return problems
 
 
+#: Fingerprints of every selector that is not a common-model line, frozen when
+#: the SPEC_21 schemas arrived. The common-model work changes code every one of
+#: those selectors runs through - the registry, the model view, the templates,
+#: the section map - and none of it may change what they render.
+FINGERPRINTS_PATH = (
+    Path(__file__).resolve().parent.parent / "tests" / "fixtures" / "old_style_prompt_fingerprints.json"
+)
+
+
+def old_style_fingerprints() -> dict[str, dict[str, str]]:
+    """SHA-256 of the prompt, the decoding schema and the required fields, per selector.
+
+    Every registered selector except the common-model lines, over the whole
+    schema and every window slice, in both reference modes. The snapshots in
+    ``testing/prompts`` cover only the personal-lines family and the whole
+    schema; this covers the rest, including the windowed prompts serving sends.
+    """
+    import hashlib
+    import json
+
+    from common.schema_sections import groups_for
+    from common.schemas import is_common_model, required_fields, resolved_schema, schema_selectors
+
+    def sha(text: str) -> str:
+        return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+    out: dict[str, dict[str, str]] = {}
+    for doc_type, form, lob in schema_selectors():
+        if doc_type == "policy" and is_common_model(doc_type, form, lob):
+            continue
+        slices: list[str | None] = [None]
+        if doc_type == "policy":
+            slices += list(groups_for(lob))
+        for sections in slices:
+            entry = {
+                "schema": sha(json.dumps(
+                    resolved_schema(doc_type, form, lob, sections), sort_keys=True, ensure_ascii=False
+                )),
+                "required": sha(json.dumps(required_fields(doc_type, form, lob, sections))),
+            }
+            for mode in REFERENCE_MODES:
+                entry[f"prompt.{mode}"] = sha(
+                    render_system_prompt(doc_type, mode, form, lob, sections)
+                )
+            out[f"{stem(doc_type, form, lob)}#{sections or 'whole'}"] = entry
+    return out
+
+
+def write_fingerprints(path: Path = FINGERPRINTS_PATH) -> Path:
+    import json
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(old_style_fingerprints(), indent=1, sort_keys=True) + "\n", encoding="utf-8")
+    return path
+
+
 def main(argv: Iterable[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Render the reference prompt files")
     parser.add_argument("--write", action="store_true", help="regenerate the files")
+    parser.add_argument(
+        "--write-fingerprints", action="store_true",
+        help="re-freeze the old-style fingerprints (only for a deliberate change to those lines)",
+    )
     parser.add_argument("--root", type=Path, default=PROMPTS_DIR)
     args = parser.parse_args(list(argv) if argv is not None else None)
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
+    if args.write_fingerprints:
+        print(write_fingerprints())
+        return 0
     if args.write:
         for path in write_all(args.root):
             print(path)

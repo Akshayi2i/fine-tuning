@@ -952,9 +952,11 @@ def test_how_many_pages_a_call_holds_depends_on_the_line():
     leaves less room for pages. One constant cannot express that."""
     from data_pipeline.dataset_builder.expand_tasks import pages_per_extraction_call
 
-    ocean = pages_per_extraction_call("policy", None, "ocean_marine")
-    dwelling = pages_per_extraction_call("policy", None, "dwelling_fire")
-    assert 1 <= ocean < dwelling, f"ocean_marine {ocean} should fit fewer than dwelling_fire {dwelling}"
+    larger = pages_per_extraction_call("policy", None, "management_liability")
+    smaller = pages_per_extraction_call("policy", None, "gl")
+    assert 1 <= larger < smaller, (
+        f"management_liability {larger} should fit fewer than gl {smaller}"
+    )
 
 
 def test_a_long_policy_is_thumbnailed_in_chunks():

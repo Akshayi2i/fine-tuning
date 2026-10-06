@@ -225,7 +225,7 @@ def test_a_matched_rows_lost_value_is_a_merge_loss_not_an_unmatched_row(monkeypa
         return merged
 
     monkeypatch.setattr(policy_merge, "merge_policy_windows", drop_year)
-    result = windowing_ceiling.oracle("d", label, "personal_auto", 1, None)
+    result = windowing_ceiling.oracle("d", label, "commercial_auto", 1, None)
     assert dict(result.lost) == {"merge": 1}
 
 

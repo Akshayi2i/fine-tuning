@@ -138,7 +138,7 @@ def _plan(pages, index):
 
 def test_a_coverage_table_on_the_page_after_its_vin_is_taught():
     report = TargetReport()
-    second = window_target(VEHICLE, "personal_auto", _plan([7, 8, 9], 1), report)
+    second = window_target(VEHICLE, "commercial_auto", _plan([7, 8, 9], 1), report)
     (vehicle,) = second["auto"]["vehicles"]
     assert [c["coverage_name"]["raw"] for c in vehicle["coverages"]] == ["Collision", "Comprehensive"]
     assert "vin" not in vehicle and not report.orphaned
@@ -149,13 +149,13 @@ def test_a_fragment_with_nothing_identified_is_still_left_out():
                                     "coverages": [{"coverage_name": _env("Collision", 6),
                                                    "premium": _env(1.0, 6, 7, 8)}]}]}}
     report = TargetReport()
-    assert not window_target(label, "personal_auto", _plan([7, 8, 9], 1), report).get("auto", {}).get("vehicles")
+    assert not window_target(label, "commercial_auto", _plan([7, 8, 9], 1), report).get("auto", {}).get("vehicles")
     assert report.orphaned
 
 
 def test_the_merge_joins_the_fragment_to_the_only_vehicle_and_says_so():
-    first = window_target(VEHICLE, "personal_auto", _plan([4, 5, 6], 0))
-    second = window_target(VEHICLE, "personal_auto", _plan([7, 8, 9], 1))
+    first = window_target(VEHICLE, "commercial_auto", _plan([4, 5, 6], 0))
+    second = window_target(VEHICLE, "commercial_auto", _plan([7, 8, 9], 1))
     merged = merge_policy_windows([PolicyWindow("lineblk", [4, 5, 6], first),
                                    PolicyWindow("lineblk", [7, 8, 9], second)])
     (vehicle,) = merged.extraction["auto"]["vehicles"]
@@ -183,11 +183,11 @@ def test_a_single_window_group_keeps_a_value_that_records_no_page():
     label = {"named_insured": {"primary_name": {"raw": "Jane Rivera", "parsed": "Jane Rivera", "page_ref": []}},
              "policy": {}, "carrier": {}}
     decl = PolicyWindowPlan("decl", 0, (1, 2, 3), single=True)
-    sections = multi_window_sections("homeowners", [decl])
+    sections = multi_window_sections("gl", [decl])
     assert "named_insured" not in sections
     placed = with_inferred_pages(label, pages, sections=sections)
     assert placed is label
-    assert window_target(placed, "homeowners", decl)["named_insured"]["primary_name"]["raw"] == "Jane Rivera"
+    assert window_target(placed, "gl", decl)["named_insured"]["primary_name"]["raw"] == "Jane Rivera"
 
 
 def test_a_multi_window_group_still_gets_its_pages_inferred():
@@ -195,7 +195,7 @@ def test_a_multi_window_group_still_gets_its_pages_inferred():
     label = {"auto": {"vehicles": [{"vin": {"raw": "1HGCM82633A004352", "parsed": "1HGCM82633A004352",
                                             "page_ref": []}}]}}
     pages = ["cover", "schedule", "vehicle 1HGCM82633A004352 listed", "end"]
-    placed = with_inferred_pages(label, pages, sections=multi_window_sections("personal_auto", plans))
+    placed = with_inferred_pages(label, pages, sections=multi_window_sections("commercial_auto", plans))
     assert placed["auto"]["vehicles"][0]["vin"]["page_ref"] == [3]
 
 
@@ -238,7 +238,7 @@ def test_the_window_notes_report_orphaned_fragments():
              "auto": {"vehicles": [{"vin": _env("1HGCM82633A004352", 1), "make": _env("Honda", 1, 9)}]}}
     document = SourceDocument(source_id="s1", doc_type="policy", golden_label=label,
                               ocr_pages=[f"page {i}" for i in range(1, 13)],
-                              image_paths=[f"p{i}.png" for i in range(1, 13)], lob="personal_auto")
+                              image_paths=[f"p{i}.png" for i in range(1, 13)], lob="commercial_auto")
     details: list[str] = []
     _policy_window_rows(document, "train", "image_only", None, details)
     assert any("orphaned" in d for d in details), json.dumps(details)[:300]

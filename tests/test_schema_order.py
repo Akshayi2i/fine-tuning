@@ -47,8 +47,8 @@ def test_a_canonical_training_target_is_in_schema_order():
         "forms_and_endorsements": [{"form_title": _env("Homeowners 3"), "form_number": _env("HO 00 03")}],
         "policy": {"policy_number": _env("HO-1")},
     }
-    target = training_target(label, "policy", None, "homeowners")
-    schema_order = list(resolved_schema("policy", None, "homeowners")["properties"])
+    target = training_target(label, "policy", None, "gl")
+    schema_order = list(resolved_schema("policy", None, "gl")["properties"])
     assert list(target) == sorted(target, key=schema_order.index)
     assert list(target["forms_and_endorsements"][0]) == ["form_number", "form_title"]
     assert list(target["forms_and_endorsements"][0]["form_number"]) == ["raw", "parsed", "page_ref"]
@@ -59,7 +59,7 @@ def test_a_window_target_is_in_its_slices_order():
 
     label = {"forms_and_endorsements": [
         {"form_title": _env("Homeowners 3", 2), "form_number": _env("HO 00 03", 2)}]}
-    for plan in plan_windows("homeowners", [1, 2, 3]):
-        target = window_target(label, "homeowners", plan)
+    for plan in plan_windows("gl", [1, 2, 3]):
+        target = window_target(label, "gl", plan)
         for row in target.get("forms_and_endorsements", []):
             assert list(row) == ["form_number", "form_title"]

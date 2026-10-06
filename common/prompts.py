@@ -273,14 +273,19 @@ def prompt_input_files() -> list[Path]:
     cover the top-level templates alone, so an edit to ``policy.jinja``, a
     canonical schema or a section group changed every served prompt and left
     the hash — the one thing meant to notice — exactly as it was.
+
+    The line overlays compose the common model, and their coverage-code files
+    give each code the meaning the prompt shows, so both are prompt input too.
     """
     from common.config import CONFIG_DIR
-    from common.schemas import CANONICAL_DIR, SCHEMA_DIR
+    from common.schemas import CANONICAL_DIR, COMMON_MODEL, SCHEMA_DIR
 
     return (
         sorted(PROMPT_DIR.rglob("*.jinja"))
         + sorted(SCHEMA_DIR.glob("*.json"))
         + sorted(CANONICAL_DIR.glob("*.json"))
+        + [COMMON_MODEL]
+        + sorted(CANONICAL_DIR.glob("*.coverage_codes.yaml"))
         + [CONFIG_DIR / "schema_sections.yaml"]
     )
 

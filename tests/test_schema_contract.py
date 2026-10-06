@@ -583,8 +583,8 @@ def test_an_lob_selects_a_schema_only_when_one_is_registered():
     # enum value is translated rather than looked up directly. Without that a
     # Workers' Comp policy finds no `workers_comp.json` and silently falls back.
     assert schemas.schema_key("policy", None, "workers_comp") == "policy:wc"
-    # Its file carries the line's own name, so it needs no translation.
-    assert schemas.schema_key("policy", None, "commercial_auto") == "policy:commercial_auto"
+    # The client's file for commercial auto is auto.json (SPEC_21 delivery).
+    assert schemas.schema_key("policy", None, "commercial_auto") == "policy:auto"
 
 
 def test_a_package_policy_uses_the_generic_schema_rather_than_one_of_its_lines():
@@ -686,15 +686,18 @@ def test_no_fideon_key_survives_into_the_schema_the_model_sees():
 
 
 def test_a_canonical_schema_version_comes_from_fideon_source():
-    """These files carry no top-level `version`; theirs is under `fideon:source`.
+    """The self-contained files carry no top-level `version`; theirs is under
+    `fideon:source`. A common-model overlay's is the pair: its own and the common
+    model's, written onto the bundle.
 
     `schema_version` is called for every registered schema when a corpus manifest
     is written, so reading the wrong path fails the whole build.
     """
     from common.schemas import schema_version
 
-    assert schema_version("policy", None, ["homeowners"]) == "1.4.0"
-    assert schema_version("policy", None, ["ocean_marine"]) == "3.0.0"
+    assert schema_version("policy", None, ["gl"]) == "1.5.0"
+    assert schema_version("policy", None, ["management_liability"]) == "3.1.0"
+    assert schema_version("policy", None, ["homeowners"]) == "1.0.0+common.1.0.0"
     assert schema_version("policy") == schema_version("policy", None, ["commercial_auto"])
 
 
@@ -714,8 +717,8 @@ def test_a_canonical_schema_validates_the_fieldvalue_envelope():
         "named_insured": {"primary_name": fv},
         "policy": {"policy_number": fv},
     }
-    assert is_valid(whole, "policy", None, ["homeowners"])
-    assert required_fields("policy", None, ["homeowners"]) == [
+    assert is_valid(whole, "policy", None, ["gl"])
+    assert required_fields("policy", None, ["gl"]) == [
         "carrier", "named_insured", "policy",
     ]
 
@@ -725,7 +728,7 @@ def test_a_canonical_schema_validates_the_fieldvalue_envelope():
     from common.schemas import iter_validation_errors
 
     bare = {**whole, "carrier": {"company_name": {"raw": "X"}}}
-    errors = list(iter_validation_errors(bare, "policy", None, ["homeowners"]))
+    errors = list(iter_validation_errors(bare, "policy", None, ["gl"]))
     assert any("'confidence' is a required property" in e for e in errors), (
         f"validation did not enforce the FieldValue envelope; got: {errors[:3]}"
     )
@@ -753,8 +756,9 @@ def test_the_lob_reaches_the_rendered_prompt():
     generic = render_system_prompt("policy", "ocr_plus_image")
 
     assert home != auto != generic
-    assert "scheduled_personal_property" in home
-    assert "scheduled_personal_property" not in auto
+    # Each line's own common-model blocks: homeowners schedules items, auto vehicles.
+    assert "scheduled_items" in home and '"vehicles"' not in home
+    assert '"vehicles"' in auto and "scheduled_items" not in auto
     # A package policy names more than one line, so it still gets the generic one.
     assert render_system_prompt(
         "policy", "ocr_plus_image", lob=["homeowners", "personal_auto"]
@@ -811,9 +815,9 @@ def test_the_corpus_drift_check_reads_the_key_the_manifest_writes():
     from inference_core.input_builder import InputBuilderError, build_messages
 
     built = build_messages("policy", ["p1.png"], ["text"], "ocr_plus_image", lob="homeowners")
-    assert built.schema_version == "1.4.0"
+    assert built.schema_version == "1.0.0+common.1.0.0"
 
-    built.assert_matches_corpus({"schema_versions": {"policy:homeowners": "1.4.0"}})
+    built.assert_matches_corpus({"schema_versions": {"policy:homeowners": "1.0.0+common.1.0.0"}})
     with pytest.raises(InputBuilderError, match="drift"):
         built.assert_matches_corpus({"schema_versions": {"policy:homeowners": "0.0.1"}})
     # A pin for a different line says nothing about this row.

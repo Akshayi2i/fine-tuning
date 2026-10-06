@@ -153,7 +153,7 @@ def test_build_report_emits_the_rate():
     from evaluation.run_eval import build_report
 
     got = {"policy": {"policy_number": _env("HO-123"), "account_id": _env("A-999")}}
-    meta = {"source_id": "p1", "doc_type": "policy", "lob": ["personal_auto"],
+    meta = {"source_id": "p1", "doc_type": "policy", "lob": ["gl"],
             "modality_mode": "ocr_plus_image"}
     [full] = build_report("t", [(GOLD, got, meta)]).full_set()
     assert full.metrics["auto_accept_error_rate"] == 0.5

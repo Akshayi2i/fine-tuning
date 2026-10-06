@@ -41,7 +41,7 @@ def test_each_model_value_gets_a_result_against_gold():
     base = {"policy": {"policy_number": _env("PA-1"), "program_name": _env("Preferred")}}   # 1 right, 1 invented
     adapter = {"policy": {"policy_number": _env("PA-1"), "effective_date": _env("01/02/2026")},
                "auto": {"vehicles": [{"vin": _env("1HGCM82633A004352"), "year": _env(2019)}]}}
-    result = compare(GOLD, base, adapter, lob="personal_auto")
+    result = compare(GOLD, base, adapter, lob="commercial_auto")   # self-contained: its auto block
     rows = {row.path: row for row in result.rows}
     assert rows["policy.policy_number"].base_result == "correct"
     assert rows["policy.effective_date"].base_result == "missed"

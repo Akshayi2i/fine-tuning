@@ -36,12 +36,28 @@ from common.constants import ACORD_FORMS, ACTIVE_DOC_TYPES
 
 SCHEMA_DIR = Path(__file__).resolve().parent.parent / "schemas"
 
-#: The client's canonical models, one file per line of business. These are
-#: **theirs**: read-only here, never written, never edited. Everything this repo
-#: adds to them — field descriptions, section maps — lives in a separate file.
-CANONICAL_DIR = (
-    Path(__file__).resolve().parent.parent / "configs" / "canonical schema" / "LOB Schema"
-)
+#: The client's canonical models. These are **theirs**: read-only here, never
+#: written, never edited. Everything this repo adds to them — field descriptions,
+#: section maps — lives in a separate file.
+CANONICAL_ROOT = Path(__file__).resolve().parent.parent / "configs" / "canonical schema"
+
+#: One file per line of business.
+CANONICAL_DIR = CANONICAL_ROOT / "LOB Schema"
+
+#: The common model the SPEC_21 line overlays compose (SPEC_21 §4.2): one
+#: structure for every line, which an overlay ``$ref``s block by block. The
+#: overlays name it ``../common/common_model.json``, the main repository's
+#: layout; here it sits in ``common schema``. It is therefore found by FILE NAME
+#: (:func:`_bundle`), so the client's files are never edited to match this repo.
+COMMON_MODEL = CANONICAL_ROOT / "common schema" / "common_model.json"
+
+#: Carried by an overlay and by the common model; equal values mean the overlay
+#: was written against the common model that is loaded.
+COMMON_MODEL_VERSION_KEY = "fideon:common_model_version"
+
+#: Written onto a bundle: the overlay's version and the common model's together,
+#: so a change to either moves the version a corpus manifest records.
+BUNDLE_VERSION_KEY = "fideon:bundle_version"
 
 #: The canonical file a policy uses when no single line selects one: the line is
 #: unknown, the policy covers several lines, or the line has no file of its own.
@@ -49,9 +65,14 @@ CANONICAL_DIR = (
 #: or no line-specific schema exists"), so this is their rule, not ours.
 CANONICAL_FALLBACK = "_fallback"
 
-#: Merged into every line file by the client's registry and never loaded for
-#: extraction on its own (Fideon SPEC_00 §5.2). Every line file already carries it.
-_CANONICAL_NOT_REGISTERED = ("_common",)
+#: Files in ``CANONICAL_DIR`` that are not a line's schema.
+#:
+#: * ``_common`` is merged into every line file by the client's registry and
+#:   never loaded for extraction on its own (Fideon SPEC_00 §5.2).
+#: * ``classic_auto`` is personal auto (``common.lob.MERGED_LINES``): one line,
+#:   one schema. Registered, it would be a line of its own that no policy can
+#:   select, counted wherever every line is listed.
+_CANONICAL_NOT_REGISTERED = ("_common", "classic_auto")
 
 #: LOB enum values whose canonical file is named differently. The enum is ours
 #: (``schemas/lob.enum.json``); the file names are the client's. Without this a
@@ -59,6 +80,7 @@ _CANONICAL_NOT_REGISTERED = ("_common",)
 LOB_SCHEMA_ALIASES: dict[str, str] = {
     "workers_comp": "wc",
     "general_liability": "gl",
+    "commercial_auto": "auto",
 }
 
 #: Shared definition files, loaded into the registry so ``$ref`` can reach them.
@@ -120,12 +142,19 @@ class SchemaSource:
         field. Those must never reach a prompt (master §1.4): a model handed a
         lookup table never learns the semantics, and the first unseen label
         produces a miss with no signal that anything went wrong.
+
+    ``common_model``
+        A SPEC_21 line overlay: a thin file whose blocks ``$ref`` the common
+        model in another file. Loaded as a bundle (:func:`_bundle`), so every
+        reader still gets one self-contained schema. The self-contained line
+        files carry no common-model version and are read as they are.
     """
 
     path: Path
     inline_refs: bool
     version_at: tuple[str, ...]
     strip_prefixes: tuple[str, ...]
+    common_model: bool = False
 
 
 @lru_cache(maxsize=1)
@@ -170,16 +199,50 @@ def _sources() -> dict[str, SchemaSource]:
         if path.stem in (CANONICAL_FALLBACK, *_CANONICAL_NOT_REGISTERED):
             continue
         sources[f"policy:{path.stem}"] = _canonical_source(path)
+    _check_overlay_families(
+        [key.split(":", 1)[1] for key, source in sources.items() if source.common_model]
+    )
     return sources
 
 
 def _canonical_source(path: Path) -> SchemaSource:
+    common_model = COMMON_MODEL_VERSION_KEY in _load_json(path)
     return SchemaSource(
         path=path,
         inline_refs=False,
-        version_at=("fideon:source", "version"),
+        version_at=(BUNDLE_VERSION_KEY,) if common_model else ("fideon:source", "version"),
         strip_prefixes=("fideon:",),
+        common_model=common_model,
     )
+
+
+def _check_overlay_families(lines: list[str]) -> None:
+    """Refuse a layout family whose lines are only partly on the common model.
+
+    One family is one adapter, trained on one corpus with one prompt shape. A
+    family with some lines on overlays and some on self-contained files would
+    train that adapter on two output shapes at once, and nothing downstream
+    would say so.
+    """
+    from common.config import lob_to_layout_family, lobs_in_family
+
+    by_family: dict[str, set[str]] = {}
+    for line in lines:
+        family = lob_to_layout_family().get(line)
+        if family is None:
+            raise SchemaError(
+                f"{line}.json composes the common model but {line!r} is in no layout family "
+                "(configs/layout_families.yaml), so no adapter could be trained on it"
+            )
+        by_family.setdefault(family, set()).add(line)
+    for family, migrated in sorted(by_family.items()):
+        missing = sorted(set(lobs_in_family(family)) - migrated)
+        if missing:
+            raise SchemaError(
+                f"layout family {family!r} is only partly on the common model: "
+                f"{', '.join(missing)} still use self-contained files. One adapter cannot "
+                "train on two output shapes; migrate the whole family together."
+            )
 
 
 def is_canonical(
@@ -195,11 +258,142 @@ def is_canonical(
     return not _sources()[base_key(schema_key(doc_type, acord_form, lob))].inline_refs
 
 
+def is_common_model(
+    doc_type: str, acord_form: str | None = None, lob: str | list[str] | None = None
+) -> bool:
+    """Whether this selection's schema is a SPEC_21 overlay on the common model.
+
+    The one switch every schema-2 difference keys off — the model view, the
+    prompt text, the section map, the target builder and the merge — so a line
+    is read one way everywhere or not at all.
+    """
+    return _sources()[base_key(schema_key(doc_type, acord_form, lob))].common_model
+
+
 def _load_json(path: Path) -> dict[str, Any]:
     if not path.exists():
         raise SchemaError(f"schema file not found: {path}")
     with path.open(encoding="utf-8") as fh:
         return json.load(fh)
+
+
+@lru_cache(maxsize=1)
+def _common_model() -> dict[str, Any]:
+    return _load_json(COMMON_MODEL)
+
+
+def _bundle(overlay: dict[str, Any], path: Path) -> dict[str, Any]:
+    """A SPEC_21 overlay as one self-contained schema.
+
+    Each ``$ref`` into the common model is rewritten to ``#/$defs/<name>`` and the
+    common definitions it reaches are copied in, so the validator, the section
+    slicer, ``with_all_keys`` and the rest read a bundle exactly as they read a
+    self-contained line file. Done once, here, rather than taught to each reader:
+    a reader left out would see a block as a bare pointer and silently skip it.
+
+    Refused, never guessed: a reference into any other file, a pointer outside
+    ``$defs``, an overlay written against a different common-model version, or a
+    coverage-code list the line's code file does not name. Each would ship a
+    schema that differs from the one the overlay's author reviewed.
+
+    Also attached, for the model view to read before ``fideon:`` keys are
+    stripped: the version of the pair, and each coverage code's meaning.
+    """
+    import copy
+
+    common = _common_model()
+    wanted, loaded = overlay.get(COMMON_MODEL_VERSION_KEY), common.get(COMMON_MODEL_VERSION_KEY)
+    if wanted != loaded:
+        raise SchemaError(
+            f"{path.name} composes common model {wanted}, but {COMMON_MODEL} is {loaded}"
+        )
+    definitions = common.get("$defs") or {}
+    needed: set[str] = set()
+
+    def localise(node: Any) -> Any:
+        if isinstance(node, list):
+            return [localise(item) for item in node]
+        if not isinstance(node, dict):
+            return node
+        out = {k: localise(v) for k, v in node.items() if k != "$ref"}
+        if "$ref" in node:
+            target, _, pointer = str(node["$ref"]).partition("#")
+            if target:
+                if Path(target).name != COMMON_MODEL.name or not pointer.startswith("/$defs/"):
+                    raise SchemaError(
+                        f"{path.name}: $ref {node['$ref']!r} points outside the common "
+                        "model's definitions"
+                    )
+                needed.add(pointer.split("/")[2])
+            out["$ref"] = f"#{pointer}"
+        return out
+
+    bundled = localise(overlay)
+    pending = sorted(needed)
+    while pending:
+        name = pending.pop()
+        if name not in definitions:
+            raise SchemaError(f"{path.name}: the common model defines no {name!r}")
+        for reached in _local_ref_names(definitions[name]):
+            if reached not in needed:
+                needed.add(reached)
+                pending.append(reached)
+
+    own = bundled.get("$defs") or {}
+    if clash := needed & set(own):
+        raise SchemaError(f"{path.name} redefines common-model definitions {sorted(clash)}")
+    bundled["$defs"] = {**{n: copy.deepcopy(definitions[n]) for n in sorted(needed)}, **own}
+    bundled[BUNDLE_VERSION_KEY] = f"{overlay.get('fideon:schema_version')}+common.{loaded}"
+    bundled["fideon:coverage_code_names"] = _coverage_code_names(overlay, path, common)
+    return bundled
+
+
+def _local_ref_names(node: Any) -> set[str]:
+    """The ``$defs`` names a node's own ``#/$defs/...`` references reach directly."""
+    names: set[str] = set()
+    if isinstance(node, list):
+        for item in node:
+            names |= _local_ref_names(item)
+    elif isinstance(node, dict):
+        ref = node.get("$ref")
+        if isinstance(ref, str) and ref.startswith("#/$defs/"):
+            names.add(ref.split("/")[2])
+        for value in node.values():
+            names |= _local_ref_names(value)
+    return names
+
+
+def _coverage_code_names(
+    overlay: dict[str, Any], path: Path, common: dict[str, Any]
+) -> dict[str, str]:
+    """Each of the line's coverage codes with its meaning, in the overlay's order.
+
+    The meaning is what the model chooses a code by, so a code without one, or a
+    code file that lists a different set than the overlay, is refused.
+    """
+    from common.config import load_yaml
+
+    codes = list(overlay.get("fideon:coverage_codes") or [])
+    code_file = overlay.get("fideon:coverage_codes_file")
+    if not codes and not code_file:
+        return {}
+    if not code_file:
+        raise SchemaError(f"{path.name} lists coverage codes but names no coverage-code file")
+    listed = {
+        entry["code"]: entry.get("name")
+        for entry in (load_yaml(path.parent / code_file).get("codes") or [])
+    }
+    if set(listed) != set(codes):
+        raise SchemaError(
+            f"{code_file} and {path.name} list different coverage codes: "
+            f"only in the file {sorted(set(listed) - set(codes))}, "
+            f"only in the schema {sorted(set(codes) - set(listed))}"
+        )
+    shared = common.get("fideon:shared_coverage_codes") or {}
+    names = {code: listed[code] or (shared.get(code) or {}).get("name") for code in codes}
+    if unnamed := sorted(code for code, name in names.items() if not name):
+        raise SchemaError(f"{code_file}: coverage code(s) with no name: {unnamed}")
+    return names
 
 
 @lru_cache(maxsize=1)
@@ -321,9 +515,30 @@ def _schema_for_key(key: str) -> dict[str, Any]:
     except KeyError:
         raise SchemaError(f"no schema registered for key {base!r}") from None
     schema = _load_json(source.path)
+    if source.common_model:
+        schema = _bundle(schema, source.path)
 
     name = slice_of(key)
-    return _slice_sections(schema, name, key) if name else schema
+    if not name:
+        return schema
+    sliced = _slice_sections(schema, name, key)
+    # A bundle carries the definitions of every block; a slice keeps only those
+    # its own sections reach, or each window's prompt would describe the whole
+    # common model. The self-contained files keep their $defs whole, as before.
+    return _prune_definitions(sliced) if source.common_model else sliced
+
+
+def _prune_definitions(schema: dict[str, Any]) -> dict[str, Any]:
+    """``schema`` with only the ``$defs`` its properties reach, transitively."""
+    definitions = schema.get("$defs") or {}
+    reached = _local_ref_names(schema.get("properties") or {})
+    pending = sorted(reached)
+    while pending:
+        for name in _local_ref_names(definitions.get(pending.pop(), {})):
+            if name not in reached:
+                reached.add(name)
+                pending.append(name)
+    return {**schema, "$defs": {k: v for k, v in definitions.items() if k in reached}}
 
 
 def _slice_sections(schema: dict[str, Any], group: str, key: str) -> dict[str, Any]:
@@ -503,7 +718,7 @@ def resolved_schema(
     source = _sources()[base_key(key)]
     if not source.inline_refs:
         return _model_facing_canonical(
-            _strip_prefixed(_schema_for_key(key), source.strip_prefixes)
+            _strip_prefixed(_without_fsm_excluded(_schema_for_key(key)), source.strip_prefixes)
         )
 
     registry = _registry()
@@ -556,6 +771,33 @@ def _model_facing_canonical(schema: dict[str, Any]) -> dict[str, Any]:
     if "FieldValue" in defs:
         defs["FieldValue"] = MODEL_FIELD_VALUE
     return {**schema, "$defs": defs}
+
+
+#: The client's mark on a property the extraction model never fills: today only
+#: ``text_sections``, which "is populated by the text extraction path, not the VLM
+#: FSM". Shown in a prompt, it asks the model for the document's full wording -
+#: a target no training row teaches (policy_windows.EXCLUDED_FROM_TARGETS).
+FSM_EXCLUDE_KEY = "fideon:fsm_exclude"
+
+
+def _without_fsm_excluded(node: Any) -> Any:
+    """``node`` without the properties the client marks ``fideon:fsm_exclude``."""
+    if isinstance(node, list):
+        return [_without_fsm_excluded(item) for item in node]
+    if not isinstance(node, dict):
+        return node
+    out = {k: _without_fsm_excluded(v) for k, v in node.items()}
+    properties = node.get("properties")
+    if isinstance(properties, dict):
+        dropped = {
+            name for name, sub in properties.items()
+            if isinstance(sub, dict) and sub.get(FSM_EXCLUDE_KEY)
+        }
+        if dropped:
+            out["properties"] = {k: v for k, v in out["properties"].items() if k not in dropped}
+            if isinstance(node.get("required"), list):
+                out["required"] = [r for r in node["required"] if r not in dropped]
+    return out
 
 
 def _strip_prefixed(node: Any, prefixes: tuple[str, ...]) -> Any:

@@ -27,7 +27,11 @@ def client() -> BlobClient:
 # --------------------------------------------------------------------------
 
 def test_every_line_this_repository_has_a_schema_for_has_one_family_entry():
-    lines = {p.stem for p in LOB_SCHEMAS.glob("*.json") if not p.stem.startswith("_")}
+    from common.schemas import _CANONICAL_NOT_REGISTERED
+
+    # classic_auto.json is on disk but read as personal auto, so it is no line.
+    lines = {p.stem for p in LOB_SCHEMAS.glob("*.json")
+             if not p.stem.startswith("_") and p.stem not in _CANONICAL_NOT_REGISTERED}
     assert set(lob_to_layout_family()) == lines
 
 

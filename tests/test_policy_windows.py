@@ -253,10 +253,10 @@ def _decl_response():
 def test_serving_asks_the_windows_training_built(client):
     """The one property the whole design rests on. A served window that no
     training row had is a shape the model was never taught."""
-    rows, _ = expand_document(_document(lob="homeowners"), "train", modes=("ocr_plus_image",))
+    rows, _ = expand_document(_document(lob="wc"), "train", modes=("ocr_plus_image",))
     trained = [(r["sections"], r["window_pages"]) for r in rows]
 
-    _result, backend = _serve(client, _decl_response(), known_lob="homeowners")
+    _result, backend = _serve(client, _decl_response(), known_lob="wc")
     served_schemas = [call["json_schema"] for call in backend.calls]
 
     assert len(backend.calls) == len(trained)
@@ -265,7 +265,7 @@ def test_serving_asks_the_windows_training_built(client):
 
     # Each constrained to its slice, with page_ref bounded to the document's pages.
     assert served_schemas == [
-        with_page_bounds(resolved_schema("policy", None, "homeowners", group),
+        with_page_bounds(resolved_schema("policy", None, "wc", group),
                          page_total(call["messages"]))
         for (group, _pages), call in zip(trained, backend.calls, strict=True)
     ]

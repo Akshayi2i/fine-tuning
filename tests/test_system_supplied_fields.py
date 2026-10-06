@@ -28,15 +28,15 @@ def test_training_targets_never_carry_them():
 def test_window_targets_never_carry_them():
     from data_pipeline.dataset_builder.policy_windows import plan_windows, window_target
 
-    for plan in plan_windows("homeowners", [1, 2, 3]):
-        document = window_target(LABEL, "homeowners", plan).get("document", {})
+    for plan in plan_windows("gl", [1, 2, 3]):
+        document = window_target(LABEL, "gl", plan).get("document", {})
         assert "source_file_name" not in document and "page_count" not in document
 
 
 def test_they_are_not_scored_on_either_side():
     """A gold label still carrying them must not mark every answer wrong on them."""
     answer = {"document": {"document_type": _env("Declarations")}, "policy": {"policy_number": _env("HO-1")}}
-    meta = {"source_id": "p1", "doc_type": "policy", "lob": "homeowners", "modality_mode": "ocr_plus_image"}
+    meta = {"source_id": "p1", "doc_type": "policy", "lob": "gl", "modality_mode": "ocr_plus_image"}
     [full] = build_report("t", [(LABEL, answer, meta)]).full_set()
     assert full.metrics["field_normalized_match"] == 1.0
     assert full.metrics["false_null_rate"] == 0.0
@@ -49,7 +49,7 @@ def test_serving_fills_them_from_the_request_into_a_valid_canonical_output():
     page_count = output["document"]["page_count"]
     assert page_count["parsed"] == 85 and page_count["confidence"] == {"score": 1.0, "source": "deterministic"}
     assert output["document"]["source_file_name"]["raw"] == "1- HOME_redacted.pdf"
-    assert is_valid(output, "policy", None, "homeowners")
+    assert is_valid(output, "policy", None, "gl")
 
 
 def test_an_unknown_file_name_is_left_out():

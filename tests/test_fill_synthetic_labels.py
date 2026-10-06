@@ -28,15 +28,15 @@ def _source():
         "policy": {"policy_number": env("HO-111"), "effective_date": env("09/09/2024"),
                    "expiration_date": env("09/09/2025")},
         "premium": {"total_policy_premium": env("$1,200.00", 1200.0)},
-        "homeowners": {"section_i_property_coverages": {
-            "coverage_a_dwelling_limit": env("$300,000", 300000.0),
-            "coverage_b_other_structures_limit": env("$30,000", 30000.0)}},
+        "general_liability": {"limits_of_insurance": {
+            "each_occurrence_limit": env("$300,000", 300000.0),
+            "general_aggregate_limit": env("$30,000", 30000.0)}},
         "forms_and_endorsements": [
             {"form_number": env("HO 00 03"), "edition_date": env("05 11")},
             {"form_number": env("HO 04 90"), "edition_date": env("0699")},
         ],
         "signature": {"signer_name": env("John Real")},
-        "text_sections": [{"title": "Notice", "text": "real text"}],
+        "text_sections": {"notice": {"section_id": "notice", "raw_text": "real text", "page_range": [3]}},
     }
 
 
@@ -46,11 +46,11 @@ def _twin():
         "named_insured": {"primary_name": env("Jane Fake")},
         "policy": {"policy_number": env("HO-999"), "effective_date": env("06/16/2024")},
         "premium": {"total_policy_premium": env("$1,200.00", 1200.0)},
-        "homeowners": {"section_i_property_coverages": {"coverage_a_dwelling_limit": env("$300,000", 300000.0)}},
+        "general_liability": {"limits_of_insurance": {"each_occurrence_limit": env("$300,000", 300000.0)}},
         "forms_and_endorsements": [{"form_number": env("HO 00 03")}],
-        "text_sections": [{"title": "Notice", "text": "fake text"}],
+        "text_sections": {"notice": {"section_id": "notice", "raw_text": "fake text", "page_range": [3]}},
         "fideon:provenance": {"date_shift_days": -85},
-        "fideon:absent": ["policy.expiration_date", "signature.signer_name", "homeowners.x"],
+        "fideon:absent": ["policy.expiration_date", "signature.signer_name", "general_liability.x"],
     }
 
 
@@ -64,10 +64,10 @@ def test_fields_the_twin_has_are_never_changed():
 
 def test_unchanged_values_are_added_as_they_are():
     merged, stats = fill(_source(), _twin())
-    cov = merged["homeowners"]["section_i_property_coverages"]
-    assert cov["coverage_b_other_structures_limit"]["raw"] == "$30,000"      # amounts all agreed
+    cov = merged["general_liability"]["limits_of_insurance"]
+    assert cov["general_aggregate_limit"]["raw"] == "$30,000"      # amounts all agreed
     assert merged["carrier"]["company_name"]["raw"] == "Acme Mutual"
-    assert stats.added["homeowners"] == 1
+    assert stats.added["general_liability"] == 1
 
 
 def test_dates_are_shifted_by_the_recorded_offset_and_edition_dates_kept():
@@ -90,7 +90,7 @@ def test_amounts_are_not_added_where_the_template_changed_them():
     twin = _twin()
     twin["premium"]["total_policy_premium"] = env("$980.00", 980.0)
     merged, stats = fill(_source(), twin)
-    assert "coverage_b_other_structures_limit" not in merged["homeowners"]["section_i_property_coverages"]
+    assert "general_aggregate_limit" not in merged["general_liability"]["limits_of_insurance"]
     assert stats.dropped["amount: this template's amounts differ"] == 1
 
 
@@ -111,7 +111,7 @@ def test_no_row_is_added_while_the_twin_has_rows_that_did_not_match():
 
 def test_absent_paths_that_are_now_filled_leave_the_absent_list():
     merged, _ = fill(_source(), _twin())
-    assert merged["fideon:absent"] == ["homeowners.x"]
+    assert merged["fideon:absent"] == ["general_liability.x"]
 
 
 @pytest.mark.parametrize("value,days,expected", [
@@ -136,18 +136,18 @@ def test_what_counts_as_a_replaced_identity(path, identifying):
 def test_the_delivery_is_completed_in_place_only_with_apply(tmp_path):
     delivery, reviewed = tmp_path / "delivery", tmp_path / "reviewed"
     (delivery / "Train/gold json").mkdir(parents=True)
-    (reviewed / "Acme/homeowners").mkdir(parents=True)
-    (reviewed / "Acme/homeowners/ho_1.json").write_text(json.dumps(_source()), encoding="utf-8")
-    gold = delivery / "Train/gold json/homeowners__ho_1__synth_001.json"
+    (reviewed / "Acme/gl").mkdir(parents=True)
+    (reviewed / "Acme/gl/ho_1.json").write_text(json.dumps(_source()), encoding="utf-8")
+    gold = delivery / "Train/gold json/gl__ho_1__synth_001.json"
     gold.write_text(json.dumps(_twin()), encoding="utf-8")
     with (delivery / "manifest.csv").open("w", newline="", encoding="utf-8") as fh:
         w = csv.DictWriter(fh, fieldnames=["split", "lob", "source", "kind", "gold", "pages"])
         w.writeheader()
-        w.writerow({"split": "Train", "lob": "homeowners", "source": "Acme/homeowners/ho_1.pdf",
-                    "kind": "synthetic", "gold": "Train/gold json/homeowners__ho_1__synth_001.json", "pages": 3})
-    dry = fill_delivery(delivery, reviewed, lines=frozenset({"homeowners"}))
+        w.writerow({"split": "Train", "lob": "gl", "source": "Acme/gl/ho_1.pdf",
+                    "kind": "synthetic", "gold": "Train/gold json/gl__ho_1__synth_001.json", "pages": 3})
+    dry = fill_delivery(delivery, reviewed, lines=frozenset({"gl"}))
     assert dry.filled == 1 and dry.fields_after > dry.fields_before
     assert json.loads(gold.read_text(encoding="utf-8")) == _twin()             # a dry run writes nothing
-    fill_delivery(delivery, reviewed, lines=frozenset({"homeowners"}), apply=True)
-    assert "coverage_b_other_structures_limit" in json.loads(gold.read_text(encoding="utf-8"))["homeowners"][
-        "section_i_property_coverages"]
+    fill_delivery(delivery, reviewed, lines=frozenset({"gl"}), apply=True)
+    assert "general_aggregate_limit" in json.loads(gold.read_text(encoding="utf-8"))["general_liability"][
+        "limits_of_insurance"]

@@ -351,20 +351,20 @@ def test_a_known_lob_selects_its_canonical_schema(client):
 
     backend = EchoBackend(RESPONSE)
     extract(
-        _request(known_lob="homeowners"), load_model("base", client, backend_impl=backend),
+        _request(known_lob="gl"), load_model("base", client, backend_impl=backend),
         StaticClassifier("policy"), CALIBRATION,
     )
     from common.schema_sections import groups_for
 
     # A policy is read in windows, each constrained to its slice of the LINE's
-    # schema — so the homeowners block reaches the model through `lineblk`.
+    # schema — so the general-liability block reaches the model through `lineblk`.
     schemas = [call["json_schema"] for call in backend.calls]
     assert schemas == [
-        with_page_bounds(resolved_schema("policy", None, "homeowners", group),
+        with_page_bounds(resolved_schema("policy", None, "gl", group),
                          page_total(call["messages"]))
-        for group, call in zip(groups_for("homeowners"), backend.calls, strict=True)
+        for group, call in zip(groups_for("gl"), backend.calls, strict=True)
     ]
-    assert any("homeowners" in schema["properties"] for schema in schemas)
+    assert any("general_liability" in schema["properties"] for schema in schemas)
 
 
 def test_a_policy_with_no_known_lob_still_returns_canonical_json(model):

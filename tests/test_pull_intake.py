@@ -34,7 +34,7 @@ def _stage(backend, batch="personal-v1", docs=("doc-a", "doc-b")):
         base = f"intake/{batch}/{name}"
         backend.write("raw", f"{base}/policy.pdf", f"%PDF-1.7 {name}".encode())
         backend.write("raw", f"{base}/golden.json", json.dumps(GOLDEN).encode())
-        backend.write("raw", f"{base}/metadata.json", json.dumps({"lob": "homeowners"}).encode())
+        backend.write("raw", f"{base}/metadata.json", json.dumps({"lob": "gl"}).encode())
 
 
 # --------------------------------------------------------------------------

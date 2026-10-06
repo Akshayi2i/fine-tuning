@@ -42,13 +42,13 @@ AUTO = {
 
 def test_an_orphan_fragment_is_not_taught():
     report = TargetReport()
-    far = window_target(AUTO, "personal_auto", _plan("lineblk", [9], index=1), report)
+    far = window_target(AUTO, "commercial_auto", _plan("lineblk", [9], index=1), report)
     assert not far.get("auto", {}).get("vehicles"), far
     assert any("coverages[0]" in path for path in report.orphaned)
 
 
 def test_the_window_showing_the_identifier_carries_the_whole_row():
-    near = window_target(AUTO, "personal_auto", _plan("lineblk", [2]))
+    near = window_target(AUTO, "commercial_auto", _plan("lineblk", [2]))
     (coverage,) = near["auto"]["vehicles"][0]["coverages"]
     assert coverage["coverage_name"]["raw"] == "Medical Payments" and coverage["premium"]["parsed"] == 1.0
 
@@ -120,7 +120,7 @@ def test_the_golden_eval_reports_the_windowing_ceiling():
     from evaluation.golden_eval import GoldenDocument, windowing_ceiling
 
     doc = GoldenDocument(source_id="p1", doc_type="policy", golden=AUTO, image_keys=["a", "b"],
-                         page_texts={1: "", 2: ""}, acord_form=None, lob="personal_auto",
+                         page_texts={1: "", 2: ""}, acord_form=None, lob="commercial_auto",
                          is_scanned=False, synthetic=False)
     section = windowing_ceiling([doc])
     assert section["documents"] == 1 and section["value_recall"] == 1.0

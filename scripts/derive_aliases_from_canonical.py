@@ -12,7 +12,7 @@ disagree with itself. ``occurs_at`` records where the field is used.
 
 Two sources, doing different jobs:
 
-* **The canonical schemas** (``configs/canonical schema/policy_check/``) carry
+* **The canonical schemas** (``configs/canonical schema/LOB Schema/``) carry
   ``fideon:aliases`` — the labels forms print for each field. They say what to
   look for.
 * **The original documents** (``training data/original data/``) say which of
@@ -53,7 +53,7 @@ from pathlib import Path
 from typing import Any
 
 ROOT = Path(__file__).resolve().parent.parent
-CANONICAL = ROOT / "configs" / "canonical schema" / "policy_check"
+CANONICAL = ROOT / "configs" / "canonical schema" / "LOB Schema"
 DOCUMENTS = ROOT / "training data" / "original data"
 TARGET = ROOT / "schemas" / "aliases" / "policy.aliases.json"
 

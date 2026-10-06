@@ -53,7 +53,7 @@ families:
     title: Casualty and Fleet
     lobs:
       - gl                     # CGL
-      - commercial_auto        # AUTOB
+      - auto                   # AUTOB (commercial auto; the client's file is auto.json)
       - wc                     # WORK (with ELIAB)
       - umbrella               # CUMBR
 

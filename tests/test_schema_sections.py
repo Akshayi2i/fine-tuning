@@ -62,25 +62,28 @@ def test_a_group_with_nothing_to_ask_for_is_not_a_window():
     """A window whose schema has no properties asks the model for `{}` — a
     wasted call whose output cannot be told apart from a page holding nothing.
 
-    document_type_detail is carried by three lines out of thirty-three, and the
+    document_type_detail is carried by a few self-contained lines only, and the
     fallback schema has no line-specific block at all.
     """
     assert "dtd" in group_names()
-    assert "dtd" in groups_for("ocean_marine")
-    assert "dtd" not in groups_for("homeowners")
-    assert "lineblk" not in groups_for(None), "the fallback has no line block"
+    assert "dtd" in groups_for("flood")
+    assert "dtd" not in groups_for("gl")
+    # The fallback has no line block; its remainder window reads only the coverage
+    # and overflow lists the delivered files added to every self-contained schema.
+    assert sections_for("lineblk", None) == ("coverages", "text_sections", "additional_fields")
 
 
 def test_the_remainder_group_claims_a_section_the_map_never_names():
     """`lineblk` is defined as the remainder, not as a list.
 
-    ocean_marine's line block is called `watercraft`, personal_auto's is `auto`,
-    and some lines carry extra sections this file has never heard of. Naming
-    them would mean the first unlisted one was silently dropped — which is the
-    failure the whole map exists to prevent.
+    commercial auto's line block is called `auto`, general liability's
+    `general_liability`, and the delivered files added sections this file has
+    never heard of. Naming them would mean the first unlisted one was silently
+    dropped — which is the failure the whole map exists to prevent.
     """
-    assert sections_for("lineblk", "ocean_marine") == ("watercraft",)
-    assert sections_for("lineblk", "personal_auto") == ("auto",)
+    added = ("coverages", "text_sections", "additional_fields")
+    assert sections_for("lineblk", "commercial_auto") == ("auto", *added)
+    assert sections_for("lineblk", "gl") == ("general_liability", *added)
 
 
 def test_a_slice_narrows_required_rather_than_keeping_it_whole():
@@ -88,45 +91,45 @@ def test_a_slice_narrows_required_rather_than_keeping_it_whole():
     carrier, named_insured and policy as `{}`. Two windows would then both own
     carrier, and on the training side every schedule target would teach the
     model to emit an empty one."""
-    whole = schemas.load_schema("policy", None, "homeowners")["required"]
+    whole = schemas.load_schema("policy", None, "gl")["required"]
     assert set(whole) == {"carrier", "named_insured", "policy"}
 
-    decl = schemas.load_schema("policy", None, "homeowners", "decl")
+    decl = schemas.load_schema("policy", None, "gl", "decl")
     assert set(decl["required"]) == set(whole), "all three are declarations sections"
 
-    arrays = schemas.load_schema("policy", None, "homeowners", "arrays")
+    arrays = schemas.load_schema("policy", None, "gl", "arrays")
     assert "required" not in arrays, "no required section survives into arrays"
-    assert set(arrays["properties"]) == set(sections_for("arrays", "homeowners"))
+    assert set(arrays["properties"]) == set(sections_for("arrays", "gl"))
 
 
 def test_a_sliced_key_resolves_its_file_on_the_base():
-    """Two slices of homeowners are two views of one file at one version.
+    """Two slices of a line are two views of one file at one version.
 
     Everything that addresses the FILE — where it lives, which version it
     declares, whether it is canonical — has to strip the slice first, or it
     KeyErrors on a key no source table contains.
     """
-    assert schemas.schema_key("policy", None, "homeowners", "arrays") == "policy:homeowners#arrays"
-    assert schemas.base_key("policy:homeowners#arrays") == "policy:homeowners"
-    assert schemas.slice_of("policy:homeowners#arrays") == "arrays"
-    assert schemas.slice_of("policy:homeowners") is None
+    assert schemas.schema_key("policy", None, "gl", "arrays") == "policy:gl#arrays"
+    assert schemas.base_key("policy:gl#arrays") == "policy:gl"
+    assert schemas.slice_of("policy:gl#arrays") == "arrays"
+    assert schemas.slice_of("policy:gl") is None
 
-    for group in groups_for("homeowners"):
-        assert schemas.schema_version("policy", None, "homeowners", group) == "1.4.0"
-        assert schemas.is_canonical("policy", None, "homeowners")
+    for group in groups_for("gl"):
+        assert schemas.schema_version("policy", None, "gl", group) == "1.5.0"
+        assert schemas.is_canonical("policy", None, "gl")
 
 
 def test_every_slice_still_carries_the_fieldvalue_definition():
     """Each leaf still `$ref`s the envelope. A slice whose refs do not resolve
     is not a schema."""
-    for group in groups_for("homeowners"):
-        sliced = schemas.resolved_schema("policy", None, "homeowners", group)
+    for group in groups_for("gl"):
+        sliced = schemas.resolved_schema("policy", None, "gl", group)
         assert "FieldValue" in json.dumps(sliced.get("$defs", {}))
 
 
 def test_no_slice_leaks_a_fideon_key():
     """The strip has to survive slicing — the aliases sit inside the sections."""
-    for lob in ("homeowners", "ocean_marine"):
+    for lob in ("gl", "flood"):
         for group in groups_for(lob):
             assert "fideon:" not in schemas.schema_text("policy", None, lob, group)
 
@@ -203,7 +206,7 @@ def test_slicing_leaves_room_for_more_pages_than_the_whole_schema():
         )
         return max(1, int(room // per_page))
 
-    for lob in ("homeowners", "ocean_marine"):
+    for lob in ("gl", "flood"):
         whole = capacity(lob, None)
         for group in groups_for(lob):
             assert capacity(lob, group) > whole, (
@@ -215,5 +218,5 @@ def test_every_shared_array_has_an_identifying_key():
     """An array is asked over several page windows, so a table spanning a
     boundary comes back twice. De-duplication is load-bearing, not tidying, and
     it needs a key per array."""
-    for section in sections_for("arrays", "homeowners"):
+    for section in sections_for("arrays", "gl"):
         assert array_key(section), f"{section} has no identifying key to de-duplicate on"
