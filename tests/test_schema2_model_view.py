@@ -197,3 +197,52 @@ def test_each_override_still_differs_from_the_clients_text():
         node = defs[name] if not field else (defs[name].get("properties") or {}).get(field)
         assert node is not None, f"{path}: the common model has no such field"
         assert node.get("description") != text, f"{path}: matches the client's text, remove it"
+
+
+def _common_model_aliases(lob):
+    """Every printed label the SPEC_21 sources record for this line: the
+    overlay's, the common model's per field, and its coverage codes'."""
+    from common.config import load_yaml
+
+    found: set[str] = set()
+
+    def collect(node):
+        if isinstance(node, dict):
+            for key, value in node.items():
+                if key == "fideon:aliases" and isinstance(value, list):
+                    found.update(str(v) for v in value)
+                elif key == "fideon:aliases" and isinstance(value, dict):
+                    for labels in value.values():
+                        found.update(str(v) for v in labels)
+                else:
+                    collect(value)
+        elif isinstance(node, list):
+            for value in node:
+                collect(value)
+
+    overlay = json.loads((S.CANONICAL_DIR / f"{lob}.json").read_text(encoding="utf-8"))
+    collect(overlay)
+    collect(S.load_schema("policy", None, lob)["$defs"])
+    for entry in load_yaml(S.CANONICAL_DIR / overlay["fideon:coverage_codes_file"]).get("codes") or []:
+        found.update(str(a) for a in entry.get("aliases") or [])
+    shared = S._common_model().get("fideon:shared_coverage_codes") or {}
+    for code in overlay["fideon:coverage_codes"]:
+        found.update(str(a) for a in (shared.get(code) or {}).get("aliases") or [])
+    return found
+
+
+@pytest.mark.parametrize("lob", LINES)
+def test_no_common_model_alias_reaches_a_rendered_prompt(lob):
+    """master §1.4, on every prompt a common-model line renders: whole and per
+    window. A multi-word label may reach the prompt only where the schema itself
+    says it (a description, a code's meaning); a one-word label collides with
+    ordinary prose, as in the existing check."""
+    from common.prompts import render_system_prompt
+    from common.schema_sections import groups_for
+
+    for sections in (None, *groups_for(lob)):
+        rendered = render_system_prompt("policy", "ocr_plus_image", None, lob, sections)
+        embedded = S.schema_text("policy", None, lob, sections)
+        leaked = sorted(a for a in _common_model_aliases(lob)
+                        if " " in a and a not in embedded and a in rendered)
+        assert not leaked, f"{lob}/{sections}: {leaked[:5]}"

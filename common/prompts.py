@@ -26,14 +26,20 @@ from jinja2 import Environment, FileSystemLoader, StrictUndefined
 
 from common.constants import MODALITY_MODES, PROMPT_MODE_ALIASES
 from common.normalize import OUTPUT_DATE_LABEL
-from common.schemas import is_canonical, required_fields, resolved_schema, schema_version
+from common.schemas import (
+    is_canonical,
+    is_common_model,
+    required_fields,
+    resolved_schema,
+    schema_version,
+)
 
 PROMPT_DIR = Path(__file__).resolve().parent.parent / "prompts"
 
 #: Bumped whenever the template's rendered output changes in any way.
 #: Recorded in the corpus manifest; a change forces a corpus rebuild and a new
 #: training cycle, exactly like a schema change (arch §7).
-PROMPT_TEMPLATE_VERSION = "6.0.0"
+PROMPT_TEMPLATE_VERSION = "7.0.0"
 
 _SYSTEM_TEMPLATE = "system_prompt_template.jinja"
 _CLASSIFIER_TEMPLATE = "doc_type_classifier_prompt.jinja"
@@ -216,6 +222,10 @@ def render_system_prompt(
         # the prompt can never describe one shape while carrying the other's
         # schema.
         canonical=is_canonical(doc_type, acord_form, lob),
+        # A SPEC_21 line on the common model: its values, ids and codes, and its
+        # coverage table, are described in their own words. The self-contained
+        # lines render exactly as before.
+        common_model=doc_type.lower() == "policy" and is_common_model(doc_type, acord_form, lob),
         required_keys=_prose_list(required_fields(doc_type, acord_form, lob, sections)),
         output_shape=output_shape_for_prompt(doc_type, acord_form, lob, sections),
         doc_type_label=doc_type_label(doc_type, acord_form),
