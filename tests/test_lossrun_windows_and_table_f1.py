@@ -29,9 +29,11 @@ def _claim(page, n, total=None):
             "paid": amount, "reserved": 0.0, "total_incurred": amount, "description": f"claim {page}.{n}"}
 
 
-def _page_text(page):
-    rows = "\n".join(f"| WC24-{page:02d}{n} | 02/14/2024 | {page * 1000 + n}.00 |" for n in (1, 2))
-    return f"Loss Run page {page}\n\n| Claim | Loss date | Incurred |\n|---|---|---|\n{rows}"
+def _page_text(page, rows=12):
+    """A page whose table holds ``rows`` claim rows. Twelve on each of seven
+    pages is 84 rows, more than one answer can hold, so the document is windowed."""
+    body = "\n".join(f"| WC24-{page:02d}{n} | 02/14/2024 | {page * 1000 + n}.00 |" for n in range(1, rows + 1))
+    return f"Loss Run page {page}\n\n| Claim | Loss date | Incurred |\n|---|---|---|\n{body}"
 
 
 PAGES = 7
@@ -44,6 +46,7 @@ class _Windows(ModelBackend):
     def __init__(self, misread=None):
         self.misread = misread or {}
         self.windows: list[list[int]] = []
+        self.caps: list[int] = []
 
     def supports_logprobs(self) -> bool:
         return True
@@ -51,6 +54,7 @@ class _Windows(ModelBackend):
     def generate(self, messages, config, adapter=None) -> Generation:
         pages = [int(n) for n in re.findall(r"<page (\d+) of", json.dumps(messages[1]["content"]))]
         self.windows.append(pages)
+        self.caps.append(config.max_new_tokens)
         header = HEADER if 1 in pages else {k: ([] if isinstance(v, list) else None) for k, v in HEADER.items()}
         claims = [_claim(p, n, self.misread.get((tuple(pages), p, n))) for p in pages for n in (1, 2)]
         text = json.dumps({**header, "claims": claims})
@@ -63,25 +67,52 @@ def client() -> BlobClient:
     return BlobClient(backend=InMemoryBackend(), container="main", raw_container="raw")
 
 
-def _request(pages=PAGES):
-    return ExtractionRequest(
+def _request(pages=PAGES, rows=12, **over):
+    request = dict(
         source_id="lossrun_0001",
         image_paths=[f"processed/default/lossrun/lossrun_0001/page_{p}.png" for p in range(1, pages + 1)],
-        page_texts={p: _page_text(p) for p in range(1, pages + 1)},
+        page_texts={p: _page_text(p, rows) for p in range(1, pages + 1)},
         known_doc_type="lossrun",
     )
+    return ExtractionRequest(**{**request, **over})
 
 
-def _serve(client, backend, pages=PAGES):
+def _serve(client, backend, pages=PAGES, **over):
     model = load_model("base", client, backend_impl=backend)
-    return extract(_request(pages), model, StaticClassifier("lossrun"),
+    return extract(_request(pages, **over), model, StaticClassifier("lossrun"),
                    CalibrationParams(method="temperature", doc_type="lossrun", model_version="v1",
                                      temperature=1.0), strict_schema=False)
 
 
 def test_windows_are_planned_from_row_density():
     assert lossrun_windows(_request()) == [[1, 2, 3], [3, 4, 5], [5, 6, 7]]
-    assert lossrun_windows(_request(pages=2)) == [[1, 2]]
+    # Denser pages, smaller windows: 30 rows a page is a page a window.
+    assert lossrun_windows(_request(pages=4, rows=30)) == [[1], [2], [3], [4]]
+
+
+def test_a_loss_run_whose_rows_fit_one_answer_is_read_in_one_call(client):
+    """Windows are a shape no training row has; they are only for what one call cannot hold."""
+    assert lossrun_windows(_request(pages=4, rows=10)) == [[1, 2, 3, 4]]   # 40 rows fit
+    backend = _Windows()
+    _serve(client, backend, pages=4, rows=10)
+    assert backend.windows == [[1, 2, 3, 4]]
+
+
+def test_every_window_may_write_the_rows_it_was_planned_for(client):
+    from serving.pipeline import lossrun_window_budget
+
+    backend = _Windows()
+    _serve(client, backend)
+    assert len(backend.caps) == 3 and set(backend.caps) == {lossrun_window_budget()}
+
+
+def test_without_page_texts_a_loss_run_takes_the_one_call_path_and_its_refusals(client):
+    from serving.pipeline import PipelineError
+
+    image_only = _request(page_texts={}, modality_mode="image_only")
+    assert lossrun_windows(image_only) == [list(range(1, PAGES + 1))]
+    with pytest.raises(PipelineError, match="single joined ocr_text"):
+        _serve(client, _Windows(), page_texts={}, ocr_text="every page joined")
 
 
 def test_a_multi_window_loss_run_is_read_merged_and_reconciled_end_to_end(client):

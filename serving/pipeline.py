@@ -584,21 +584,39 @@ LOSSRUN_TOTALS_MISMATCH_FLAG = "claims:totals_mismatch"
 LOSSRUN_MERGE_CONFLICT_FLAG = "claims:merge_conflict"
 
 
+def lossrun_window_budget() -> int:
+    """Output tokens one Loss Run window plans for AND may write: one number for
+    both, so a window sized for N rows is allowed to write N rows."""
+    from common.config import answer_cap
+
+    return answer_cap("lossrun_rows", "lossrun")
+
+
 def lossrun_windows(request: ExtractionRequest) -> list[list[int]]:
     """A Loss Run's page windows, sized from its row density as the corpus plans them.
 
-    One window when the whole document fits the rows task's output budget; a
-    caller reads it in one call then, as before.
+    Windowed only when its rows cannot fit one answer. Each window is the Loss
+    Run ``extract`` prompt over a page subset, a shape no training row has yet
+    (Loss Runs train as whole documents until the lossrun_rows task is built),
+    so it is used only where one call would be cut off: the estimated rows of
+    the whole document overflow the window budget. Everything else is one
+    window - read in one call, as before. So is a request without per-page
+    text: nothing to estimate from (image only), or a joined ``ocr_text``,
+    which the one-call path refuses for a multi-page document.
     """
-    from common.config import answer_cap
-    from data_pipeline.dataset_builder.expand_tasks import plan_windows
+    from data_pipeline.dataset_builder.expand_tasks import TOKENS_PER_CLAIM_ROW, plan_windows
     from data_pipeline.ocr.run_mineru import count_table_rows
 
     pages = sorted(request.page_texts) or list(range(1, len(request.image_paths) + 1))
+    if not request.page_texts:
+        return [pages]
     # MinerU writes tables as HTML, which count_table_rows counts as well as
-    # pipe tables. No text (image only): every page counts as sparse.
+    # pipe tables.
     densities = [count_table_rows(request.page_texts.get(page) or "") for page in pages]
-    windows = plan_windows(densities, output_budget=answer_cap("lossrun_rows", "lossrun"))
+    budget = lossrun_window_budget()
+    if sum(densities) * TOKENS_PER_CLAIM_ROW <= budget:
+        return [pages]
+    windows = plan_windows(densities, output_budget=budget)
     return [[pages[index - 1] for index in window] for window in windows]
 
 
@@ -609,11 +627,11 @@ def _extract_lossrun_windows(
     windows: list[list[int]],
     latencies: list[float] | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any], float | None, list[int], list[str], dict[str, Any]]:
-    """Read a Loss Run longer than one window window by window, then merge.
+    """Read a Loss Run too long for one answer window by window, then merge.
 
-    Each window is asked for the whole Loss Run schema over its pages, the
-    prompt the model is trained on; the windows overlap so a row cut by a page
-    break is seen whole by one of them. Their claims are merged by
+    Each window is asked for the whole Loss Run schema over its pages (the
+    trained ``extract`` prompt, on a page subset); the windows overlap so a row
+    cut by a page break is seen whole by one of them. Their claims are merged by
     :func:`serving.lossrun_merge.merge_extracted_windows` and reconciled against
     the printed totals (Fideon SPEC_09 handoff item 8, arch v2.1 §7b). A window
     that fails is split and retried over fewer pages, and one that fails alone
@@ -621,12 +639,14 @@ def _extract_lossrun_windows(
 
     Returns ``(extraction, spans, latency_ms, pages_used, flags, reconciliation)``.
     """
-    from common.config import answer_cap
     from serving.lossrun_merge import merge_extracted_windows
 
     image_only = request.modality_mode == "image_only"
     total = len(request.page_texts) or len(request.image_paths)
-    cap = answer_cap("extract", "lossrun")
+    # The budget the windows were planned for (lossrun_windows), never a
+    # smaller one: a window allowed fewer rows than it was sized for is cut
+    # off, split, and a dense page is lost.
+    cap = lossrun_window_budget()
     pending = [list(pages) for pages in windows]
     read: list[tuple[list[int], dict[str, Any], dict[str, Any]]] = []
     failed: list[str] = []
