@@ -65,6 +65,22 @@ class Classification:
     #: slice (§4b) — never to select a schema, because editions share one.
     acord_edition: str | None = None
 
+    #: A policy's line of business, when the classifier was asked for one (a
+    #: policy that reached L3 with none from L1/L2). One of the registered lines,
+    #: or None for a package, an unknown line, or a document that is no policy.
+    lob: str | None = None
+    #: The probability of the line's own tokens (the product over them), from
+    #: the generation's logprobs - never a number the model writes about itself.
+    #: None when the backend returned no logprobs.
+    lob_confidence: float | None = None
+    lob_candidates: list[tuple[str, float]] = field(default_factory=list)
+    #: The L1/L2 line hint this was reconciled against, when there was one.
+    lob_hypothesis: str | None = None
+    lob_hypothesis_agreed: bool | None = None
+    #: "base" (every line, before an adapter is chosen) or "family" (the family
+    #: adapter choosing among its own lines).
+    lob_stage: str | None = None
+
     @property
     def is_usable(self) -> bool:
         return self.doc_type in ACTIVE_DOC_TYPES
@@ -180,7 +196,98 @@ def parse_classification(response: str) -> Classification:
         acord_form=acord_form,
         confidence=max(0.0, min(1.0, confidence)),
         raw_response=response,
+        lob=known_line(payload.get("lob")) if doc_type in (None, "policy") else None,
     )
+
+
+def known_line(value: Any) -> str | None:
+    """``value`` as a registered line of business, or None.
+
+    Read as the rest of the pipeline reads a line (classic auto is personal
+    auto; workers' comp is ``wc``), and refused when it names no registered
+    line - a guessed schema is worse than the fallback.
+    """
+    from common.lob import merge_line
+    from common.schemas import LOB_SCHEMA_ALIASES
+    from common.scopes import known_lines
+
+    if not isinstance(value, str) or not value.strip():
+        return None
+    line = str(merge_line(value.strip().lower()))
+    line = LOB_SCHEMA_ALIASES.get(line, line)
+    if line not in known_lines():
+        log.warning("classifier returned unknown line of business %r", value)
+        return None
+    return line
+
+
+def line_confidence(text: str, tokens: list[str], logprobs: list[float]) -> float | None:
+    """The probability of the ``lob`` value's tokens: exp of their summed logprobs.
+
+    Read from the generation, so a line the model wrote hesitantly scores low
+    even when the model claims to be sure. None when the value cannot be
+    located in the tokens.
+    """
+    import math
+
+    from inference_core.span_map import map_field_spans
+
+    if not tokens or len(tokens) != len(logprobs):
+        return None
+    span = map_field_spans(text, tokens, logprobs).get("lob")
+    if span is None or not getattr(span, "mapped", False) or not span.token_logprobs:
+        return None
+    return round(math.exp(sum(span.token_logprobs)), 4)
+
+
+def classifier_messages(
+    image_paths: list[str], ocr_text: str | None, *,
+    lines: list[str] | None = None, line_only: bool = False,
+) -> list[dict[str, Any]]:
+    """The classifier's messages, the same whether a model answers them at
+    serving or is trained on them: the first two page images and the first page's
+    text. Shared so the two cannot drift."""
+    content: list[dict[str, Any]] = [{"type": "image", "image": p} for p in image_paths[:2]]
+    if ocr_text:
+        # First page only: the type is determined by the header and layout,
+        # and sending a 50-page policy to answer a one-word question is waste.
+        content.append({"type": "text", "text": ocr_text[:4000]})
+    return [
+        {"role": "system", "content": render_classifier_prompt(lines=lines, line_only=line_only)},
+        {"role": "user", "content": content},
+    ]
+
+
+def combine_lob_with_hypothesis(
+    classification: Classification, hypothesis: str | None, *, confidence_threshold: float,
+) -> Classification:
+    """Reconcile the detected line with an L1/L2 line hint, as
+    :func:`combine_with_hypothesis` does for the document type.
+
+    Agreement lifts the line's confidence to the threshold: two independent
+    signals naming one line. A disagreement keeps a confident detection (L1 is a
+    registry lookup, L2 structural inference, and neither read the page) and
+    otherwise makes the hint a candidate - evidence too weak to route on alone.
+    """
+    hint = known_line(hypothesis) if hypothesis else None
+    classification.lob_hypothesis = hint
+    if hint is None:
+        classification.lob_hypothesis_agreed = None
+        return classification
+    agreed = classification.lob == hint
+    classification.lob_hypothesis_agreed = agreed
+    if agreed:
+        classification.lob_confidence = max(classification.lob_confidence or 0.0, confidence_threshold)
+        return classification
+    log.warning(
+        "L1/L2 proposed line %r, the classifier read %r at %s. %s", hint, classification.lob,
+        classification.lob_confidence,
+        "Keeping the classifier's line." if (classification.lob_confidence or 0) >= confidence_threshold
+        else "Neither is confident.",
+    )
+    if hint not in {line for line, _ in classification.lob_candidates}:
+        classification.lob_candidates.append((hint, classification.lob_confidence or 0.0))
+    return classification
 
 
 class ZeroShotClassifier:
@@ -191,19 +298,17 @@ class ZeroShotClassifier:
         self.generate = generate_fn
 
     def classify(self, image_paths: list[str], ocr_text: str | None) -> Classification:
-        content: list[dict[str, Any]] = [{"type": "image", "image": p} for p in image_paths[:2]]
-        if ocr_text:
-            # First page only: the type is determined by the header and layout,
-            # and sending a 50-page policy to answer a one-word question is waste.
-            content.append({"type": "text", "text": ocr_text[:4000]})
-
-        messages = [
-            {"role": "system", "content": render_classifier_prompt()},
-            {"role": "user", "content": content},
-        ]
-        result = self.generate(self.model, messages, want_logprobs=False)
+        messages = classifier_messages(image_paths, ocr_text)
+        # Logprobs for the line's confidence: the one number here routing acts on.
+        result = self.generate(self.model, messages, want_logprobs=True)
         classification = parse_classification(result.text)
         classification.method = "zero_shot_base" if getattr(self.model, "is_base", False) else "zero_shot"
+        if classification.lob is not None:
+            classification.lob_stage = "base"
+            classification.lob_confidence = line_confidence(
+                result.text, list(getattr(result, "tokens", None) or []),
+                list(getattr(result, "token_logprobs", None) or []))
+            classification.lob_candidates = [(classification.lob, classification.lob_confidence or 0.0)]
         return classification
 
 

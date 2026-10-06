@@ -1,0 +1,44 @@
+# What each line of business IS, for the classifier that picks a policy's line
+# when no caller supplied one (serving.doc_type_classifier).
+#
+# One line per line of business, written about the ROLE of the coverage - what
+# is insured, against what, for whom - never about the words a carrier prints
+# on its declarations. The same rule as every prompt in this repository (master
+# §1.4): a label list gives the model a lookup table that fails on the first
+# carrier that words it differently. tests/test_lob_detection.py checks that no
+# recorded carrier label appears here, and that every registered line has one.
+#
+# Keyed by this repository's line names (configs/layout_families.yaml).
+
+lines:
+  homeowners: A home its owner lives in - damage to the house, to detached buildings on the lot and to the household's belongings, the extra cost of living elsewhere after a loss, and what the household owes when it harms others.
+  dwelling_fire: A residential building insured mainly for damage to the structure, typically one the owner rents out or does not occupy, with little or no liability coverage.
+  personal_auto: Private passenger vehicles owned by an individual or household - liability for their use, damage to the vehicles, and injury to their occupants.
+  motorcycle: Motorcycles and similar two- or three-wheeled vehicles owned by an individual - liability for riding them and damage to the machines.
+  recreational_vehicle: Motorhomes, travel trailers, campers and similar vehicles people travel or stay in for leisure, owned by an individual - liability for their use and damage to the units and their contents.
+  ocean_marine: Boats, yachts and other watercraft, and their hulls, motors and equipment, together with liability arising from operating them.
+  personal_umbrella: Extra liability coverage for an individual or household, above the limits of their own auto and home policies.
+  auto: Vehicles used in a business - liability for their operation, damage to the vehicles, and the business's hired and non-owned vehicles.
+  gl: What a business owes when its premises, operations or products hurt people, damage what belongs to others, or harm someone's reputation or privacy.
+  wc: An employer's obligation to pay benefits to employees injured at work, and the employer's own liability for those injuries.
+  umbrella: Extra liability coverage for a business, above the limits of its underlying commercial liability policies.
+  property: A business's buildings, contents, equipment and the income it loses while they are repaired after a covered loss.
+  business_owners: A small business's property and liability combined in one packaged policy.
+  bopgl: The liability part of a small business's packaged property-and-liability policy.
+  boppr: The property part of a small business's packaged property-and-liability policy.
+  commercial_package: Several commercial coverages - property, liability, crime, equipment and others - each with its own terms, issued together as one policy.
+  builders_risk: A building or structure while it is under construction or renovation, with the materials and equipment to be built into it.
+  inland_marine: Property that moves or is away from the insured's premises - contractors' equipment, goods being shipped, property in another's care, high-value items scheduled one by one - wherever it is.
+  equipment_breakdown: Sudden mechanical or electrical failure of machinery and equipment - boilers, electrical systems, production machines - and the income lost while they are repaired.
+  flood: Damage to a building and its contents caused by flood water.
+  agriculture_farm: A farm or ranch - its dwellings, outbuildings, livestock, machinery, crops and the farming operation's liability.
+  directors_officers: Claims against the members of a company's board and its senior executives over decisions they made in running it, and the company's obligation to pay on their behalf.
+  epli: An employer's liability for claims by employees about how they were treated - discrimination, harassment, wrongful termination.
+  management_liability: Several protections for an organisation and its leaders written together - claims over how the board and executives ran it, how employees were treated, how the retirement and welfare plans it sponsors were run, and theft by employees.
+  professional_eo: Liability for financial loss a client suffers from a professional's error, omission or negligence in the services provided.
+  cyber: Loss from a data breach, network intrusion or system failure - the business's own costs of responding and recovering, and what it owes people whose data or systems were affected.
+  crime_fidelity: Loss of money, securities or property through theft, forgery or fraud, including dishonesty by the insured's own employees.
+  surety: A bond in which a surety guarantees to an obligee that the principal will perform an obligation or pay what it owes.
+  disability: Income replacement for a person unable to work because of illness or injury.
+  statutory_disability: The short-term disability or paid leave benefits a state requires employers to provide to their employees.
+  group_accident_sickness: Accident and sickness benefits provided to a group of people, such as employees or members, under one policy.

@@ -95,6 +95,9 @@ class ExtractionRequest:
     #: model against _fallback.json, rather than refusing it. Off unless the
     #: caller asks: such a policy is never routed silently.
     allow_lob_fallback: bool = False
+    #: A line of business L1/L2 proposed without being sure enough to send it as
+    #: ``known_lob``: reconciled with the line the classifier reads.
+    lob_hypothesis: str | None = None
 
 
 @dataclass
@@ -472,6 +475,80 @@ def _extract_policy_windows(
 #: A policy read by the base model against _fallback.json (Fideon SPEC_06 §9a).
 LOB_FALLBACK_FLAG = "route:lob_fallback_used"
 
+
+@dataclass
+class LobResolution:
+    """Which line of business a policy is read as, and where that came from.
+
+    ``source``: ``caller`` (sent with the request, as L1/L2 do), ``detected``
+    (the classifier, confidently), ``detected_uncertain`` (the classifier, below
+    the line threshold: its family's adapter and its line's schema, flagged), or
+    ``undetected`` (no line: the base model against the fallback schema,
+    flagged). None for a document that is no policy, or when detection is off.
+    """
+
+    lob: Any = None
+    source: str | None = None
+    confidence: float | None = None
+    candidates: list[tuple[str, float]] = field(default_factory=list)
+    hypothesis_agreed: bool | None = None
+    flags: list[str] = field(default_factory=list)
+
+    def as_output(self) -> dict[str, Any]:
+        lines = [self.lob] if isinstance(self.lob, str) else list(self.lob or [])
+        return {"lines": lines, "source": self.source, "confidence": self.confidence,
+                "candidates": [list(c) for c in self.candidates],
+                "hypothesis_agreed": self.hypothesis_agreed}
+
+
+def _resolve_lob(
+    request: ExtractionRequest, classifier: Classifier, route_: Route, *,
+    detect: bool, line_threshold: float, family_threshold: float,
+) -> LobResolution:
+    """The line a policy is read with: the caller's, or the classifier's.
+
+    A policy reaching L3 with no line - a scan L1/L2 could not read - used to be
+    refused, or read by the base model against the generic schema. The
+    classifier now reads the line too, and its confidence (the line's own token
+    probability) decides how far it is trusted.
+    """
+    from serving.doc_type_classifier import combine_lob_with_hypothesis, known_line
+
+    classification = route_.classification
+    if route_.doc_type != "policy":
+        return LobResolution(request.known_lob)
+    if request.known_lob:
+        # The caller's line wins. A confident classifier reading another one is
+        # worth a person's look, and evidence about L1/L2 when it is systematic.
+        caller = known_line(request.known_lob) if isinstance(request.known_lob, str) else None
+        disagrees = (
+            classification is not None and caller is not None and classification.lob not in (None, caller)
+            and (classification.lob_confidence or 0.0) >= line_threshold
+        )
+        return LobResolution(request.known_lob, "caller", flags=["lob:caller_disagrees"] if disagrees else [])
+    if not detect:
+        return LobResolution(None)
+    if classification is None or classification.method == "static":
+        # The caller named the type, so the classifier never ran: run it for the line.
+        classification = classifier.classify(*_classifier_input(request))
+    classification = combine_lob_with_hypothesis(
+        classification, request.lob_hypothesis, confidence_threshold=line_threshold)
+    found = LobResolution(
+        classification.lob, confidence=classification.lob_confidence,
+        candidates=list(classification.lob_candidates),
+        hypothesis_agreed=classification.lob_hypothesis_agreed,
+    )
+    confidence = classification.lob_confidence
+    if classification.lob is None or (confidence is not None and confidence < family_threshold):
+        found.lob, found.source, found.flags = None, "undetected", ["lob:undetected"]
+    elif confidence is not None and confidence >= line_threshold:
+        found.source = "detected"
+    else:
+        # Below the line threshold, or no logprobs to measure it by: the family
+        # is likely right even when the line is not, and a person should check.
+        found.source, found.flags = "detected_uncertain", ["lob:uncertain_within_family"]
+    return found
+
 #: Review flags a Loss Run's merge and reconciliation leave on the document.
 LOSSRUN_TOTALS_MISMATCH_FLAG = "claims:totals_mismatch"
 LOSSRUN_MERGE_CONFLICT_FLAG = "claims:merge_conflict"
@@ -728,6 +805,9 @@ def extract(
     fallback_doc_type: str | None = None,
     long_doc_types: tuple[str, ...] = ("policy",),
     release_runtimes: Mapping[str, Any] | None = None,
+    detect_lob: bool = True,
+    lob_confidence_threshold: float = 0.90,
+    lob_family_threshold: float = 0.60,
 ) -> ExtractionResult:
     """Run one document through the full pipeline.
 
@@ -750,6 +830,14 @@ def extract(
         fallback_doc_type=fallback_doc_type,
     )
 
+    # The policy's line: the caller's, else the classifier's (or none).
+    resolution = _resolve_lob(
+        request, classifier, route_, detect=detect_lob,
+        line_threshold=lob_confidence_threshold, family_threshold=lob_family_threshold,
+    )
+    if resolution.flags:
+        route_ = replace(route_, review_flags=[*route_.review_flags, *resolution.flags])
+
     release = None
     lob_fallback_used = False
     layout_family = None
@@ -757,8 +845,13 @@ def extract(
         from serving.release_router import UnservedDocType
 
         try:
-            routed = plan.route(route_.doc_type, request.known_lob,
-                                allow_fallback=request.allow_lob_fallback)
+            # A policy no line could be found for is read by the base model
+            # against the fallback, flagged - the caller need not opt in, since
+            # the pipeline itself looked. A caller's unknown line is still refused
+            # unless the caller asked for the fallback.
+            routed = plan.route(route_.doc_type, resolution.lob,
+                                allow_fallback=request.allow_lob_fallback
+                                or resolution.source == "undetected")
         except UnservedDocType as exc:
             raise PipelineError(str(exc)) from exc
         release, layout_family = routed.release, routed.layout_family
@@ -791,7 +884,7 @@ def extract(
     # The line selects the policy's canonical schema. It is the caller's to
     # supply; with none, `schema_key` selects the client's canonical fallback,
     # so a policy's output is canonical JSON either way.
-    lob = None if lob_fallback_used else request.known_lob
+    lob = None if lob_fallback_used else resolution.lob
     canonical = is_canonical(route_.schema_doc_type, route_.schema_acord_form, lob)
     common_model = canonical and route_.schema_doc_type == "policy" and is_common_model(
         route_.schema_doc_type, route_.schema_acord_form, lob)
@@ -1012,7 +1105,8 @@ def extract(
             name: {"rows": values.get(name, []), **signal.as_output()}
             for name, signal in sorted(completeness.items())
         },
-        line_of_business=_lob_output(calibrated.fields),
+        line_of_business=(resolution.as_output() if resolution.source is not None
+                          else _lob_output(calibrated.fields)),
         pages_used=pages_used,
         review_flags=sorted(set(flags)),
         route_info={
@@ -1026,6 +1120,7 @@ def extract(
             ),
             "layout_family": layout_family,
             "lob_fallback_used": lob_fallback_used,
+            "lob_source": resolution.source,
         },
         latency_ms=latency,
         validation_errors=validation_errors,

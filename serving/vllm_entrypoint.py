@@ -548,9 +548,13 @@ def serving_thresholds() -> dict[str, Any]:
     for key, value in (
         ("classifier_threshold", routing.get("classifier_confidence_threshold")),
         ("review_threshold", confidence.get("review_threshold")),
+        ("lob_confidence_threshold", routing.get("lob_confidence_threshold")),
+        ("lob_family_threshold", routing.get("lob_family_threshold")),
     ):
         if isinstance(value, (int, float)) and not isinstance(value, bool):
             tuning[key] = value
+    if isinstance(routing.get("detect_lob"), bool):
+        tuning["detect_lob"] = routing["detect_lob"]
 
     # An operator-chosen schema for a document nobody could identify. Absent by
     # default, and then an unroutable document is refused rather than extracted

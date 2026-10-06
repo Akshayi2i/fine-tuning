@@ -18,6 +18,7 @@ key (arch §0c). It carries **no alias list** — see the template header for wh
 from __future__ import annotations
 
 import json
+from collections.abc import Iterable
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
@@ -248,9 +249,31 @@ def _prose_list(names: list[str]) -> str:
     return f"{', '.join(quoted[:-1])} and {quoted[-1]}"
 
 
-def render_classifier_prompt() -> str:
-    """Render the zero-shot document-type classifier prompt (arch §4a, §4b)."""
-    return _env().get_template(_CLASSIFIER_TEMPLATE).render().strip()
+def lob_meanings() -> dict[str, str]:
+    """Each registered line of business and what it is (configs/lob_meanings.yaml),
+    in the file's order. Role-based: no line is described by a printed label."""
+    from common.config import CONFIG_DIR, load_yaml
+    from common.scopes import known_lines
+
+    meanings = load_yaml(CONFIG_DIR / "lob_meanings.yaml").get("lines") or {}
+    registered = known_lines()
+    return {str(line): str(text) for line, text in meanings.items() if line in registered}
+
+
+def render_classifier_prompt(*, lines: Iterable[str] | None = None, line_only: bool = False) -> str:
+    """Render the zero-shot document-type classifier prompt (arch §4a, §4b).
+
+    A policy's line of business is asked for too, from ``lines`` (every
+    registered line by default), each with its meaning: a policy that reaches L3
+    with no line from L1/L2 still needs one to choose its adapter and schema.
+    ``line_only`` asks for the line alone - the family adapter's stage, choosing
+    among its own lines once the family is known.
+    """
+    meanings = lob_meanings()
+    chosen = list(meanings) if lines is None else [line for line in lines if line in meanings]
+    return _env().get_template(_CLASSIFIER_TEMPLATE).render(
+        lines=[(line, meanings[line]) for line in chosen], line_only=line_only,
+    ).strip()
 
 
 def prompt_fingerprint(

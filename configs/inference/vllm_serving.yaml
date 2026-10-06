@@ -68,6 +68,18 @@ routing:
   classifier_confidence_threshold: 0.70
   fallback: "foundation_only"
 
+  # A policy that arrives with no line of business (a scan L1/L2 could not read)
+  # has its line read by the classifier, with the line's own token probability
+  # as its confidence. At or above lob_confidence_threshold it routes as the
+  # caller's line would; at or above lob_family_threshold it routes to that
+  # line's family adapter and schema, flagged lob:uncertain_within_family;
+  # below, the base model reads it against the fallback schema, flagged
+  # lob:undetected. Fit both thresholds on held-out data (scanned documents
+  # and held-out carriers reported apart) before relying on them.
+  detect_lob: true
+  lob_confidence_threshold: 0.90
+  lob_family_threshold: 0.60
+
   # Adapter paths are resolved through the registry, never hardcoded here. The
   # three keys that used to sit here were a second, silent source of truth about
   # which document types exist - a type added anywhere else was simply absent

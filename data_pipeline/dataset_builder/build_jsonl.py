@@ -338,6 +338,39 @@ def _policy_window_rows(
     return rows
 
 
+def classify_rows(document: SourceDocument, split: str, modes: tuple[str, ...]) -> list[dict[str, Any]]:
+    """The family adapter's line question for one policy: one row per mode.
+
+    Stage 2 of line detection (serving.doc_type_classifier): once the base model
+    has placed a policy in a layout family, the family's own adapter chooses
+    among the family's lines - where the confusable pairs are (homeowners and
+    dwelling fire; personal auto, motorcycle and RV). The messages are the
+    classifier's own (``classifier_messages``), so the question trained is the
+    question served. Nothing for a document that is no policy, names several
+    lines, or has a line in no family.
+    """
+    from common.config import lob_to_layout_family, lobs_in_family
+    from serving.doc_type_classifier import classifier_messages, known_line
+
+    lines = document.lob if isinstance(document.lob, list) else [document.lob]
+    line = known_line(lines[0]) if document.doc_type == "policy" and len(lines) == 1 else None
+    family = lob_to_layout_family().get(line) if line else None
+    if family is None:
+        return []
+    choices = list(lobs_in_family(family))
+    rows = []
+    for index, mode in enumerate(modes):
+        text = None if mode == "image_only" or not document.ocr_pages else document.ocr_pages[0]
+        messages = classifier_messages(document.image_paths, text, lines=choices, line_only=True)
+        messages.append({"role": "assistant", "content": json.dumps({"lob": line})})
+        rows.append({
+            "doc_type": "policy", "acord_form": None, "lob": [line], "modality_mode": mode,
+            "source_id": document.source_id, "tenant_id": document.tenant_id, "split": split,
+            "deidentified": False, "messages": messages, "task": "classify", "mode_index": index,
+        })
+    return rows
+
+
 def build_corpus(
     documents: list[SourceDocument],
     assignment: GroupSplitAssignment,
@@ -345,6 +378,7 @@ def build_corpus(
     seed: int = 42,
     mode_assignment: ModeAssignment | None = None,
     max_expansion_failures: int = 0,
+    with_classify_rows: bool = False,
 ) -> BuildResult:
     """Compile every document into its split's rows, then assert no leakage.
 
@@ -352,6 +386,12 @@ def build_corpus(
     (arch v2.1 §6.1). Without one, it is drawn here over the **train** documents
     with the same seed. Train always gets one row per epoch; there is no path
     that expands a train document into all three regimes.
+
+    ``with_classify_rows`` adds, per policy whose line has a layout family, the
+    family adapter's line question (:func:`classify_rows`) - off until the
+    base model's zero-shot line detection has been measured and found short of
+    its target; turning it on is also when ``common.tasks.CORPUS_TASKS`` gains
+    ``classify``.
 
     A document that fails to expand is set aside - except on a common-model
     line, where more than ``max_expansion_failures`` such documents fail the
@@ -399,6 +439,9 @@ def build_corpus(
                         f"(allowed {max_expansion_failures}): {shown}"
                     ) from exc
             continue
+
+        if with_classify_rows:
+            rows += classify_rows(document, split, epoch_modes)
 
         # Reject, never truncate. A row over its task budget would be clipped on
         # the pod, and a clipped target trains the model to stop early. The
