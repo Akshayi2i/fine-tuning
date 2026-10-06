@@ -158,3 +158,106 @@ def test_layout_families_lists_no_line_twice():
     config = yaml.safe_load(Path(CONFIG_DIR / "layout_families.yaml").read_text(encoding="utf-8"))
     listed = [line for entry in config["families"].values() for line in entry["lobs"]] + config["no_family"]
     assert len(listed) == len(set(listed))
+
+
+# --------------------------------------------------------------------------
+# Review fixes: pins and unrestricted releases first, the base model only
+# where it is loaded, calibration that cannot fail the fallback
+# --------------------------------------------------------------------------
+
+def _fallback_request(lob, allow=False):
+    from serving.pipeline import ExtractionRequest
+
+    return ExtractionRequest(source_id="policy_0001",
+                             image_paths=["processed/default/policy/policy_0001/page_1.png"],
+                             page_texts={1: "Declarations"}, known_doc_type="policy", known_lob=lob,
+                             allow_lob_fallback=allow)
+
+
+def test_a_policy_with_no_line_goes_to_an_unrestricted_release_or_a_pin_first(client):
+    promote(client, "release-2026.9.1", scope="unified")
+    _promote_personal(client)
+    plan = build_serving_plan(client)
+    for lob in (None, "title"):
+        routed = plan.route("policy", lob)
+        assert routed.release.scope == "unified" and not routed.lob_fallback_used
+    pinned = build_serving_plan(client, pins={"policy": "release-2026.9.1"})
+    assert pinned.route("policy", "homeowners").release.release_id == "release-2026.9.1"
+    assert pinned.route("policy", None).release.release_id == "release-2026.9.1"
+
+
+def test_the_fallback_reads_the_fallback_schema_with_no_adapter_at_all(client):
+    from inference_core.model_runner import EchoBackend, load_model
+    from serving.doc_type_classifier import StaticClassifier
+    from serving.pipeline import extract
+
+    _promote_personal(client)
+    plan = build_serving_plan(client)
+    backend = EchoBackend(json.dumps({}))
+    model = load_model("base", client, backend_impl=backend)
+    extract(_fallback_request("agriculture_farm"), model, StaticClassifier("policy"), None,
+            plan=plan, strict_schema=False)
+    served = [call["json_schema"] for call in backend.calls]
+    backend.calls.clear()
+    extract(_fallback_request(None, allow=True), model, StaticClassifier("policy"), None,
+            plan=plan, strict_schema=False)
+    assert served == [call["json_schema"] for call in backend.calls]         # _fallback.json, as with no line
+
+
+def test_no_adapter_means_none_even_when_the_model_has_a_default():
+    import dataclasses
+
+    from inference_core.model_runner import NO_ADAPTER, EchoBackend, generate, load_model
+
+    backend = EchoBackend(json.dumps({}))
+    model = dataclasses.replace(load_model("base", BlobClient(backend=InMemoryBackend(), container="m",
+                                                                raw_container="r"), backend_impl=backend),
+                                default_adapter="/adapters/personal_lines")
+    generate(model, [{"role": "user", "content": "x"}], want_logprobs=False)
+    generate(model, [{"role": "user", "content": "x"}], adapter=NO_ADAPTER, want_logprobs=False)
+    assert [call["adapter"] for call in backend.calls] == ["/adapters/personal_lines", None]
+
+
+def test_the_fallback_never_fails_on_calibration_the_endpoint_does_not_hold(client):
+    from inference_core.model_runner import EchoBackend, load_model
+    from serving.doc_type_classifier import StaticClassifier
+    from serving.pipeline import extract
+    from tests.test_policy_windows import _decl_response
+
+    _promote_personal(client)
+    model = load_model("base", client, backend_impl=EchoBackend(json.dumps(_decl_response())))
+    result = extract(_fallback_request("agriculture_farm"), model, StaticClassifier("policy"), {},
+                     plan=build_serving_plan(client), strict_schema=False)
+    assert result.route_info["lob_fallback_used"]
+    assert result.fields and all(f"{path}:uncalibrated" in result.review_flags for path in result.fields)
+
+
+def test_an_engine_holding_a_merged_release_refuses_the_fallback_rather_than_mislabel_it(client):
+    from inference_core.model_runner import EchoBackend, load_model
+    from serving.doc_type_classifier import StaticClassifier
+    from serving.pipeline import PipelineError, extract
+
+    _promote_personal(client)
+    model = load_model("base", client, backend_impl=EchoBackend(json.dumps({})))
+    with pytest.raises(PipelineError, match="merged model, not the base"):
+        extract(_fallback_request("agriculture_farm"), model, StaticClassifier("policy"), None,
+                plan=build_serving_plan(client), base_model_loaded=False)
+
+
+def test_the_endpoint_loads_the_base_whenever_a_line_would_fall_back(client):
+    from serving.vllm_entrypoint import serves_base_with_loras
+
+    promote(client, "release-2026.9.1", scope="unified")
+    assert not serves_base_with_loras(build_serving_plan(client))            # unified reads every line
+    alone = BlobClient(backend=InMemoryBackend(), container="main", raw_container="raw")
+    _promote_personal(alone)
+    assert serves_base_with_loras(build_serving_plan(alone))                 # commercial lines need the base
+
+
+def test_a_caller_who_chose_the_fallback_may_name_a_line_with_no_schema():
+    from serving.vllm_entrypoint import ServingError, build_request
+
+    payload = {"source_id": "p1", "image_paths": ["page_1.png"], "doc_type": "policy", "lob": "title"}
+    with pytest.raises(ServingError, match="no canonical policy schema"):
+        build_request(payload)
+    assert build_request({**payload, "allow_lob_fallback": True}).known_lob == "title"

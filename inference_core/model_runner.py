@@ -822,7 +822,7 @@ def generate(
     import time
 
     config = _request_config(model.config, json_schema, max_new_tokens)
-    adapter = adapter or model.default_adapter
+    adapter = _adapter_for(model, adapter)
     started = time.perf_counter()
     try:
         result = model.backend.generate(messages, config, adapter=adapter)
@@ -844,6 +844,19 @@ def generate(
             model.tag,
         )
     return result
+
+
+#: Pass as ``adapter`` to read with the engine's weights alone: no LoRA, and
+#: not the model's default adapter either (``None`` means that default).
+NO_ADAPTER = ""
+
+
+def _adapter_for(model: LoadedModel, adapter: str | None) -> str | None:
+    """The LoRA a request is run with: its own, the model's default when it names
+    none, or nothing at all for :data:`NO_ADAPTER`."""
+    if adapter is None:
+        return model.default_adapter
+    return adapter or None
 
 
 def _request_config(
@@ -880,7 +893,7 @@ def generate_batch(
     configs = [_request_config(model.config, request[1], request[2] if len(request) > 2 else None)
                for request in requests]
     raw = model.backend.generate_batch(
-        [request[0] for request in requests], configs, adapter=adapter or model.default_adapter
+        [request[0] for request in requests], configs, adapter=_adapter_for(model, adapter)
     )
 
     out: list[Generation | ModelRunnerError] = []

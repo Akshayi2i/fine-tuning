@@ -100,6 +100,9 @@ class EndpointState:
     #: adapter (when releases share the engine as LoRAs) and its fitted
     #: calibrators and thresholds. Built at cold start from the serving plan.
     release_runtimes: dict[str, Any] = field(default_factory=dict)
+    #: The engine holds the base model (releases applied as LoRAs), so a policy
+    #: routed to no release can be read by the base model alone.
+    base_model_loaded: bool = True
 
     #: Which promoted release answers for each document type (arch v2.1 §12.3).
     #: More than one can be promoted at a time — a policy release alongside an
@@ -255,6 +258,24 @@ class ReleaseRuntime:
     thresholds: Any = None
 
 
+def serves_base_with_loras(plan: Any) -> bool:
+    """Whether the engine loads the BASE with each release as its LoRA.
+
+    With several releases, always: one engine cannot hold several merged
+    models. With one, whenever a known line routes to no release: such a policy
+    is read by the base model with no LoRA (``lob_fallback_used``), and an
+    engine holding the release's merged model has no base to read it with.
+    """
+    from common.config import lob_to_layout_family
+
+    served = list(plan.served)
+    if len(served) > 1:
+        return True
+    if not served:
+        return False
+    return any(plan.route("policy", line).lob_fallback_used for line in lob_to_layout_family())
+
+
 def load_release_runtimes(
     plan: Any,
     client: BlobClient,
@@ -263,9 +284,10 @@ def load_release_runtimes(
 ) -> dict[str, ReleaseRuntime]:
     """Each served release's adapter and calibration, ready for requests.
 
-    **One release served:** the engine loads that release's merged model, and no
-    adapter is applied. **Several** (a unified release and a personal-lines one):
-    one engine cannot hold several merged models, so it loads the BASE with LoRA
+    **One release covering every line:** the engine loads that release's merged
+    model, and no adapter is applied. **Several** (a unified release and a
+    personal-lines one), **or one that leaves lines to the base model**
+    (:func:`serves_base_with_loras`): the engine loads the BASE with LoRA
     enabled and each release is its adapter, applied per request — vLLM's one
     LoRA per request, the shape arch v2.1 §4 serves in. Adapters are copied from
     Blob to ``adapter_root`` once, here.
@@ -276,7 +298,7 @@ def load_release_runtimes(
     from common.run_ids import version_of
 
     served = list(plan.served)
-    as_lora = len(served) > 1
+    as_lora = serves_base_with_loras(plan)
     runtimes: dict[str, ReleaseRuntime] = {}
     for release in served:
         runtime = ReleaseRuntime(release_id=release.release_id)
@@ -378,10 +400,12 @@ def cold_start(
     runtimes = load_release_runtimes(
         plan, client, adapter_root=adapter_root or Path(paths.staging_root()) / "serving-adapters",
     )
-    if len(runtimes) > 1 and not getattr(getattr(model, "config", None), "enable_lora", True):
+    base_loaded = serves_base_with_loras(plan)
+    if base_loaded and not getattr(getattr(model, "config", None), "enable_lora", True):
         raise ColdStartError(
-            f"{len(runtimes)} releases are promoted, so each is served as its LoRA on the base, "
-            "but the model was loaded without LoRA support (enable_lora: false)."
+            f"{len(runtimes)} release(s) are served as LoRAs on the base (several releases, or lines "
+            "left to the base model), but the model was loaded without LoRA support "
+            "(enable_lora: false)."
         )
     state = EndpointState(
         model_version=model_version,
@@ -392,6 +416,9 @@ def cold_start(
         plan=plan,
         corpus_manifest=manifest,
         release_runtimes=runtimes,
+        # Whether "no adapter" reads the base model: only when the engine is the
+        # base, never a release's merged model.
+        base_model_loaded=base_loaded or not plan.served,
         ready=True,
     )
     log.info(
@@ -501,7 +528,8 @@ def request_lob(payload: Mapping[str, Any]) -> str | list[str] | None:
     served policy was read against the canonical fallback while training had
     read it against its line's schema — the model was trained on one output
     shape and served another. A single line with no schema is refused: falling
-    back quietly is the same mismatch with a name that looks right.
+    back quietly is the same mismatch with a name that looks right - unless the
+    caller asked for the fallback (``allow_lob_fallback``).
     """
     from common.schemas import schema_selectors
 
@@ -520,7 +548,9 @@ def request_lob(payload: Mapping[str, Any]) -> str | list[str] | None:
 
     lines = merge_line([line.strip().lower() for line in lines])
     lob = lines[0] if isinstance(lob, str) else lines
-    if len(lines) == 1:
+    if len(lines) == 1 and not payload.get("allow_lob_fallback"):
+        # Unless the caller chose the base-model fallback: then a line with no
+        # schema is read against _fallback.json, flagged (ServingPlan.route).
         from common.schemas import LOB_SCHEMA_ALIASES
 
         line = lines[0]
@@ -659,6 +689,7 @@ def handler(event: dict[str, Any], state: EndpointState) -> dict[str, Any]:
             # has never seen (arch v2.1 §12.3).
             plan=state.plan,
             release_runtimes=state.release_runtimes,
+            base_model_loaded=state.base_model_loaded,
             long_doc_types=long_doc_types_for(state.plan),
             **tuning,
         )

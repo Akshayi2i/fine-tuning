@@ -873,6 +873,7 @@ def extract(
     long_doc_types: tuple[str, ...] = ("policy",),
     release_runtimes: Mapping[str, Any] | None = None,
     detect_lob: bool = False,
+    base_model_loaded: bool = True,
     lob_confidence_threshold: float = 0.90,
     lob_family_threshold: float = 0.60,
 ) -> ExtractionResult:
@@ -929,10 +930,23 @@ def extract(
             raise PipelineError(str(exc)) from exc
         release, layout_family = routed.release, routed.layout_family
         if routed.lob_fallback_used:
+            if not base_model_loaded:
+                # The engine is one release's merged model: reading with "no
+                # adapter" would be that release, against a schema it never
+                # trained on, reported as the base model.
+                raise PipelineError(
+                    f"{request.source_id} would be read by the base model against the fallback "
+                    "schema, but this endpoint's engine is a release's merged model, not the base. "
+                    "Serve the releases as LoRAs on the base (load_release_runtimes) to read "
+                    "unrouted lines.")
             # The base model, no LoRA, against the canonical _fallback.json:
             # no adapter trained on this line's layout is promoted.
             lob_fallback_used = True
-            route_ = replace(route_, adapter=None)
+            from inference_core.model_runner import NO_ADAPTER
+
+            route_ = replace(route_, adapter=NO_ADAPTER)
+            # A release's calibrators were fitted to its adapter, not the base.
+            calibrators = thresholds = None
 
     # Serve THROUGH the release the plan chose: its adapter and its calibrators.
     # The choice used to be a yes/no check and was then thrown away, so a
@@ -952,7 +966,22 @@ def extract(
     # lookup fell through to `.get("")` and the request was refused before
     # extraction ever ran.
     # The v1 transform is needed only when no fitted calibrator set applies.
-    calibration = _calibration_for(calibration, route_.doc_type) if calibrators is None else None
+    if lob_fallback_used:
+        # The base model has no fitted calibrators, and the endpoint may hold no
+        # v1 parameters for the type: confidence is then raw. Every field is
+        # flagged for review either way (no calibrator set below).
+        try:
+            calibration = _calibration_for(calibration, route_.doc_type)
+        except PipelineError:
+            calibration = None
+        if calibration is None:
+            from calibration.fit_calibration import CalibrationParams
+
+            # The identity: raw confidence, reported as a diagnostic only.
+            calibration = CalibrationParams(method="temperature", doc_type=route_.doc_type,
+                                            model_version=model.tag, temperature=1.0)
+    else:
+        calibration = _calibration_for(calibration, route_.doc_type) if calibrators is None else None
 
     # The line selects the policy's canonical schema. It is the caller's to
     # supply; with none, `schema_key` selects the client's canonical fallback,
@@ -1206,7 +1235,7 @@ def extract(
         pages_used=pages_used,
         review_flags=sorted(set(flags)),
         route_info={
-            "adapter": route_.adapter,
+            "adapter": route_.adapter or None,
             "foundation_only": route_.foundation_only,
             "classifier_confidence": (
                 route_.classification.confidence if route_.classification else None

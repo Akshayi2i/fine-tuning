@@ -204,12 +204,24 @@ class ServingPlan:
         has no family - the base model reads it with no LoRA against
         ``_fallback.json`` (``lob_fallback_used``). A policy with no line, or a
         line in no family, is never routed silently: refused, unless the caller
-        chose the fallback. Other types route as :meth:`release_for` does.
+        chosen the fallback. Other types route as :meth:`release_for` does.
+
+        Two answer first: a rollback pin on the type takes every document of it,
+        and for a policy whose line cannot be routed, an unrestricted release
+        (unified, policy) still serving the type reads it, as it always has.
         """
         if doc_type != "policy":
             return Routed(self.release_for(doc_type, lob))
         problem = _unroutable(lob)
+        if doc_type in self.pinned:
+            # A rollback pin sends every document of the type, routable or not.
+            return Routed(self.by_doc_type[doc_type], None if problem else _family(lob))
         if problem:
+            if doc_type in self.by_doc_type:
+                # An unrestricted release (unified, policy) reads any line against
+                # the canonical fallback, as it was trained to; until those scopes
+                # are retired it answers before the base model does.
+                return Routed(self.by_doc_type[doc_type], None)
             if allow_fallback:
                 return Routed(None, None, lob_fallback_used=True)
             raise UnservedDocType(problem)
