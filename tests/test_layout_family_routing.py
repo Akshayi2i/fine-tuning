@@ -261,3 +261,16 @@ def test_a_caller_who_chose_the_fallback_may_name_a_line_with_no_schema():
     with pytest.raises(ServingError, match="no canonical policy schema"):
         build_request(payload)
     assert build_request({**payload, "allow_lob_fallback": True}).known_lob == "title"
+
+
+def test_l1_watercraft_is_the_ocean_marine_line(client):
+    """lob_schema_map.yaml (D-B): L1 sends a personal boat policy as watercraft."""
+    from common.lob import merge_line
+    from common.schemas import schema_key
+    from serving.vllm_entrypoint import request_lob
+
+    assert merge_line("watercraft") == "ocean_marine"
+    assert schema_key("policy", None, "watercraft") == "policy:ocean_marine"
+    assert request_lob({"lob": "watercraft"}) == "ocean_marine"
+    _promote_personal(client)
+    assert build_serving_plan(client).route("policy", "watercraft").release.scope == "personal_lines"

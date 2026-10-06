@@ -51,7 +51,12 @@ class LobError(ValueError):
 #: read - labels, bundle and label metadata, schema selection - so a stored
 #: ``classic_auto`` never selects a schema, a split, a scope or a report row of
 #: its own.
-MERGED_LINES: dict[str, str] = {"classic_auto": "personal_auto"}
+#:
+#: ``watercraft`` is the L1 code for a personal boat policy (ACORD BOAT), and
+#: the boat line is ``ocean_marine`` (lob_schema_map.yaml, decision D-B): a
+#: policy sent as ``watercraft`` reads the ocean_marine schema and adapter
+#: rather than being refused or read against the fallback.
+MERGED_LINES: dict[str, str] = {"classic_auto": "personal_auto", "watercraft": "ocean_marine"}
 
 
 def merge_line(lob: object) -> object:
