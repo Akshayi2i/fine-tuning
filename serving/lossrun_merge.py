@@ -14,8 +14,15 @@ Dedupe keys, in order of trust:
 
 1. ``claim_number`` after normalisation. A carrier's own identifier for the
    claim, and the only key that is reliably unique.
-2. ``(date of loss, claimant, total incurred)`` when the claim number is absent
-   — ordinary on older Loss Runs, and on reports that redact it.
+2. ``(date of loss, claimant, description, total incurred)`` when the claim
+   number is absent — ordinary on older Loss Runs, and on reports that redact
+   it. The Loss Run schema carries no claimant, so the description is what tells
+   two incident-only claims of one day apart.
+
+Only rows of DIFFERENT windows are joined: the overlap is what repeats a claim,
+so two rows with one key in one window are two claims (a claim number printed
+on several rows, two $0 incidents on one date). Rows keep document order -
+the schema's "in document order" - which is as reproducible as any sort.
 
 Rows that survive neither key are kept rather than dropped. A duplicate inflates
 a total, which reconciliation catches; a dropped row understates a loss history,
@@ -25,6 +32,7 @@ which nothing catches.
 from __future__ import annotations
 
 import logging
+from collections import defaultdict
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Any
@@ -34,7 +42,7 @@ from common.normalize import normalize_currency, normalize_identifier, normalize
 log = logging.getLogger(__name__)
 
 #: Fields the fallback key is built from, when there is no claim number.
-FALLBACK_KEY_FIELDS = ("loss_date", "claimant", "total_incurred")
+FALLBACK_KEY_FIELDS = ("loss_date", "claimant", "description", "total_incurred")
 
 
 @dataclass
@@ -79,6 +87,7 @@ def _claim_key(row: dict[str, Any]) -> tuple[str, ...] | None:
     parts = [
         normalize_text(row.get("loss_date")) or "",
         normalize_text(row.get("claimant")) or "",
+        normalize_text(row.get("description")) or "",
         str(normalize_currency(row.get("total_incurred")) or ""),
     ]
     return ("fallback", *parts) if any(parts) else None
@@ -107,7 +116,10 @@ def merge_windows(
         totals_output: the ``lossrun_totals`` task's output, if it ran.
     """
     report = MergeReport()
-    by_key: dict[tuple[str, ...], dict[str, Any]] = {}
+    # Every claim in document order; per key, the claims holding it and the
+    # windows each has already absorbed a row from.
+    merged_rows: list[dict[str, Any]] = []
+    by_key: dict[tuple[str, ...], list[tuple[int, set[int]]]] = {}
 
     for window_index, rows in enumerate(window_outputs):
         for row in rows:
@@ -129,17 +141,22 @@ def merge_windows(
                 # reconciliation catches; a dropped row understates a loss
                 # history, which nothing catches.
                 report.unkeyed_rows += 1
-                report.rows.append(dict(row))
+                merged_rows.append(dict(row))
                 continue
 
-            existing = by_key.get(key)
-            if existing is None:
-                by_key[key] = dict(row)
+            # The first claim with this key not yet read in THIS window: one
+            # window's two rows with a key are two claims, not one read twice.
+            slot = next(((i, seen) for i, seen in by_key.get(key, []) if window_index not in seen), None)
+            if slot is None:
+                merged_rows.append(dict(row))
+                by_key.setdefault(key, []).append((len(merged_rows) - 1, {window_index}))
                 continue
 
+            index, seen = slot
+            seen.add(window_index)
             report.duplicates_collapsed += 1
-            merged, conflicts = _reconcile_row(existing, row)
-            by_key[key] = merged
+            merged, conflicts = _reconcile_row(merged_rows[index], row)
+            merged_rows[index] = merged
             for field_name, (kept, discarded) in conflicts.items():
                 report.conflicts.append({
                     "claim_number": row.get("claim_number"),
@@ -150,14 +167,9 @@ def merge_windows(
                     "reason": "two windows read the same claim differently",
                 })
 
-    report.rows.extend(by_key.values())
-    # Stable order so two runs over the same document produce the same list —
-    # a claims list whose order depends on dict iteration is not comparable
-    # against its own previous extraction.
-    report.rows.sort(key=lambda r: (
-        str(normalize_identifier(r.get("claim_number")) or ""),
-        str(normalize_text(r.get("loss_date")) or ""),
-    ))
+    # Document order: first seen, window by window, row by row. Reproducible -
+    # the same windows give the same list - and what the schema asks for.
+    report.rows = merged_rows
 
     if totals_output:
         report.total_rows.append({"row_type": "total", **totals_output})
@@ -199,11 +211,25 @@ def _reconcile_row(
             continue
         if value in (None, "", [], {}) or current == value:
             continue
+        if _cut_reading(current, value):
+            # One reading is the start of the other: the window that saw the row
+            # cut at a page break read a prefix. The longer one is the row; not
+            # a disagreement.
+            merged[name] = max(current, value, key=lambda v: len(str(v).strip()))
+            continue
 
         winner, loser = (value, current) if prefer_incoming else (current, value)
         merged[name] = winner
         conflicts[name] = (winner, loser)
     return merged, conflicts
+
+
+def _cut_reading(a: Any, b: Any) -> bool:
+    """Whether one text is the other cut short (a row split at a page break)."""
+    if not isinstance(a, str) or not isinstance(b, str):
+        return False
+    short, long = sorted((a.strip(), b.strip()), key=len)
+    return bool(short) and short != long and long.startswith(short)
 
 
 def merge_and_reconcile(
@@ -263,24 +289,31 @@ def merge_extracted_windows(
     claims = [list(window.get("claims") or []) for window, _ in windows]
     merged, reconciliation = merge_and_reconcile(claims)
     extraction["claims"] = merged.rows
-    for index, row in enumerate(merged.rows):
+    # Each window's rows by key, built once: looking them up per merged value
+    # re-keyed every row of every window for every field.
+    rows_by_key: list[dict[Any, list[tuple[int, dict[str, Any]]]]] = []
+    for rows in claims:
+        index: dict[Any, list[tuple[int, dict[str, Any]]]] = defaultdict(list)
+        for position, candidate in enumerate(rows):
+            if isinstance(candidate, dict):
+                index[_claim_key(candidate)].append((position, candidate))
+        rows_by_key.append(index)
+    for row_index, row in enumerate(merged.rows):
         key = _claim_key(row)
         for name, value in row.items():
-            span = _source_span(windows, claims, key, row, name, value)
+            span = _source_span(windows, rows_by_key, key, row, name, value)
             if span is not None:
-                spans[f"claims[{index}].{name}"] = span
+                spans[f"claims[{row_index}].{name}"] = span
     return extraction, spans, merged, reconciliation
 
 
-def _source_span(windows, claims, key, row, name, value):
+def _source_span(windows, rows_by_key, key, row, name, value):
     """The span of the first window row that is this claim and holds this value."""
-    for (_window, window_spans), rows in zip(windows, claims, strict=True):
-        for position, candidate in enumerate(rows):
-            if not isinstance(candidate, dict) or candidate.get(name) != value:
+    for (_window, window_spans), index in zip(windows, rows_by_key, strict=True):
+        for position, candidate in index.get(key, ()):
+            if candidate.get(name) != value or (key is None and candidate != row):
                 continue
-            same = candidate == row if key is None else _claim_key(candidate) == key
-            if same:
-                return window_spans.get(f"claims[{position}].{name}")
+            return window_spans.get(f"claims[{position}].{name}")
     return None
 
 

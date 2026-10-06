@@ -1,8 +1,9 @@
 """Loss Run claims table F1 (Fideon SPEC_09 handoff item 8).
 
-A claim is found when an extracted claim has the expected claim's number and
-its total incurred within a cent. A wrong total on the right claim is a miss
-and an extra: the row is there, and the figure a reader would sum is wrong.
+A claim is found when an extracted claim has the expected claim's number (or,
+for a claim without one, its loss date) and its total incurred within a cent.
+A wrong total on the right claim is a miss and an extra: the row is there, and
+the figure a reader would sum is wrong.
 Micro-averaged over every claim of every Loss Run, so a long report weighs by
 its claims rather than counting once.
 """
@@ -14,7 +15,7 @@ from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from typing import Any
 
-from common.normalize import normalize_currency, normalize_identifier
+from common.normalize import normalize_currency, normalize_identifier, normalize_text
 
 #: Within a cent: the same figure, rounded the same way.
 TOTAL_TOLERANCE = 0.01
@@ -54,23 +55,36 @@ def _same_total(a: Any, b: Any) -> bool:
 
 
 def score_claims(expected: dict[str, Any], got: dict[str, Any]) -> TableScore:
-    """One Loss Run's claims against its gold."""
+    """One Loss Run's claims against its gold.
+
+    A claim with a number matches a gold claim of that number. One without (a
+    redacted report, an older one) matches a gold claim without a number on the
+    same loss date: such a claim has no other identity, and scoring it as
+    always missed would fail a perfect answer on every redacted Loss Run.
+    Either way its total incurred must agree within a cent.
+    """
     wanted = _claims(expected)
     found = _claims(got)
-    open_by_number: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    open_by_key: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
     for claim in wanted:
-        number = normalize_identifier(claim.get("claim_number"))
-        if number:
-            open_by_number[number].append(claim)
+        open_by_key[_identity(claim)].append(claim)
     matched = 0
     for claim in found:
-        candidates = open_by_number.get(normalize_identifier(claim.get("claim_number")) or "", [])
+        candidates = open_by_key.get(_identity(claim), [])
         hit = next((c for c in candidates if _same_total(c.get("total_incurred"),
                                                          claim.get("total_incurred"))), None)
         if hit is not None:
             candidates.remove(hit)
             matched += 1
     return TableScore(matched=matched, extracted=len(found), expected=len(wanted))
+
+
+def _identity(claim: dict[str, Any]) -> tuple[str, str]:
+    """``("number", n)``, or ``("date", loss date)`` for a claim without a number."""
+    number = normalize_identifier(claim.get("claim_number"))
+    if number:
+        return ("number", str(number))
+    return ("date", str(normalize_text(claim.get("loss_date")) or ""))
 
 
 def table_f1(pairs: Iterable[tuple[dict[str, Any], dict[str, Any]]]) -> TableScore:

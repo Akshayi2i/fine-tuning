@@ -206,3 +206,12 @@ def test_the_reconciliation_report_reaches_the_evaluation(client, monkeypatch):
                          page_texts={p: _page_text(p) for p in range(1, PAGES + 1)})
     triples = golden_eval.evaluate([doc], model, client, "/tmp", modes=("ocr_plus_image",))
     assert triples[0][2]["reconciliation"]["status"] == "unverifiable"
+
+
+def test_claims_without_a_number_match_on_their_loss_date():
+    """A redacted Loss Run: a perfect answer scores 1.0, a wrong total still misses."""
+    redacted = {"claims": [{"claim_number": None, "loss_date": "2024-02-14", "total_incurred": 100.0},
+                           {"claim_number": None, "loss_date": "2024-03-01", "total_incurred": 0.0}]}
+    assert score_claims(redacted, redacted).f1 == 1.0
+    wrong = {"claims": [{**redacted["claims"][0], "total_incurred": 150.0}, redacted["claims"][1]]}
+    assert score_claims(redacted, wrong).matched == 1

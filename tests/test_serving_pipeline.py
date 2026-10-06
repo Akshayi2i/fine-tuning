@@ -615,7 +615,7 @@ def test_an_unkeyable_row_is_kept_not_dropped():
     understates a loss history, which nothing catches."""
     from serving.lossrun_merge import merge_windows
 
-    report = merge_windows([[{"row_type": "claim", "description": "unreadable"}]])
+    report = merge_windows([[{"row_type": "claim", "status": "open"}]])
     assert len(report.rows) == 1
     assert report.unkeyed_rows == 1
 
@@ -629,18 +629,51 @@ def test_a_subtotal_repeated_across_an_overlap_is_counted_once():
     assert len(report.total_rows) == 1
 
 
-def test_the_merged_order_is_stable():
-    """A claims list whose order depends on dict iteration is not comparable
-    against its own previous extraction."""
+def test_the_merged_claims_keep_document_order_and_are_reproducible():
+    """The schema asks for claims in document order, and a claims list whose order
+    depends on dict iteration is not comparable against its own previous
+    extraction: first seen, window by window, row by row."""
     from serving.lossrun_merge import merge_windows
 
     rows = [
         {"row_type": "claim", "claim_number": f"CL-{i}", "total_incurred": float(i)}
         for i in (3, 1, 2)
     ]
-    first = merge_windows([rows])
-    second = merge_windows([list(reversed(rows))])
-    assert [r["claim_number"] for r in first.rows] == [r["claim_number"] for r in second.rows]
+    first = merge_windows([rows[:2], rows[1:]])
+    assert [r["claim_number"] for r in first.rows] == ["CL-3", "CL-1", "CL-2"]
+    assert merge_windows([rows[:2], rows[1:]]).rows == first.rows
+
+
+def test_two_rows_with_one_key_in_one_window_are_two_claims():
+    """Only the overlap repeats a claim: two $0 incidents on one date in one window
+    are two claims, and the next window seeing both again leaves two."""
+    from serving.lossrun_merge import merge_windows
+
+    incident = {"row_type": "claim", "loss_date": "2024-03-01", "total_incurred": 0.0}
+    report = merge_windows([[dict(incident), dict(incident)], [dict(incident), dict(incident)]])
+    assert len(report.rows) == 2 and report.duplicates_collapsed == 2
+
+
+def test_incident_claims_of_one_day_are_told_apart_by_their_description():
+    from serving.lossrun_merge import merge_windows
+
+    report = merge_windows([[
+        {"row_type": "claim", "loss_date": "2024-03-01", "total_incurred": 0.0, "description": "Slip"},
+    ], [
+        {"row_type": "claim", "loss_date": "2024-03-01", "total_incurred": 0.0, "description": "Hail"},
+    ]])
+    assert len(report.rows) == 2
+
+
+def test_a_row_cut_at_a_page_break_keeps_its_full_reading_without_a_conflict():
+    from serving.lossrun_merge import merge_windows
+
+    report = merge_windows([
+        [{"row_type": "claim", "claim_number": "CL-1", "description": "Slip and fall"}],
+        [{"row_type": "claim", "claim_number": "CL-1", "description": "Slip and fall in warehouse, back injury"}],
+    ])
+    assert report.rows[0]["description"] == "Slip and fall in warehouse, back injury"
+    assert not report.conflicts
 
 
 def test_merge_and_reconcile_closes_the_completeness_loop():
