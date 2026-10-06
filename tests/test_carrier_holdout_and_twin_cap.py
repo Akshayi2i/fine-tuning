@@ -192,3 +192,24 @@ def test_after_freezing_a_carrier_held_out_of_a_line_is_watched_in_that_line(cap
     same_line = SimpleNamespace(carrier="acme", doc_type="policy", lob="homeowners")
     warn_on_held_out_carriers(manifest, [same_line])
     assert "acme (homeowners)" in caplog.text
+
+
+def test_the_render_mode_comes_from_the_manifest_or_the_gold(tmp_path):
+    import json as _json
+
+    from data_pipeline.ingestion.prepare_bundles import render_mode
+
+    gold = tmp_path / "g.json"
+    gold.write_text(_json.dumps({"fideon:provenance": {"mode": "scanned_from_digital"}}), encoding="utf-8")
+    assert render_mode({"mode": "Native"}, gold) == "native"                 # the manifest column first
+    assert render_mode({}, gold) == "scanned_from_digital"                   # else the gold's provenance
+    gold.write_text("{}", encoding="utf-8")
+    assert render_mode({}, gold) is None and render_mode({}, tmp_path / "missing.json") is None
+
+
+def test_forty_twins_of_one_seed_in_two_modes_all_train():
+    """SPEC_21 §10: the cap is per seed AND render mode."""
+    assignment = GroupSplitAssignment(assignment={"s": "train"})
+    docs = ([_doc(f"n{i}", "s", mode="native") for i in range(20)]
+            + [_doc(f"c{i}", "s", mode="scanned_from_digital") for i in range(20)])
+    assert len(cap_twins(docs, assignment, seed=42)) == 40 and not assignment.twins_dropped

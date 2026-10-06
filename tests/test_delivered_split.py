@@ -223,7 +223,8 @@ def test_prepare_bundles_writes_one_folder_per_document(tmp_path):
     assert sorted(p.name for p in folder.iterdir()) == ["document.pdf", "golden.json", "metadata.json"]
     meta = json.loads((folder / "metadata.json").read_text("utf-8"))
     assert meta == {"lob": "homeowners", "synthetic": True, "template_id": "Acme/homeowners/ho_1",
-                    "split": "train", "carrier": "Acme", "source_system": "fideon_synth", "sample": 1}
+                    "split": "train", "carrier": "Acme", "source_system": "fideon_synth", "sample": 1,
+                    "render_mode": None}
     original = json.loads((out / "homeowners__ho_1__original/metadata.json").read_text("utf-8"))
     assert original["synthetic"] is False and original["template_id"] == meta["template_id"]
 

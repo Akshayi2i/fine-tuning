@@ -178,10 +178,27 @@ def prepare_bundles(
             "carrier": row.get("carrier") or None,
             "source_system": "fideon_synth",
             "sample": int(row["sample"]) if (row.get("sample") or "").strip().isdigit() else None,
+            # The twin's render mode (SPEC_21 §7.8: native, scanned_from_digital,
+            # ...): the per-seed twin cap counts each mode apart.
+            "render_mode": render_mode(row, gold),
         }
         (folder / "metadata.json").write_text(json.dumps(metadata, indent=2), encoding="utf-8")
         report.written[(split, "synthetic" if metadata["synthetic"] else "real")] += 1
     return report
+
+
+def render_mode(row: dict[str, str], gold: Path) -> str | None:
+    """A twin's render mode: the manifest's ``mode`` column (SPEC_21 manifest.csv),
+    else its gold's ``fideon:provenance.mode``; None when neither says."""
+    value = (row.get("mode") or row.get("render_mode") or "").strip()
+    if value:
+        return value.lower()
+    try:
+        provenance = json.loads(gold.read_text(encoding="utf-8")).get("fideon:provenance") or {}
+    except (OSError, ValueError, AttributeError):
+        return None
+    mode = provenance.get("mode") if isinstance(provenance, dict) else None
+    return str(mode).strip().lower() if isinstance(mode, str) and mode.strip() else None
 
 
 def read_exclusions(path: Path) -> dict[str, str]:
