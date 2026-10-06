@@ -361,16 +361,25 @@ class ZeroShotClassifier:
     #: and not found (serving.pipeline._resolve_lob): no line is a reading.
     reads_lob = True
 
-    def __init__(self, model: Any, generate_fn: Any) -> None:
+    def __init__(self, model: Any, generate_fn: Any, *, adapter: str | None = None) -> None:
         self.model = model
         self.generate = generate_fn
+        #: The LoRA it reads with; None leaves ``generate_fn`` its own default.
+        #: ``model_runner.NO_ADAPTER`` reads with the engine's base weights alone,
+        #: as the line must be: it decides which release's adapter reads the
+        #: policy, so no adapter can have been chosen yet.
+        self.adapter = adapter
 
     def classify(self, image_paths: list[str], ocr_text: str | None) -> Classification:
+        from inference_core.model_runner import NO_ADAPTER
+
         messages = classifier_messages(image_paths, ocr_text)
+        named = {} if self.adapter is None else {"adapter": self.adapter}
         # Logprobs for the line's confidence: the one number here routing acts on.
-        result = self.generate(self.model, messages, want_logprobs=True)
+        result = self.generate(self.model, messages, want_logprobs=True, **named)
         classification = parse_classification(result.text)
-        classification.method = "zero_shot_base" if getattr(self.model, "is_base", False) else "zero_shot"
+        base = self.adapter == NO_ADAPTER or getattr(self.model, "is_base", False)
+        classification.method = "zero_shot_base" if base else "zero_shot"
         if classification.lob is not None:
             classification.lob_stage = "base"
             classification.lob_confidence = line_confidence(

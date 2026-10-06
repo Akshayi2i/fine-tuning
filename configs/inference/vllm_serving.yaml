@@ -82,7 +82,10 @@ routing:
   # documents and held-out carriers reported apart), both thresholds fitted from
   # its sweep, and every line has cleared its floor. Off, a policy with no line
   # is refused, or read against the fallback when the caller sends
-  # allow_lob_fallback.
+  # allow_lob_fallback. On, the endpoint builds the classifier at cold start:
+  # the base model with no adapter (serving.vllm_entrypoint.line_classifier),
+  # which needs the releases served as LoRAs on the base - an engine holding
+  # one release's merged model reads no line.
   detect_lob: false
   lob_confidence_threshold: 0.90
   lob_family_threshold: 0.60

@@ -276,6 +276,46 @@ def serves_base_with_loras(plan: Any) -> bool:
     return any(plan.route("policy", line).lob_fallback_used for line in lob_to_layout_family())
 
 
+def line_classifier(model: Any, plan: Any) -> Any:
+    """The classifier that reads a policy's line when no caller sent one: the
+    zero-shot classifier on the engine's base weights, with no adapter.
+
+    The line decides which release's adapter reads the policy, so it is read
+    before any adapter is chosen - by the base model, answering a prompt it was
+    never trained on (serving.doc_type_classifier). None when the engine holds
+    no base model: a release's merged model would read the line with that
+    release's weights while reporting the base.
+    """
+    from inference_core.model_runner import NO_ADAPTER, generate
+    from serving.doc_type_classifier import ZeroShotClassifier
+
+    if not (serves_base_with_loras(plan) or getattr(model, "is_base", False)):
+        return None
+    return ZeroShotClassifier(model, generate, adapter=NO_ADAPTER)
+
+
+def classifier_for(classifier: Any, model: Any, plan: Any, *, detect_lob: bool) -> Any:
+    """The classifier a warm endpoint holds.
+
+    The one it was given, when it was given one. Otherwise, with line detection
+    on (``routing.detect_lob``), the base-model line classifier
+    (:func:`line_classifier`), which also reads the type of a document sent with
+    none; with it off, none, as before detection existed - so turning detection
+    on is that one setting, once its accuracy has been measured
+    (scripts/measure_lob_detection.py).
+    """
+    if classifier is not None or not detect_lob:
+        return classifier
+    built = line_classifier(model, plan)
+    if built is None:
+        log.warning(
+            "routing.detect_lob is on, but this engine holds a release's merged model, not the "
+            "base: no line is read, and a policy sent with none is routed as with detection off. "
+            "Serve the releases as LoRAs on the base model to read lines."
+        )
+    return built
+
+
 def load_release_runtimes(
     plan: Any,
     client: BlobClient,
@@ -410,7 +450,8 @@ def cold_start(
     state = EndpointState(
         model_version=model_version,
         model=model,
-        classifier=classifier,
+        classifier=classifier_for(
+            classifier, model, plan, detect_lob=bool(serving_thresholds().get("detect_lob"))),
         adapter_map=build_adapter_map(model_version, client),
         calibration=load_calibrations(model_version, client),
         plan=plan,
