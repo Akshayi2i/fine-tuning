@@ -13,10 +13,13 @@ extends: unified
 # seed before a second of any. Validation and test are never sampled.
 #
 #   synthetic_fraction  synthetic / train documents of the line. 0.8 with 12
-#                       real documents keeps 48 synthetic ones. null: all.
+#                       real documents keeps 48 synthetic ones.
 #   scanned_share       scanned / train documents of the line: the share of
-#                       scanned policies the line sees in production. null: not
-#                       steered.
+#                       scanned policies the line sees in production.
+#
+# The two values at the top are the scope defaults; null there leaves the share
+# unsteered (every synthetic document trains). A line's own value overrides
+# the default; null under a line takes the default.
 #
 # Both are null until set, which trains exactly what it did before: all 152
 # originals are scans and every synthetic copy is rendered from one, so a

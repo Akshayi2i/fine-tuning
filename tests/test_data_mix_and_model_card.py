@@ -277,3 +277,18 @@ def test_the_gate_result_and_tier_reach_the_card_written_beside_the_manifest(cli
     card = client.read_text(key.replace("run_manifest.json", "model_card.md"))
     assert key.endswith("/run_manifest.json") and "registry/scope/personal_lines/" in key
     assert "Verdict: passed, interim release." in card and "| field_normalized_match | 0.89 |" in card
+
+
+def test_a_lines_null_takes_the_scope_default():
+    settings = parse_settings({"synthetic_fraction": 0.8, "scanned_share": 0.5,
+                               "lines": {"homeowners": {"synthetic_fraction": None, "scanned_share": None},
+                                         "motorcycle": {"synthetic_fraction": 0.6}}}, lines=PERSONAL.lines)
+    assert settings.for_line("homeowners") == (0.8, 0.5)
+    assert settings.for_line("motorcycle") == (0.6, 0.5)
+    assert settings.steers
+
+
+def test_a_package_line_matches_in_any_order():
+    settings = parse_settings({"lines": {"personal_auto,homeowners": {"synthetic_fraction": 0.7}}},
+                              lines=PERSONAL.lines)
+    assert settings.for_line("homeowners,personal_auto") == (0.7, None)

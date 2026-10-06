@@ -15,7 +15,8 @@ Configured in the scope's training config::
       lines:                    # per line, over the scope defaults above
         homeowners: {scanned_share: 0.4}
 
-``null`` or absent leaves a share unsteered. With neither share set, every
+A per-line ``null`` (or a share left out) takes the scope default; a scope
+default of ``null`` (or absent) leaves that share unsteered. With neither share set, every
 document trains, as before these settings existed. Counted in documents, as
 ``line_balance`` counts them: a long policy has many rows and is one example.
 
@@ -99,7 +100,11 @@ def parse_settings(raw: dict[str, Any] | None, *, lines: frozenset[str] = frozen
         entry = entry or {}
         if set(entry) - set(SHARES):
             raise DataMixError(f"data_mix.lines.{line} has unknown key(s) {sorted(set(entry) - set(SHARES))}")
-        per_line[str(line)] = {k: _share(v, f"data_mix.lines.{line}.{k}") for k, v in entry.items()}
+        # A null is "not set for this line": the scope default applies. And a
+        # package's lines in sorted order, as the view joins them (corpus_view._line_of).
+        key = ",".join(sorted(part.strip() for part in str(line).split(",")))
+        per_line[key] = {k: share for k, v in entry.items()
+                         if (share := _share(v, f"data_mix.lines.{line}.{k}")) is not None}
     return MixSettings(_share(raw.get("synthetic_fraction"), "data_mix.synthetic_fraction"),
                        _share(raw.get("scanned_share"), "data_mix.scanned_share"), per_line)
 
