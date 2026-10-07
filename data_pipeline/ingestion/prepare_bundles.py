@@ -158,13 +158,20 @@ def _place(source: Path, dest: Path, mode: str, report: PrepareReport) -> None:
     report.copied += 1
 
 
-def _write_gold(path: Path, gold: dict) -> None:
-    """Write a corrected gold as a NEW file at ``path``. An earlier run may have
-    hard-linked the delivered gold there; writing in place went through the link
-    and overwrote the delivery's own gold."""
+def _write_new(path: Path, text: str) -> None:
+    """Write ``text`` as a NEW file at ``path``, never through the file there. An
+    earlier run may have hard-linked the delivered gold there, and a batch drawn
+    from the bundles (the smoke batch) is hard links to their files: writing in
+    place overwrote the delivery's own gold, or changed a batch's metadata under
+    its old gold."""
     tmp = path.with_name(path.name + ".tmp")
-    tmp.write_text(json.dumps(gold, indent=2, ensure_ascii=False), encoding="utf-8")
+    tmp.write_text(text, encoding="utf-8")
     os.replace(tmp, path)
+
+
+def _write_gold(path: Path, gold: dict) -> None:
+    """Write a corrected gold as a new file at ``path`` (:func:`_write_new`)."""
+    _write_new(path, json.dumps(gold, indent=2, ensure_ascii=False))
 
 
 def prepare_bundles(
@@ -251,7 +258,7 @@ def prepare_bundles(
         folder.mkdir(parents=True, exist_ok=True)
         _place(pdf, folder / "document.pdf", mode, report)
         _place(gold, folder / "golden.json", mode, report)
-        (folder / "metadata.json").write_text(json.dumps(metadata, indent=2), encoding="utf-8")
+        _write_new(folder / "metadata.json", json.dumps(metadata, indent=2))
     return report
 
 
@@ -316,7 +323,7 @@ def prepare_twin_bundles(
             # document, a scan, not the same PDF twice under two render modes.
             notes.append(("renders identical", f"{renders[0][1].name} is the scan; one document"))
             renders = renders[1:]
-        changed = any(kind != "renders identical" for kind, _ in notes)
+        changed = _gold_changed(notes)
         for kind, detail in notes:
             report.corrections[kind] += 1
             report.correction_rows.append((row["twin"], kind, detail))
@@ -340,6 +347,9 @@ def prepare_twin_bundles(
                 "source_system": "fideon_synth",
                 "sample": int(number.group(1)) if number else None,
                 "render_mode": render,
+                # Values (fields or extra fields) no page prints: the corpus build
+                # leaves out the windows holding them (label_rules.PRINTED_NOWHERE).
+                "unprinted_values": _unprinted(notes),
             }
             report.written[(split, "synthetic")] += 1
             if dry_run:
@@ -355,7 +365,7 @@ def prepare_twin_bundles(
                 last = index == len(renders) - 1
                 _place(gold_path, folder / "golden.json", "copy" if mode == "move" and not last else mode,
                        report)
-            (folder / "metadata.json").write_text(json.dumps(metadata, indent=2), encoding="utf-8")
+            _write_new(folder / "metadata.json", json.dumps(metadata, indent=2))
 
     if originals is not None:
         _bundle_originals(originals, rows, out, lines=lines, mode=mode, exclusions=exclusions,
@@ -377,6 +387,20 @@ def prepare_twin_bundles(
             writer.writerow(["twin", "correction", "detail"])
             writer.writerows(report.correction_rows)
     return report
+
+
+def _gold_changed(notes: list[tuple[str, str]]) -> bool:
+    """Whether the corrections changed the gold itself: a note that the renders
+    are one file, or that a value is printed nowhere, leaves it as delivered."""
+    from data_pipeline.ingestion.label_rules import PRINTED_NOWHERE
+
+    return any(kind not in ("renders identical", PRINTED_NOWHERE) for kind, _ in notes)
+
+
+def _unprinted(notes: list[tuple[str, str]]) -> list[str]:
+    from data_pipeline.ingestion.label_rules import PRINTED_NOWHERE
+
+    return [detail for kind, detail in notes if kind == PRINTED_NOWHERE]
 
 
 def _original_name(lob: str, carrier: str, seed: str) -> str:
@@ -452,6 +476,7 @@ def _bundle_originals(
             "source_system": "spec21_seed",
             "sample": None,
             "render_mode": None,
+            "unprinted_values": _unprinted(notes),
         }
         report.written[(split, "real")] += 1
         if dry_run:
@@ -459,11 +484,11 @@ def _bundle_originals(
         folder = out / name
         folder.mkdir(parents=True, exist_ok=True)
         _place(pdf, folder / "document.pdf", mode, report)
-        if notes:
+        if _gold_changed(notes):
             _write_gold(folder / "golden.json", gold)
         else:
             _place(gold_path, folder / "golden.json", mode, report)
-        (folder / "metadata.json").write_text(json.dumps(metadata, indent=2), encoding="utf-8")
+        _write_new(folder / "metadata.json", json.dumps(metadata, indent=2))
 
 
 def read_recodes(path: Path = RECODES) -> dict[str, dict[str, str]]:
@@ -490,7 +515,9 @@ def corrected_gold(
     """``(gold, [(kind, detail)], problem)``: the gold a bundle holds.
 
     For a SPEC_21 common-model line, three corrections, each only where the
-    delivered gold cannot be trained on as it is:
+    delivered gold cannot be trained on as it is, then the label rules
+    (``data_pipeline.ingestion.label_rules``; a value printed nowhere is listed
+    as a :data:`~data_pipeline.ingestion.label_rules.PRINTED_NOWHERE` note):
 
     * **coverage code** in no list of the line, re-coded to the listed code the
       overlays' changelogs give for it (``configs/coverage_code_recodes.yaml``):
@@ -554,6 +581,13 @@ def corrected_gold(
                                             "confidence": {"score": 1.0, "source": "deterministic"},
                                             "page_ref": pages, "flagged": False}}
                 notes.append(("carrier missing", f"carrier.name = {raw!r} as printed on page(s) {pages}"))
+
+        # The agreed conventions (data_pipeline.ingestion.label_rules): each value
+        # once, citing every page that prints it; extra fields only for values
+        # with no field of their own; numbers only where printed as numbers.
+        from data_pipeline.ingestion.label_rules import apply_label_rules, page_texts, scanned_pages
+
+        notes.extend(apply_label_rules(gold, page_texts(text_pdf), scanned=scanned_pages(text_pdf)))
 
     errors = list(iter_validation_errors(gold, "policy", None, lob))
     return gold, notes, (errors[0][:200] if errors else None)

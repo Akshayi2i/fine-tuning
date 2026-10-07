@@ -96,6 +96,10 @@ class SourceDocument:
     #: the render mode it was generated in (digital / scanned twins, SPEC_21).
     twin_index: int | None = None
     render_mode: str | None = None
+    #: Label paths of values no page prints, in fields or extra fields
+    #: (prepare_bundles' label rules): the windows holding one are left out of
+    #: training.
+    unprinted_values: list[str] = field(default_factory=list)
 
     @property
     def family(self) -> str:
@@ -269,8 +273,18 @@ def _policy_window_rows(
     # that records no page as it is (policy_windows.with_inferred_pages).
     label = with_inferred_pages(label, document.ocr_pages, report,
                                 sections=multi_window_sections(document.lob, plans))
+    unprinted = _unprinted_values(label, document.unprinted_values)
     rows: list[dict[str, Any]] = []
     for plan in plans:
+        held = _held_unprinted(plan, document.lob, unprinted)
+        if held:
+            # A value no page prints, in this window's sections and pages: left
+            # out whole. Taught, it is a value to invent; deleted from the
+            # target, a printed value the search missed would be taught as one
+            # to skip.
+            details.append(f"window {mode}: {plan.group}:{plan.window_index} left out, it holds "
+                           f"{len(held)} value(s) no page prints ({held[0]})")
+            continue
         target = window_target(label, document.lob, plan, report)
         indices = [page - 1 for page in plan.pages]
         window_ocr = None if ocr_pages is None else [ocr_pages[i] for i in indices]
@@ -338,6 +352,39 @@ def _policy_window_rows(
     return rows
 
 
+def _unprinted_values(label: dict[str, Any], paths: list[str]) -> list[tuple[str, str, set[int]]]:
+    """``(path, section, pages it cites)`` for each label value no page prints."""
+    import re
+
+    out = []
+    for path in paths or ():
+        node: Any = label
+        for key, index in re.findall(r"([^.\[\]]+)|\[(\d+)\]", path):
+            step: Any = int(index) if index else key
+            try:
+                node = node[step]
+            except (KeyError, IndexError, TypeError):
+                node = None
+                break
+        if isinstance(node, dict):
+            pages = {int(p) for p in node.get("page_ref") or [] if str(p).isdigit()}
+            out.append((path, re.split(r"[.\[]", path, maxsplit=1)[0], pages))
+    return out
+
+
+def _held_unprinted(plan: Any, lob: Any, unprinted: list[tuple[str, str, set[int]]]) -> list[str]:
+    """The unprinted values this window's target would hold: its group's
+    sections, on its pages - or, citing no page, any single-window group."""
+    from common.schema_sections import sections_for
+
+    if not unprinted:
+        return []
+    sections = set(sections_for(plan.group, lob))
+    window = set(plan.pages)
+    return [path for path, section, pages in unprinted
+            if section in sections and (pages & window if pages else plan.single)]
+
+
 def classify_rows(
     document: SourceDocument, split: str, modes: tuple[str, ...], *, seed: int = 42,
 ) -> list[dict[str, Any]]:
@@ -356,7 +403,12 @@ def classify_rows(
     several lines, or has a line in no family.
     """
     from common.config import lob_to_layout_family, lobs_in_family
-    from serving.doc_type_classifier import CLASSIFIER_PAGES, classifier_input, classifier_messages, known_line
+    from serving.doc_type_classifier import (
+        CLASSIFIER_PAGES,
+        classifier_input,
+        classifier_messages,
+        known_line,
+    )
 
     lines = document.lob if isinstance(document.lob, list) else [document.lob]
     line = known_line(lines[0]) if document.doc_type == "policy" and len(lines) == 1 else None

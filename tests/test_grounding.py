@@ -34,6 +34,21 @@ def test_words_split_across_lines_or_columns_still_match():
     assert not grounding.appears("Rivera Fabrication LLC", "Meridian Holdings")
 
 
+def test_a_code_is_not_found_in_pieces_of_other_values():
+    page = "Prior policy HX-0000-0000  Form 0001"
+    assert not grounding.appears("HX-0000-0001", page)
+    assert grounding.appears("HX-0000-0000", page)
+
+
+def test_an_amount_matches_the_same_figure_in_another_format():
+    assert grounding.appears("$7,579.67", "TOTAL ANNUAL AUTO PREMIUM 7579.67")
+    assert grounding.appears(18.0, "Personal Injury $18.00")
+    assert grounding.appears("$500", "Deductible 500")
+    assert grounding.appears("$25.00", "On-Water Towing (optional), $25 a year")
+    assert not grounding.appears("$7,579.67", "TOTAL 7,579.76")
+    assert not grounding.appears("$2.00", "Location: 2 TOWN RD  Page 2 of 3")    # a house number, a page
+
+
 def test_the_ocr_feature_matches_on_word_boundaries_and_skips_short_values():
     assert ocr_agreement("10", "Policy 10 of 12") is None          # too short to look for
     assert ocr_agreement("2100", "Limit 21000") == 0.0              # no longer a substring hit

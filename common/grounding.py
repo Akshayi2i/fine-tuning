@@ -41,28 +41,68 @@ def normalise(text: Any) -> str:
     return " ".join(_NON_WORD.sub(" ", str(text).casefold()).split())
 
 
+_FIGURE = re.compile(r"\$?\d[\d,]*(?:\.\d+)?")
+#: Only figure characters: an amount or a count, not a code that holds digits.
+_AMOUNT = re.compile(r"[\s$()+\-.,%]*\d[\d,]*(?:\.\d+)?[\s$()%]*")
+
+
 class PageText:
     """A page's text normalised once, for every value looked up on it."""
 
     def __init__(self, text: str | None) -> None:
         self.padded = f" {normalise(text or '')} "
         self.words = set(self.padded.split())
+        #: Every amount the page prints, as a number: "$7,579.67" and "7579.67"
+        #: are one. Not a bare digit or two ("2 TOWN RD", "Page 3"): "$2.00"
+        #: would be printed on every page - but "$25" is an amount.
+        self.numbers = {number for number in map(_as_number, (
+            figure for figure in _FIGURE.findall(text or "")
+            if len(figure) >= 3 or any(mark in figure for mark in "$.,"))) if number is not None}
+
+
+def _as_number(text: Any) -> float | None:
+    """An amount or a count as a number (2 decimals), when ``text`` is only that."""
+    if isinstance(text, bool):
+        return None
+    if isinstance(text, (int, float)):
+        return round(float(text), 2)
+    if not isinstance(text, str) or not _AMOUNT.fullmatch(text):
+        return None
+    figures = re.sub(r"[^\d.]", "", text)
+    try:
+        return round(float(figures), 2)
+    except ValueError:
+        return None
 
 
 def appears_on(value: str, page: PageText) -> bool:
-    """Whether an already-normalised ``value`` is on ``page``."""
+    """Whether an already-normalised ``value`` is on ``page``: as a phrase, or -
+    a phrase broken across lines or table columns - as every one of its words.
+    Not so for a code of short pieces: "HX-0000-0001" is the words "hx", "0000"
+    and "0001", which any page holding "HX-0000-0000" and a "0001" also holds.
+    Only a value with a word of three letters or more is matched word by word."""
     if not value:
         return False
     if f" {value} " in page.padded:
         return True
     words = value.split()
-    return len(words) > 1 and set(words) <= page.words
+    return (len(words) > 1 and any(sum(ch.isalpha() for ch in word) >= 3 for word in words)
+            and set(words) <= page.words)
+
+
+def on_page(raw: Any, page: PageText) -> bool:
+    """Whether ``raw`` is printed on ``page``: as a phrase or every one of its
+    words, or - an amount or a count - as the same figure in another format."""
+    if appears_on(normalise(raw), page):
+        return True
+    number = _as_number(raw)
+    return number is not None and number in page.numbers
 
 
 def appears(raw: Any, page_text: str | None) -> bool:
     """Whether ``raw`` is on the page, as a phrase or - across line breaks and
-    columns - as every one of its words."""
-    return appears_on(normalise(raw), PageText(page_text))
+    columns - as every one of its words, or as the same figure."""
+    return on_page(raw, PageText(page_text))
 
 
 def checkable(raw: Any) -> bool:
@@ -99,7 +139,7 @@ def ground(raw: Any, cited: Iterable[Any] | None, pages: Mapping[int, str | Page
              for number, text in pages.items()}
     if not any(text.words for text in texts.values()):
         return Grounding(UNCHECKED)
-    found = tuple(sorted(number for number, text in texts.items() if appears_on(value, text)))
+    found = tuple(sorted(number for number, text in texts.items() if on_page(raw, text)))
     wanted = {int(page) for page in cited or () if str(page).lstrip("-").isdigit()}
     if found:
         return Grounding(ON_CITED_PAGE if not wanted or wanted & set(found) else ON_OTHER_PAGE, found)

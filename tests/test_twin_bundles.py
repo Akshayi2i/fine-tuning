@@ -69,6 +69,9 @@ def test_each_twin_becomes_a_digital_and_a_scanned_document_reading_one_gold(tmp
     assert report.written == {("train", "synthetic"): 4}
     folder = out / "homeowners__all_state__seed_a__twin_002__scan"
     meta = json.loads((folder / "metadata.json").read_text(encoding="utf-8"))
+    # The example gold's values are on no page of these one-line PDFs: a page whose
+    # text misses most of what its label cites settles nothing, so none is listed.
+    assert meta.pop("unprinted_values") == []
     assert meta == {"lob": "homeowners", "synthetic": True, "template_id": "homeowners/seed_a", "split": "train",
                     "carrier": "all_state", "source_system": "fideon_synth", "sample": 2, "render_mode": "scanned"}
     digital = json.loads((out / "homeowners__all_state__seed_a__twin_002" / "metadata.json").read_text("utf-8"))
@@ -223,6 +226,32 @@ def test_a_gold_corrected_on_a_rerun_is_a_new_file_and_the_delivered_gold_is_unt
     assert [path.read_bytes() for path in delivered] == before
     for name in (TWIN_1, f"{TWIN_1}__scan", ORIGINAL):
         assert json.loads((out / name / "golden.json").read_text(encoding="utf-8"))["x_marker"] == 1
+
+
+def test_a_rerun_writes_new_files_and_a_batch_linked_to_the_bundles_keeps_its_own(tmp_path, monkeypatch):
+    """A batch drawn from the bundles (the smoke batch) is hard links to their
+    files: rewriting the metadata in place changed the batch's metadata - its
+    printed-nowhere paths - under the batch's old gold."""
+    import os
+
+    from data_pipeline.ingestion import prepare_bundles as module
+    from data_pipeline.ingestion.label_rules import PRINTED_NOWHERE
+
+    root = _delivery(tmp_path, {1: _gold()})
+    out = tmp_path / "bundles"
+    _corrections(monkeypatch, None)
+    prepare_twin_bundles(root, out)
+    batch = tmp_path / "smoke" / TWIN_1
+    batch.mkdir(parents=True)
+    for name in ("golden.json", "metadata.json"):
+        os.link(out / TWIN_1 / name, batch / name)
+    before = {name: (batch / name).read_bytes() for name in ("golden.json", "metadata.json")}
+    monkeypatch.setattr(module, "corrected_gold", lambda gold, lob, **_: (
+        {**gold, "x_marker": 1}, [(PRINTED_NOWHERE, "policy.policy_number")], None))
+    prepare_twin_bundles(root, out)
+    meta = json.loads((out / TWIN_1 / "metadata.json").read_text(encoding="utf-8"))
+    assert meta["unprinted_values"] == ["policy.policy_number"]
+    assert {name: (batch / name).read_bytes() for name in before} == before
 
 
 def test_move_mode_gives_both_renders_their_shared_gold(tmp_path, monkeypatch):

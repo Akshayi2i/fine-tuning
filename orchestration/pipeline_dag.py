@@ -528,6 +528,7 @@ def load_labeled_documents(ctx: StageContext) -> list[Any]:
                 template_id=metadata.get("template_id"),
                 twin_index=metadata.get("twin_index") if metadata.get("synthetic") else None,
                 render_mode=metadata.get("render_mode"),
+                unprinted_values=list(metadata.get("unprinted_values") or []),
             ))
     ctx.grouping = assign_document_groups(ctx, documents)
     return documents

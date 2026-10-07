@@ -242,6 +242,9 @@ def import_bundle(
         "carrier": bundle.metadata.get("carrier"),
         "twin_index": twin_index(bundle.metadata),
         "render_mode": bundle.metadata.get("render_mode"),
+        # Label values no page prints (prepare_bundles' label rules): the corpus
+        # build leaves out the windows that hold them.
+        "unprinted_values": list(bundle.metadata.get("unprinted_values") or []),
         "synthetic": bool(bundle.metadata.get("synthetic", False)),
         # The delivery's own split (train/val/test), when it was split upstream:
         # the corpus build then uses it as given (split_groups.assign_delivered_splits).
