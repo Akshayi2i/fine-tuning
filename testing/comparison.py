@@ -9,8 +9,8 @@ matched by position (``[#2]``).
 
 Each model's value gets a result against the gold value:
 
-* **correct** - the same value (``values_match``, the comparison every accuracy
-  metric uses: dates, amounts and names normalised);
+* **correct** - the same value (``values_agree``, the comparison every accuracy
+  metric uses: dates, amounts and names normalised, numbers by their declared type);
 * **wrong** - a different value;
 * **missed** - the gold has a value, the model left it empty;
 * **invented** - the model wrote a value where the gold has none.
@@ -18,12 +18,20 @@ Each model's value gets a result against the gold value:
 Gold is compared as training and scoring use it: narrowed to what the line's
 schema can hold (``common.canonical.schema_label``). The system-filled fields
 (file name, page count) are left out of both sides.
+
+:func:`field_report` gives one answer the same results as JSON, for every field
+its line's schema declares - those neither the answer nor the gold holds too -
+so a reader sees, out of all of them, which came back right, wrong, empty or not
+at all.
 """
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+import re
+from collections import Counter
+from collections.abc import Iterable, Iterator
 from dataclasses import dataclass, field
+from functools import cache
 from pathlib import Path
 from typing import Any
 
@@ -135,6 +143,36 @@ def _labelled(rows: list[dict[str, Any]], key: str | None) -> list[tuple[str, di
     return out
 
 
+def _join(prefix: str, key: str) -> str:
+    return f"{prefix}.{key}" if prefix else key
+
+
+def _leaves(node: Any, gold: Any, path: str, index: str, field: str) -> Iterator[tuple[str, str, str, Any]]:
+    """Each leaf as ``(path, index path, schema field, leaf)`` - :func:`keyed_flatten`'s walk.
+
+    The path labels a row by its identifier; the index path numbers it as the
+    answer does (``coverages[3].premium``, the form review flags name); the
+    schema field writes every row as ``[]`` (``coverages[].premium``).
+    """
+    from common.canonical import is_field_value
+
+    if is_field_value(node):
+        yield path, index, field, node
+    elif isinstance(node, dict):
+        source = gold if isinstance(gold, dict) else {}
+        for key, value in node.items():
+            yield from _leaves(value, source.get(key), _join(path, key), _join(index, key), _join(field, key))
+    elif _is_rows(node):
+        gold_rows = gold if _is_rows(gold) else []
+        key = _key_field(gold_rows or node)
+        gold_by_label = dict(_labelled(gold_rows, key))
+        for position, (label, row) in enumerate(_labelled(node, key)):
+            yield from _leaves(row, gold_by_label.get(label), f"{path}[{label}]", f"{index}[{position}]",
+                               f"{field}[]")
+    else:
+        yield path, index, field, node
+
+
 def keyed_flatten(node: Any, gold: Any = None, prefix: str = "",
                   out: dict[str, Any] | None = None) -> dict[str, Any]:
     """``{path: leaf}`` with table rows labelled by their identifier.
@@ -144,23 +182,9 @@ def keyed_flatten(node: Any, gold: Any = None, prefix: str = "",
     the same place: its rows decide which field identifies a table, so the gold
     and both models label the same row the same way.
     """
-    from common.canonical import is_field_value
-
     out = {} if out is None else out
-    if is_field_value(node):
-        out[prefix] = node
-    elif isinstance(node, dict):
-        source = gold if isinstance(gold, dict) else {}
-        for key, value in node.items():
-            keyed_flatten(value, source.get(key), f"{prefix}.{key}" if prefix else key, out)
-    elif _is_rows(node):
-        gold_rows = gold if _is_rows(gold) else []
-        key = _key_field(gold_rows or node)
-        gold_by_label = dict(_labelled(gold_rows, key))
-        for label, row in _labelled(node, key):
-            keyed_flatten(row, gold_by_label.get(label), f"{prefix}[{label}]", out)
-    else:
-        out[prefix] = node
+    for path, _index, _field, leaf in _leaves(node, gold, prefix, prefix, prefix):
+        out[path] = leaf
     return out
 
 
@@ -179,13 +203,13 @@ def _pages(leaf: Any) -> list[int]:
 
 
 def _result(gold: Any, got: Any, path: str) -> str | None:
-    from common.normalize import values_match
+    from evaluation.metrics.field_accuracy import values_agree
 
     if _empty(gold):
         return "invented" if not _empty(got) else None
     if _empty(got):
         return "missed"
-    return "correct" if values_match(gold, got, field_path=path) else "wrong"
+    return "correct" if values_agree(gold, got, path) else "wrong"
 
 
 def _stated(node: Any) -> int:
@@ -205,7 +229,6 @@ def compare(gold_label: dict[str, Any] | None, base: dict[str, Any], adapter: di
     """One row per field any of the three holds a value for, with each model's result."""
     from common.canonical import schema_label, without_system_fields
     from common.label_mapping import map_label
-
     from common.structural_ids import comparable_for
 
     gold = without_system_fields(schema_label(gold_label or {}, doc_type, acord_form, lob))
@@ -215,13 +238,22 @@ def compare(gold_label: dict[str, Any] | None, base: dict[str, Any], adapter: di
     # what its links name, never by id (common.structural_ids.comparable_view).
     gold, base, adapter = (comparable_for(doc, doc_type, acord_form, lob) for doc in (gold, base, adapter))
 
-    flat_gold = keyed_flatten(gold, gold)
-    flat_base = keyed_flatten(base, gold)
-    flat_adapter = keyed_flatten(adapter, gold)
+    flat_gold: dict[str, Any] = {}
+    flat_base: dict[str, Any] = {}
+    flat_adapter: dict[str, Any] = {}
+    field_of: dict[str, str] = {}
+    for flat, doc in ((flat_gold, gold), (flat_base, base), (flat_adapter, adapter)):
+        for path, _index, name, leaf in _leaves(doc, gold, "", "", ""):
+            flat[path], field_of[path] = leaf, name
+    # A field the model is never asked for (what the pipeline fills, what another
+    # path reads) is no model's to get right or wrong.
+    unasked = _field_sets(doc_type, acord_form, lob)[1]
 
     rows: list[FieldRow] = []
     scores = (ModelScore(), ModelScore())
     for path in dict.fromkeys([*flat_gold, *flat_adapter, *flat_base]):
+        if _within(field_of[path], unasked):
+            continue
         gold_value = _value(flat_gold.get(path))
         base_value, adapter_value = _value(flat_base.get(path)), _value(flat_adapter.get(path))
         if _empty(gold_value) and _empty(base_value) and _empty(adapter_value):
@@ -232,6 +264,249 @@ def compare(gold_label: dict[str, Any] | None, base: dict[str, Any], adapter: di
         rows.append(FieldRow(path, gold_value, base_value, adapter_value, base_result, adapter_result,
                              _pages(flat_gold.get(path))))
     return Comparison(rows, scores[0], scores[1], max(outside, 0))
+
+
+# --------------------------------------------------------------------------
+# Every field of the schema, one answer
+# --------------------------------------------------------------------------
+
+
+#: What an answer holds for a field (:func:`field_report`).
+FIELD_STATUSES: dict[str, str] = {
+    "extracted": "the model wrote a value",
+    "null": "the key is in the answer, with no value",
+    "no_rows": "a column of a table the answer has no rows in",
+    "not_in_output": "not in the answer: a row it does not have, or a key the schema does not allow to be null",
+    "system": "never asked of the model: the pipeline fills it (a page count, a form's page range) "
+              "or another path reads it (text_sections); not graded",
+    "structural": "a row id: the writer's own numbering, compared through what names it; not graded",
+}
+
+#: Schema fields that hold no value from a page, with why.
+_FIELD_NOTES = {"text_sections": "the full printed text, a tier of its own; not part of the extraction"}
+
+
+def schema_fields(doc_type: str, acord_form: str | None = None, lob: Any = None, *,
+                  asked: bool = False) -> list[str]:
+    """Every field a schema declares, in schema order, named as :func:`keyed_flatten`
+    names it with each row as ``[]``: ``carrier.name``, ``coverages[].limits[].amount``.
+
+    A value in its envelope is one field, and so is a list of values. Any document
+    type: a canonical schema refers only to its own ``$defs`` and is read as
+    :func:`common.canonical.with_all_keys` reads the schema it fills; the flat
+    schemas in ``schemas/`` (ACORD forms, Loss Runs) refer to other files and are
+    read with those references inlined. ``asked`` gives the fields of the schema
+    as the model is shown it (``common.schemas.resolved_schema``): without what
+    the pipeline fills (a page count, a form's page range) or another path reads
+    (``text_sections``) - the fields training teaches and scoring grades.
+    """
+    from common.schemas import _strip_prefixed, is_canonical, load_schema, resolved_schema
+
+    schema = (_strip_prefixed(load_schema(doc_type, acord_form, lob), ("fideon:",))
+              if is_canonical(doc_type, acord_form, lob) and not asked
+              else resolved_schema(doc_type, acord_form, lob))
+    defs = schema.get("$defs") or {}
+
+    def resolve(sub: Any) -> dict[str, Any]:
+        for _ in range(20):
+            if not isinstance(sub, dict):
+                return {}
+            if "$ref" in sub:
+                ref = sub["$ref"]
+                sub = defs.get(ref.rsplit("/", 1)[-1]) if ref.startswith("#/$defs/") else None
+                continue
+            branches = sub.get("anyOf") or sub.get("oneOf")
+            if branches and "properties" not in sub and "items" not in sub:
+                sub = next((b for b in map(resolve, branches) if "properties" in b or "items" in b), {})
+                continue
+            return sub
+        return {}
+
+    def is_envelope(sub: dict[str, Any]) -> bool:
+        return {"raw", "parsed", "page_ref"} <= set(sub.get("properties") or {})
+
+    fields: list[str] = []
+
+    def walk(sub: Any, path: str, depth: int) -> None:
+        sub = resolve(sub)
+        rows = resolve(sub.get("items")) if sub.get("type") == "array" or "items" in sub else {}
+        if depth > 30 or is_envelope(sub):
+            fields.append(path)
+        elif sub.get("properties"):
+            for key, child in sub["properties"].items():
+                walk(child, _join(path, key), depth + 1)
+        elif rows.get("properties") and not is_envelope(rows):
+            walk(rows, f"{path}[]", depth + 1)
+        elif path:
+            fields.append(path)
+
+    walk(schema, "", 0)
+    return list(dict.fromkeys(fields))
+
+
+def _field_sets(doc_type: str, acord_form: str | None, lob: Any) -> tuple[tuple[str, ...], frozenset[str]]:
+    """``(every field the schema declares, those never asked of the model)``: the
+    system fields, and what the schema as the model sees it leaves out. For a
+    document no schema selects, no fields and only the system ones."""
+    return _field_sets_for(doc_type, acord_form, tuple(lob) if isinstance(lob, list) else lob)
+
+
+@cache
+def _field_sets_for(doc_type: str, acord_form: str | None, lob: Any) -> tuple[tuple[str, ...], frozenset[str]]:
+    from common.canonical import SYSTEM_SUPPLIED_FIELDS
+    from common.schemas import SchemaError
+
+    system = {f"{section}.{name}" for section, name in SYSTEM_SUPPLIED_FIELDS}
+    line = list(lob) if isinstance(lob, tuple) else lob
+    try:
+        declared = schema_fields(doc_type, acord_form, line)
+        asked = set(schema_fields(doc_type, acord_form, line, asked=True))
+    except SchemaError:
+        return (), frozenset(system)
+    return tuple(declared), frozenset(system | (set(declared) - asked))
+
+
+def _within(name: str, fields: Iterable[str]) -> bool:
+    """Whether ``name`` is one of ``fields`` or inside one: a key of an open object
+    such as ``text_sections``, whose leaves the schema does not name."""
+    return any(name == f or name.startswith(f + ".") or name.startswith(f + "[") for f in fields)
+
+
+def _section(field_name: str) -> str:
+    return re.split(r"[.\[]", field_name, maxsplit=1)[0]
+
+
+def field_report(answer: dict[str, Any] | None, gold: dict[str, Any] | None = None, *,
+                 doc_type: str = "policy", acord_form: str | None = None, lob: Any = None,
+                 review_flags: Iterable[str] = ()) -> dict[str, Any]:
+    """Every field of the answer's schema, each with what the answer holds for it.
+
+    ``fields`` lists every leaf of the answer and of the gold, rows matched by
+    identifier as :func:`compare` matches them, then every field of the schema
+    that neither holds - a column of a table with no rows, a key the schema does
+    not allow to be null - so no field the line declares is left out. Each entry
+    has its ``value`` and ``status`` (:data:`FIELD_STATUSES`); a value the model
+    wrote has its ``confidence`` and ``page_ref``, and a field the pipeline
+    flagged its review ``flags``. Against a gold label, an entry also has the
+    ``gold`` value and the ``result``: correct, wrong, missed, invented, or empty
+    - neither has a value, the field is not on this document. A table cell names
+    its schema ``field`` as well.
+    """
+    from common.canonical import SYSTEM_SUPPLIED_FIELDS, is_field_value, schema_label, without_system_fields
+    from common.schema_sections import structural_ids
+    from common.schemas import SchemaError, schema_key
+    from common.structural_ids import comparable_for
+
+    answer = answer if isinstance(answer, dict) else {}
+    graded = gold is not None
+    declared, unasked = _field_sets(doc_type, acord_form, lob)
+    system = {f"{section}.{name}" for section, name in SYSTEM_SUPPLIED_FIELDS}
+    ids = {spec["field"] for spec in structural_ids(lob).values()} if lob else set()
+
+    def not_graded(name: str, value: Any, status: str = "system") -> dict[str, Any]:
+        entry = {"value": value, "status": status}
+        note = next((text for field_name, text in _FIELD_NOTES.items() if _within(name, (field_name,))), None)
+        if note:
+            entry["note"] = note
+        return entry
+
+    # As compare() reads both sides: the gold narrowed to the schema, the system
+    # fields out of scoring, ids compared through what they name.
+    gold_view = (comparable_for(without_system_fields(schema_label(gold, doc_type, acord_form, lob)),
+                                doc_type, acord_form, lob) if graded else {})
+    answer_view = comparable_for(without_system_fields(answer), doc_type, acord_form, lob)
+    keys = gold_view if graded else answer_view
+
+    answered = {path: (index, name, leaf) for path, index, name, leaf in _leaves(answer_view, keys, "", "", "")}
+    expected = {path: (name, leaf) for path, _index, name, leaf in _leaves(gold_view, gold_view, "", "", "")}
+    by_index = {index: path for path, (index, _name, _leaf) in answered.items()}
+    field_flags: dict[str, set[str]] = {}
+    document_flags: list[str] = []
+    for flag in review_flags:
+        where, _, reason = str(flag).rpartition(":")
+        if where in by_index:
+            field_flags.setdefault(by_index[where], set()).add(reason)
+        else:
+            document_flags.append(str(flag))
+
+    entries: dict[str, dict[str, Any]] = {}
+    field_of: dict[str, str] = {}
+
+    def add(path: str, name: str, entry: dict[str, Any]) -> None:
+        if name != path:
+            entry["field"] = name
+        entries[path], field_of[path] = entry, name
+
+    for path in dict.fromkeys([*answered, *expected]):
+        _index, name, leaf = answered.get(path) or (None, expected[path][0], None)
+        value = _value(leaf)
+        if _within(name, unasked):
+            add(path, name, not_graded(name, value))
+            continue
+        entry: dict[str, Any] = {
+            "value": value,
+            "status": "extracted" if not _empty(value) else "null" if path in answered else "not_in_output",
+        }
+        if is_field_value(leaf) and not _empty(value):
+            confidence = leaf.get("confidence")
+            entry["confidence"] = confidence.get("score") if isinstance(confidence, dict) else confidence
+            entry["page_ref"] = list(leaf.get("page_ref") or [])
+        if path in field_flags:
+            entry["flags"] = sorted(field_flags[path])
+        if graded:
+            entry["gold"] = _value((expected.get(path) or (None, None))[1])
+            entry["result"] = _result(entry["gold"], value, path) or "empty"
+        add(path, name, entry)
+
+    # What scoring leaves out, from the answer as served.
+    for path, _index, name, leaf in _leaves(answer, keys, "", "", ""):
+        last = name.rsplit(".", 1)[-1]
+        if path in entries:
+            continue
+        if name in system:
+            add(path, name, not_graded(name, _value(leaf)))
+        elif last in ids or last == "part":
+            add(path, name, not_graded(name, _value(leaf), "structural"))
+
+    listed = set(field_of.values())
+    for name in declared:
+        if any(_within(other, (name,)) for other in listed):
+            continue
+        if name in unasked:
+            add(name, name, not_graded(name, None))
+            continue
+        table = name[: name.rindex("[]") + 2] if "[]" in name else None
+        entry = {"value": None,
+                 "status": "no_rows" if table and not any(f.startswith(table + ".") for f in listed)
+                 else "not_in_output"}
+        if graded:
+            entry["gold"], entry["result"] = None, "empty"
+        add(name, name, entry)
+
+    rank: dict[str, int] = {}
+    for position, name in enumerate(declared):
+        rank.setdefault(_section(name), position)
+    ordered = sorted(entries, key=lambda path: rank.get(_section(field_of[path]), len(declared)))
+    summary: dict[str, Any] = {
+        "schema_fields": len(declared),
+        "schema_fields_with_a_value": len({field_of[p] for p in entries if entries[p]["status"] == "extracted"}),
+        "fields_listed": len(entries),
+        "by_status": dict(Counter(entries[p]["status"] for p in ordered)),
+    }
+    if graded:
+        tally = Counter(entries[p].get("result") for p in ordered)
+        summary["by_result"] = {name: tally[name] for name in (*RESULTS, "empty") if tally[name]}
+    try:
+        schema = schema_key(doc_type, acord_form, lob)
+    except SchemaError:   # no schema selects it: the answer's and the gold's fields only
+        schema = None
+    return {
+        "schema": schema,
+        "graded_against_gold": graded,
+        "summary": summary,
+        "document_flags": sorted(document_flags),
+        "fields": {path: entries[path] for path in ordered},
+    }
 
 
 # --------------------------------------------------------------------------

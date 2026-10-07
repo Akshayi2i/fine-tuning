@@ -195,18 +195,37 @@ def run_document(
             result, golden, lob=request.known_lob, acord_form=request.known_acord_form)
         metrics.update(scored)
         from common.canonical import schema_label, values_view
-        from common.normalize import values_match
-        from evaluation.metrics.field_accuracy import flatten_scalars
+        from evaluation.metrics.field_accuracy import flatten_scalars, values_agree
 
         expected_flat = flatten_scalars(values_view(
             schema_label(golden, result.doc_type, request.known_acord_form, request.known_lob)))
         got_flat = flatten_scalars(values_view(result.extraction))
         for path, value in metrics["fields"].items():
-            value["correct"] = values_match(expected_flat.get(path), got_flat.get(path), field_path=path)
+            value["correct"] = values_agree(expected_flat.get(path), got_flat.get(path), path)
     else:
         metrics["ground_truth"] = "not supplied — confidence reported, accuracy not measurable"
+    metrics["all_fields"] = all_fields(result, golden, acord_form=request.known_acord_form, lob=request.known_lob)
 
     return result, metrics
+
+
+def all_fields(result: ExtractionResult, golden: dict[str, Any] | None, *, acord_form: str | None = None,
+               lob: Any = None) -> dict[str, Any] | None:
+    """Every field of the document's schema with what the answer holds for it,
+    graded against ``golden`` when there is one (testing.comparison.field_report).
+
+    ``None`` when the report cannot be built: it describes the extraction, and
+    is never a reason to lose it.
+    """
+    from testing.comparison import field_report
+
+    try:
+        return field_report(result.extraction, golden, doc_type=result.doc_type, acord_form=acord_form,
+                            lob=lob, review_flags=result.review_flags)
+    except Exception as exc:  # noqa: BLE001 - a report on the answer, never a reason to drop it
+        log.warning("%s: the all-fields report could not be built (%s: %s)",
+                    result.source_id, type(exc).__name__, exc)
+        return None
 
 
 def write_outputs(
@@ -215,12 +234,24 @@ def write_outputs(
     *,
     root: Path = TESTING_ROOT,
 ) -> tuple[Path, Path]:
-    """Write ``results/{version}/{doc}.json`` and its metrics file."""
+    """Write ``results/{version}/{doc}.json`` and its metrics file.
+
+    The results JSON carries ``all_fields`` after ``list_fields`` when the
+    metrics hold it (:func:`all_fields`): every field of the schema, each with
+    its value and result, in the file a reader opens.
+    """
     version = result.model_version
     results_path = results_dir(version, root) / f"{result.source_id}.json"
     metrics_path = metrics_dir(version, root) / f"{result.source_id}.metrics.json"
 
-    for path, payload in ((results_path, result.as_dict()), (metrics_path, metrics)):
+    report = metrics.get("all_fields")
+    answer: dict[str, Any] = {}
+    for key, value in result.as_dict().items():
+        answer[key] = value
+        if key == "list_fields" and report is not None:
+            answer["all_fields"] = report
+    rest = {key: value for key, value in metrics.items() if key != "all_fields"}
+    for path, payload in ((results_path, answer), (metrics_path, rest)):
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
     return results_path, metrics_path

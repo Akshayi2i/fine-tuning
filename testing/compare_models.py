@@ -18,6 +18,9 @@ Output, one folder per document under ``--out``::
     <document>/gold.json         the gold label as supplied
     <document>/base.json         the base model's canonical JSON (every schema key)
     <document>/adapter.json      base + adapter's canonical JSON
+    <document>/base.all_fields.json, adapter.all_fields.json
+                                 every field of the line's schema, each with its value
+                                 and its result against gold (testing.comparison.field_report)
     <document>/comparison.xlsx   Summary and Fields sheets (testing.comparison)
     summary.xlsx                 one row per document, and the totals
 
@@ -145,8 +148,8 @@ def import_and_ocr(folders: list[Path], *, tenant: str, doc_type: str = "policy"
 # --------------------------------------------------------------------------
 
 
-def _extract(model: Any, request: Any, doc_type: str) -> tuple[dict[str, Any], str | None]:
-    """One route's canonical JSON, or ``{}`` and the error."""
+def _extract(model: Any, request: Any, doc_type: str) -> tuple[dict[str, Any], list[str], str | None]:
+    """One route's canonical JSON and its review flags, or ``{}``, none and the error."""
     from calibration.fit_calibration import CalibrationParams
     from serving.doc_type_classifier import StaticClassifier
     from serving.pipeline import extract
@@ -158,8 +161,22 @@ def _extract(model: Any, request: Any, doc_type: str) -> tuple[dict[str, Any], s
                          strict_schema=False)
     except Exception as exc:  # noqa: BLE001 - the other route still runs
         log.error("%s on %s failed: %s: %s", model.tag, request.source_id, type(exc).__name__, exc)
-        return {}, f"{type(exc).__name__}: {exc}"
-    return result.extraction, None
+        return {}, [], f"{type(exc).__name__}: {exc}"
+    return result.extraction, list(result.review_flags), None
+
+
+def _all_fields(answer: dict[str, Any], flags: list[str], gold: dict[str, Any] | None, request: Any,
+                doc_type: str) -> dict[str, Any] | None:
+    """testing.comparison.field_report for one route; ``None`` when it cannot be built."""
+    from testing.comparison import field_report
+
+    try:
+        return field_report(answer, gold, doc_type=doc_type, acord_form=request.known_acord_form,
+                            lob=request.known_lob, review_flags=flags)
+    except Exception as exc:  # noqa: BLE001 - a report on the answer, never a reason to stop the run
+        log.warning("%s: the all-fields report could not be built (%s: %s)",
+                    request.source_id, type(exc).__name__, exc)
+        return None
 
 
 def compare_documents(base_model: Any, adapter_model: Any, client: Any, documents: list[tuple[str, str, Path]],
@@ -176,8 +193,8 @@ def compare_documents(base_model: Any, adapter_model: Any, client: Any, document
         folder.mkdir(parents=True, exist_ok=True)
         request, gold = document_request(client, source_id, doc_type=doc_type, tenant_id=tenant, mode=mode,
                                          images_root=images_root or PAGE_CACHE)
-        base, base_error = _extract(base_model, request, doc_type)
-        adapter, adapter_error = _extract(adapter_model, request, doc_type)
+        base, base_flags, base_error = _extract(base_model, request, doc_type)
+        adapter, adapter_flags, adapter_error = _extract(adapter_model, request, doc_type)
         for label, error in (("base", base_error), ("adapter", adapter_error)):
             if error:
                 errors.setdefault(name, {})[label] = error
@@ -186,6 +203,11 @@ def compare_documents(base_model: Any, adapter_model: Any, client: Any, document
             shutil.copy2(pdf, folder / "document.pdf")
         for file_name, body in (("gold.json", gold or {}), ("base.json", base), ("adapter.json", adapter)):
             (folder / file_name).write_text(json.dumps(body, indent=2, ensure_ascii=False), encoding="utf-8")
+        for label, answer, flags in (("base", base, base_flags), ("adapter", adapter, adapter_flags)):
+            report = _all_fields(answer, flags, gold, request, doc_type)
+            if report is not None:
+                (folder / f"{label}.all_fields.json").write_text(
+                    json.dumps(report, indent=2, ensure_ascii=False), encoding="utf-8")
         line = str(request.known_lob)
         comparison = compare(gold, base, adapter, doc_type=doc_type, acord_form=request.known_acord_form,
                              lob=request.known_lob)

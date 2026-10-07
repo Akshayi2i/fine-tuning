@@ -124,11 +124,15 @@ def test_one_document_goes_through_both_routes_with_one_model_load(client, tmp_p
                                  tmp_path / "out", tenant="compare", images_root=tmp_path / "pages")
 
     folder = tmp_path / "out" / "doc-1"
-    for name in ("document.pdf", "gold.json", "base.json", "adapter.json", "comparison.xlsx"):
+    for name in ("document.pdf", "gold.json", "base.json", "adapter.json", "comparison.xlsx",
+                 "base.all_fields.json", "adapter.all_fields.json"):
         assert (folder / name).is_file(), name
     assert json.loads((folder / "base.json").read_text())["policy"]["policy_number"]["raw"] == "PA-9"
     assert json.loads((folder / "adapter.json").read_text())["policy"]["policy_number"]["raw"] == "PA-1"
     assert "effective_date" in json.loads((folder / "adapter.json").read_text())["policy"]   # every key
+    for name, result in (("base", "wrong"), ("adapter", "correct")):
+        every = json.loads((folder / f"{name}.all_fields.json").read_text())["fields"]
+        assert every["policy.policy_number"]["result"] == result
     (_name, _line, comparison), = compared
     assert comparison.base.wrong == 1 and comparison.adapter.correct == 1
     assert (tmp_path / "out" / "summary.xlsx").is_file()

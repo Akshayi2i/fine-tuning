@@ -133,6 +133,11 @@ def test_the_extraction_command_runs_each_document_through_serving_with_the_adap
                          .read_text(encoding="utf-8"))
     assert metrics["fields"]["policy.policy_number"]["correct"] is True
     assert (tmp_path / "out" / "metrics" / model.tag / "summary.json").is_file()
+    # Every field of the schema, graded against the gold, in the JSON a reader opens.
+    every = result["all_fields"]["fields"]
+    assert every["policy.policy_number"]["result"] == "correct"
+    assert (every["policy.effective_date"]["status"], every["policy.effective_date"]["result"]) == ("null", "empty")
+    assert "all_fields" not in metrics
 
 
 def test_the_extract_subcommand_passes_the_adapter_through(monkeypatch):
