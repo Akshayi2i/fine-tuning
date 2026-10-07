@@ -1,0 +1,1150 @@
+# Coverage-code meanings the model will be shown in place of today's printed names
+# (accuracy plan, stage 2.3). The model picks one of these codes for every coverage it reads; today each
+# code is shown with ONE carrier's printed name, which the model copied to invent coverages.
+#
+# For every code, fill in:
+#   meaning:    one short, neutral sentence saying WHAT the coverage is (not how one carrier prints it).
+#               e.g. HO_COV_A -> "Coverage A: the main dwelling structure."
+#   tell_apart: (optional) how to tell it from a look-alike code,
+#               e.g. "Section II liability assessment; the Section I property one is HO_LOSS_ASSESSMENT."
+# Reference only - do not edit: shown_today (what the model sees now), printed_as (how the seed policies
+# print it), note (the schema owners' note), used_by (lines that use a shared code).
+#
+# `shared` lists the X_ codes several lines use: fill those once. Each line then lists its own codes.
+
+shared:
+  X_COLLISION:
+    meaning: ''
+    tell_apart: ''
+    shown_today: Collision
+    printed_as:
+    - Collision
+    - COLLISION
+    - COLLISION LOSS
+    - Collision Less Deductible
+    used_by:
+    - personal_auto
+    - motorcycle
+    - recreational_vehicle
+    - ocean_marine
+  X_COMPREHENSIVE:
+    meaning: ''
+    tell_apart: ''
+    shown_today: Comprehensive / other than collision
+    printed_as:
+    - Comprehensive
+    - Other Than Collision
+    - COMPREHENSIVE - FULL GLASS
+    - Comprehensive Less Deductible
+    - OTHER THAN COLL
+    - OTHER THAN COLLISION LOSS
+    - OTHER THAN COLLISION
+    - Comprehensive With Full Glass
+    used_by:
+    - personal_auto
+    - motorcycle
+    - recreational_vehicle
+    - ocean_marine
+  X_CYBER:
+    meaning: ''
+    tell_apart: ''
+    shown_today: Cyber / data breach
+    printed_as:
+    - Cyber
+    - Data Breach
+    - Data Compromise
+    - Cyber Liability
+    - Home Cyber Protection Coverage
+    used_by:
+    - homeowners
+  X_EQUIPMENT_BREAKDOWN:
+    meaning: ''
+    tell_apart: ''
+    shown_today: Equipment breakdown
+    printed_as:
+    - Equipment Breakdown
+    - Equipment Breakdown Coverage
+    - Equipment Breakdown Enhancement Endorsement
+    - FL-345 Equipment Breakdown
+    - HOME SYSTEMS PROTECTION
+    - Home Systems Protection
+    - MM HO 5346 09 19 Equipment Breakdown Enhancement Endorsement
+    - Mech/Elec/Pressure Sys
+    used_by:
+    - homeowners
+  X_IDENTITY_THEFT:
+    meaning: ''
+    tell_apart: ''
+    shown_today: Identity theft / fraud expense
+    printed_as:
+    - Identity Theft
+    - Identity Fraud Expense
+    - IDENTITY MONITORING AND PROTECTION SERVICES
+    - Identity Fraud Expense and Resolution Services
+    used_by:
+    - homeowners
+  X_LOSS_OF_USE:
+    meaning: ''
+    tell_apart: ''
+    shown_today: Loss of use / additional living expense / fair rental value
+    printed_as:
+    - Loss of Use
+    - Additional Living Expense
+    - Fair Rental Value
+    - Coverage D
+    - Coverage D - Loss of Use
+    - Addl. Living Exp and Loss of Rent
+    - Cov D - Addl Living Exp/Loss of Rents
+    - Coverage D - Additional Living Expense and Loss of Rent
+    - Coverage D - Additional Living Expense or Loss of Rent
+    - Coverage D - Addl. Living Exp and Loss of Rent
+    - Coverage D -- Additional Living Costs And Loss Of Rent
+    - D. Add'l Living Exp. & Loss of Rent
+    - D. Loss Of Use
+    - 'D: LOSS OF USE'
+    - Loss Of Use (Cov. D)
+    - Addl.Living Exp. and Loss of Rent
+    - Coverage D - Additional Living Expense / Loss of Rent
+    - Coverage D ADDL LIVING EXP AND LOSS OF RENT FIRE INCL
+    used_by:
+    - homeowners
+    - dwelling_fire
+  X_MED_PAY:
+    meaning: ''
+    tell_apart: ''
+    shown_today: Medical payments
+    printed_as:
+    - Medical Payments
+    - Med Pay
+    - Medical Payments to Others
+    - Coverage F
+    - Medical Payments Limit
+    - Coverage F - Medical Payments to Others
+    - Cov M - Medical Payments
+    - Coverage F - Medical Payments Coverage
+    - Coverage M - OLT - Premises Med Pay - Per Occurrence
+    - Coverage M - OLT - Premises Med Pay - Per Person
+    - Coverage M - Premises Medical Payments
+    - Coverage M -- Medical Payments To Others
+    - F. Medical Payments
+    - 'F: MEDICAL PAYMENTS TO OTHERS'
+    - M. Medical Payments per Person
+    - Coverage M - Medical Payments - Per Occurrence
+    - Coverage M - Medical Payments - Per Person
+    - MEDICAL PAYMENTS
+    - Medical Expense Limit
+    - MEDICAL PAYMENT
+    - Medical Payments Coverage
+    used_by:
+    - homeowners
+    - dwelling_fire
+    - personal_auto
+    - motorcycle
+    - recreational_vehicle
+    - ocean_marine
+  X_ORDINANCE_LAW:
+    meaning: ''
+    tell_apart: ''
+    shown_today: Ordinance or law
+    printed_as:
+    - Ordinance or Law
+    - Ordinance & Law
+    - Ordinance Or Law
+    - Ordinance and Law
+    used_by:
+    - homeowners
+  X_PERSONAL_LIABILITY:
+    meaning: ''
+    tell_apart: ''
+    shown_today: Personal liability
+    printed_as:
+    - Personal Liability
+    - Coverage E
+    - Coverage E - Personal Liability
+    - Cov L - Personal Liability
+    - Coverage E - Personal Liability - Bodily Injury and Property Damage
+    - Coverage L - OLT - Premises Liability
+    - Coverage L - Premises Liability Coverage
+    - Coverage L -- Personal Liability
+    - E. Personal Liability
+    - 'E: PERSONAL LIABILITY EACH'
+    - L. Personal Liability per Occurence
+    - Liability
+    - PERSONAL LIABILITY
+    used_by:
+    - homeowners
+  X_PIP:
+    meaning: ''
+    tell_apart: ''
+    shown_today: Personal injury protection / no-fault
+    printed_as:
+    - Personal Injury Protection
+    - PIP
+    - Basic No-Fault
+    - Additional PIP
+    - OBEL
+    - Personal Injury Protection Benefits
+    - Optional Basic Economic Loss
+    - Mandatory Personal Injury Protection
+    - Mandatory PIP
+    - PERSONAL INJURY PROTECTION (PIP)
+    - PIP DEDUCTIBLE
+    - Personal Injury Protection Coverage
+    - MANDATORY PERSONAL INJURY PROTECTION
+    used_by:
+    - personal_auto
+    - motorcycle
+    - recreational_vehicle
+  X_RENTAL:
+    meaning: ''
+    tell_apart: ''
+    shown_today: Rental reimbursement / transportation expense
+    printed_as:
+    - Rental Reimbursement
+    - Transportation Expense
+    - Rental Car
+    - Substitute Transportation
+    - Extended Transportation Expenses
+    - OPTIONAL LIMITS TRANSPORTATION EXPENSES COVERAGE
+    - Rental Vehicle Coverage
+    - TRANSPORTATION EXP
+    - TRAVEL - TRANSPORTATION EXPENSES (FAMILY PLUS)
+    used_by:
+    - personal_auto
+  X_TOWING:
+    meaning: ''
+    tell_apart: ''
+    shown_today: Towing and roadside assistance
+    printed_as:
+    - Towing
+    - Towing and Labor
+    - Roadside Assistance
+    - Roadside Assistance Coverage
+    - TRAVEL - ROADSIDE ASSISTANCE (FAMILY PLUS)
+    - Towing and Labor Limit
+    - Roadside Coverage(Occ)
+    - TOWING AND ROADSIDE ASSISTANCE
+    - Towing and Emergency Expense
+    - Commercial Towing and Assistance Coverage
+    - Emergency Towing and Assist
+    used_by:
+    - personal_auto
+    - motorcycle
+    - recreational_vehicle
+    - ocean_marine
+  X_UIM:
+    meaning: ''
+    tell_apart: ''
+    shown_today: Underinsured / supplementary uninsured motorist
+    printed_as:
+    - Underinsured Motorist
+    - Supplementary Uninsured/Underinsured Motorists
+    - SUM
+    - UIM
+    - STAT/SUM
+    - SUPPLEMENTARY UNINSURED/UNDERINSURED MOTORISTS (SUM)
+    - SUPPLEMENTARY UNINSURED/UNDERINSURED MOTORISTS*
+    - Supplementary Uninsured/ Underinsured Motorists (SUM)
+    - Supplementary Uninsured/ Underinsured Motorists Coverage
+    - Supplementary Uninsured/Underinsured Motorist
+    - Uninsured/Underinsured Motorist
+    - SUPPLE UM/UIM
+    - Supplementary Uninsured / Underinsured Motorist
+    - SUPPLEMENTARY UNINSURED/UNDERINSURED MOTORISTS BODILY INJURY
+    - Supplementary Uninsured/ Underinsured Motorist
+    used_by:
+    - personal_auto
+    - motorcycle
+    - recreational_vehicle
+  X_UM:
+    meaning: ''
+    tell_apart: ''
+    shown_today: Uninsured motorist / boater
+    printed_as:
+    - Uninsured Motorist
+    - Uninsured Boater
+    - UM
+    - Basic UM
+    - UNINSURED/UNDERINSURED MOTORISTS
+    - Mandatory Uninsured Motorist
+    - UNINSURED BI
+    - UNINSURED MOTORIST
+    - Uninsured Motorist Bi
+    - Uninsured Boater Coverage
+    - Uninsured Watercraft
+    used_by:
+    - personal_auto
+    - motorcycle
+    - recreational_vehicle
+    - ocean_marine
+  X_VEHICLE_LIABILITY:
+    meaning: ''
+    tell_apart: ''
+    shown_today: Liability (bodily injury and property damage) for an auto, motorcycle, RV or boat
+    printed_as:
+    - Liability
+    - Bodily Injury
+    - Property Damage
+    - Bodily Injury and Property Damage Liability
+    - Bodily Injury Liability
+    - Property Damage Liability
+    - BODILY INJURY SPLIT LIMITS
+    - Liability To Others
+    - BODILY INJURY LIABILITY
+    - Bodily Injury & Property Damage Liability
+    - Liability - Bodily Injury and Property Damage
+    - PROPERTY DAMAGE LIABILITY
+    - Liability (Protection and Indemnity) Coverage
+    - Watercraft Liability
+    used_by:
+    - personal_auto
+    - motorcycle
+    - recreational_vehicle
+    - ocean_marine
+  X_WATER_BACKUP:
+    meaning: ''
+    tell_apart: ''
+    shown_today: Water or sewer backup
+    printed_as:
+    - Water Back-Up
+    - Sewer Backup
+    - Water Backup and Sump Discharge
+    - HO 2708 07 11 Water Back Up And Sump Discharge Or Overflow Coverage
+    - Water Backup and Sump Discharge or Overflow
+    - ML-WD - Water Backup-Sewers and Drains
+    used_by:
+    - homeowners
+    - dwelling_fire
+homeowners:
+  HO_ADDITIONAL_INSURED:
+    meaning: ''
+    tell_apart: ''
+    shown_today: Additional insured
+    printed_as:
+    - FL-41 Additional Insured
+    - FL-41L Additional Insured
+    - MM HO 5140 09 19 Additional Insured -- Specified Coverages
+  HO_ADDITIONAL_REPLACEMENT_COST:
+    meaning: ''
+    tell_apart: ''
+    shown_today: Additional Replacement Cost
+    printed_as:
+    - Additional Replacement Cost
+  HO_ADDITIONAL_RESIDENCE_RENTED_LIABILITY:
+    meaning: ''
+    tell_apart: ''
+    shown_today: Additional Residential Premises-Rented To Others - Liabili
+    printed_as:
+    - Additional Residential Premises-Rented To Others - Liabili
+  HO_AUTOMATIC_INCREASE:
+    meaning: ''
+    tell_apart: ''
+    shown_today: Automatic increase in insurance
+    printed_as:
+    - Auto Increase in Insurance
+    - Automatic Increase in Insurance - 3 Percent
+    - HO 2584 01 06 Automatic Adjustment Of Limits - Annual Increase 3 Percent
+  HO_BUSINESS_PROPERTY_INCREASED:
+    meaning: ''
+    tell_apart: ''
+    shown_today: Business Property Increased Limits
+    printed_as:
+    - Business Property Increased Limits
+  HO_COV_A:
+    meaning: ''
+    tell_apart: ''
+    shown_today: Coverage A - Dwelling / Residence
+    printed_as:
+    - Coverage A - Dwelling
+    - Coverage A - Residence
+    - A. Dwelling
+    - A. Residence
+    - 'A: DWELLING'
+    - Cov A - Dwelling
+    - Coverage A -- Residence
+    - Dwelling
+    - Residence
+  HO_COV_B:
+    meaning: ''
+    tell_apart: ''
+    shown_today: Coverage B - Other / Related Private Structures
+    printed_as:
+    - Coverage B - Other Structures
+    - B. Other Structures
+    - B. Related Private Structures
+    - 'B: OTHER STRUCTURES'
+    - Cov B - Other Structures
+    - Coverage B - Related Private Structures on the Premises
+    - Coverage B -- Related Private Structures
+    - Other Structures
+    - Other permanent structures
+  HO_COV_C:
+    meaning: ''
+    tell_apart: ''
+    shown_today: Coverage C - Personal Property
+    printed_as:
+    - Coverage C - Personal Property
+    - C. Personal Property
+    - Personal Property
+    - 'C: PERSONAL PROPERTY'
+    - Contents
+    - Cov C - Personal Property
+    - Coverage C -- Personal Property
+  HO_CREDIT_CARD_FORGERY:
+    meaning: ''
+    tell_apart: ''
+    shown_today: Credit card, fund transfer, forgery and counterfeit money
+    printed_as:
+    - Credit Card, EFT Card, Forgery, Etc
+    - Credit Card, Fund Transfer, Forgery and Counterfeit Money
+    - Limits - Credit Card, Electronic Fund Transfer Card Or Access Device, Forgery And Counterfeit Money
+  HO_DAMAGE_TO_PROPERTY_OF_OTHERS:
+    meaning: ''
+    tell_apart: ''
+    shown_today: Damage to Property of Others
+    printed_as:
+    - Damage to Property of Others
+  HO_DEBRIS_REMOVAL:
+    meaning: ''
+    tell_apart: ''
+    shown_today: Debris Removal
+    printed_as:
+    - Debris Removal
+  HO_DISAPPEARING_DEDUCTIBLE:
+    meaning: ''
+    tell_apart: ''
+    shown_today: Disappearing Deductible
+    printed_as:
+    - Disappearing Deductible
+    - MM HO 5039 09 19 Disappearing Deductible
+  HO_FIRE_DEPARTMENT_SERVICE_CHARGE:
+    meaning: ''
+    tell_apart: ''
+    shown_today: Fire Department Service Charge
+    printed_as:
+    - Fire Department Service Charge
+  HO_FUNGI_REMEDIATION:
+    meaning: ''
+    tell_apart: ''
+    shown_today: Limited fungi / mold remediation
+    printed_as:
+    - LIMITED FUNGI, WET OR DRY ROT, OR BACTERIA COVERAGE
+    - Limited Fungi or Other Microbes Remediation
+    - Limited Fungi, Other Microbes or Rot(Section I)
+    - mold remediation expense coverage
+  HO_INCIDENTAL_BUSINESS:
+    meaning: ''
+    tell_apart: ''
+    shown_today: Incidental Business Pursuits -Including Products Liability
+    printed_as:
+    - Incidental Business Pursuits -Including Products Liability
+  HO_LANDLORD_FURNISHINGS:
+    meaning: ''
+    tell_apart: ''
+    shown_today: Landlord Furnishings
+    printed_as:
+    - Landlord Furnishings
+  HO_LOSS_ASSESSMENT:
+    meaning: ''
+    tell_apart: ''
+    shown_today: Loss assessment (property)
+    printed_as:
+    - HO 2550 01 06 Loss Assessment Coverage - Described Location - Additional Limit
+    - Loss Assessment Coverage - Residence
+  HO_LOSS_ASSESSMENT_LIABILITY:
+    meaning: ''
+    tell_apart: ''
+    shown_today: Loss assessment (liability)
+    note: Printed as 'Loss Assessment' under Section II by one carrier; the printed name is an alias of HO_LOSS_ASSESSMENT,
+      so the code is told apart by its section.
+  HO_PERSONAL_ARTICLES:
+    meaning: ''
+    tell_apart: ''
+    shown_today: PERSONAL ARTICLES COVERAGE
+    printed_as:
+    - PERSONAL ARTICLES COVERAGE
+  HO_PERSONAL_INJURY:
+    meaning: ''
+    tell_apart: ''
+    shown_today: Personal Injury Coverage
+    printed_as:
+    - Personal Injury Coverage
+  HO_PERSONAL_PROPERTY_REPLACEMENT_COST:
+    meaning: ''
+    tell_apart: ''
+    shown_today: Personal Property Replacement Cost
+    printed_as:
+    - Personal Property Replacement Cost
+    - HO 4855 01 06 Replacement Cost Loss Settlement Terms - Personal Property
+    - Personal Property Replacement Cost Loss Settlement
+    - Replacement Cost Provision (Coverage C - Personal Property)
+  HO_PERSONAL_RECORDS_DATA:
+    meaning: ''
+    tell_apart: ''
+    shown_today: Personal Records and Data Replacement
+    printed_as:
+    - Personal Records and Data Replacement
+  HO_PREMISES_LIABILITY_ENDORSEMENT:
+    meaning: ''
+    tell_apart: ''
+    shown_today: Premises Liability Coverage
+    printed_as:
+    - Premises Liability Coverage
+  HO_PRIVATE_STRUCTURES_INCREASED:
+    meaning: ''
+    tell_apart: ''
+    shown_today: Related Private Structures
+    printed_as:
+    - Related Private Structures
+    - Private Structures - Increased
+  HO_PROPERTY_LIABILITY_ENHANCEMENT:
+    meaning: ''
+    tell_apart: ''
+    shown_today: Personal Property and Liability Enhancement
+    printed_as:
+    - Personal Property and Liability Enhancement
+  HO_REFRIGERATED_FOOD_PRODUCTS:
+    meaning: ''
+    tell_apart: ''
+    shown_today: Added Perils For Refrigerated Food Products
+    printed_as:
+    - Added Perils For Refrigerated Food Products
+    - Refrigerated Food Products
+  HO_RESIDENCE_LOSS_SETTLEMENT:
+    meaning: ''
+    tell_apart: ''
+    shown_today: Residence Loss Settlement
+    printed_as:
+    - Residence Loss Settlement
+  HO_SERVICE_LINE:
+    meaning: ''
+    tell_apart: ''
+    shown_today: Service Line Coverage
+    printed_as:
+    - Service Line Coverage
+  HO_SPECIAL_LIMITS:
+    meaning: ''
+    tell_apart: ''
+    shown_today: Special Limits of Liability
+    printed_as:
+    - Special Limits of Liability
+  HO_SPECIAL_PERSONAL_PROPERTY:
+    meaning: ''
+    tell_apart: ''
+    shown_today: Special Personal Property Coverage
+    printed_as:
+    - Special Personal Property Coverage
+  HO_TREES_SHRUBS_PLANTS:
+    meaning: ''
+    tell_apart: ''
+    shown_today: Trees, Shrubs and Other Plants
+    printed_as:
+    - Trees, Shrubs and Other Plants
+  HO_TREE_REMOVAL:
+    meaning: ''
+    tell_apart: ''
+    shown_today: Tree Removal
+    printed_as:
+    - Tree Removal
+  HO_UNDERGROUND_UTILITY_LINE:
+    meaning: ''
+    tell_apart: ''
+    shown_today: Underground utility line
+    printed_as:
+    - FL-342 Underground Utility Line
+    - Underground Utility Line
+  HO_VALUABLE_ARTICLES:
+    meaning: ''
+    tell_apart: ''
+    shown_today: VALUABLE ARTICLES
+    printed_as:
+    - VALUABLE ARTICLES
+  HO_VIP_ENDORSEMENT:
+    meaning: ''
+    tell_apart: ''
+    shown_today: Homeowners VIP Coverage
+    printed_as:
+    - Homeowners VIP Coverage
+  HO_WATER_DAMAGE_ADDED:
+    meaning: ''
+    tell_apart: ''
+    shown_today: Added Water Damages Coverage
+    printed_as:
+    - Added Water Damages Coverage
+  HO_WATER_DAMAGE_HIGHER_LIMITS:
+    meaning: ''
+    tell_apart: ''
+    shown_today: Higher Limits - Water Damage Coverage
+    printed_as:
+    - Higher Limits - Water Damage Coverage
+  HO_WORKERS_COMP_RESIDENCE_EMPLOYEE:
+    meaning: ''
+    tell_apart: ''
+    shown_today: Workers' Compensation Residence Employee
+    printed_as:
+    - Workers' Compensation Residence Employee
+dwelling_fire:
+  DF_COV_A:
+    meaning: ''
+    tell_apart: ''
+    shown_today: Coverage A - Dwelling / Residence
+    printed_as:
+    - Cov A - Dwelling
+    - Coverage A - Residence
+    - Coverage A RESIDENCE FIRE
+    - Residence
+  DF_COV_B:
+    meaning: ''
+    tell_apart: ''
+    shown_today: Coverage B - Other / Related Private Structures
+    printed_as:
+    - Cov B - Related Private Structures
+    - Coverage B - Related Private Structures
+    - Other Structures
+  DF_COV_C:
+    meaning: ''
+    tell_apart: ''
+    shown_today: Coverage C - Personal Property
+    printed_as:
+    - Cov C - Personal Property
+    - Coverage C - Personal Property
+    - Coverage C PERSONAL PROPERTY FIRE
+    - Personal Property
+  DF_COV_L:
+    meaning: ''
+    tell_apart: ''
+    shown_today: Coverage L - Premises Liability
+    printed_as:
+    - Cov L - Premises Liability
+    - Coverage L - Premises Liability
+    - Premises Liability
+    note: 'Not X_PERSONAL_LIABILITY: the dwelling fire seeds print premises liability, not personal liability.'
+  DF_EC_LOSS_OF_USE:
+    meaning: ''
+    tell_apart: ''
+    shown_today: Extended coverage - Additional Living Expense / Loss of Rent
+    printed_as:
+    - EC - Additional Living Expense / Loss of Rent
+  DF_EC_OTHER_STRUCTURES:
+    meaning: ''
+    tell_apart: ''
+    shown_today: Extended coverage - Related Private Structures
+    printed_as:
+    - EC - Related Private Structures
+  DF_EC_PERSONAL_PROPERTY:
+    meaning: ''
+    tell_apart: ''
+    shown_today: Extended coverage - Personal Property
+    printed_as:
+    - EC - Personal Property
+  DF_EC_RESIDENCE:
+    meaning: ''
+    tell_apart: ''
+    shown_today: Extended coverage - Residence
+    printed_as:
+    - EC - Residence
+  DF_INCIDENTAL_BUSINESS:
+    meaning: ''
+    tell_apart: ''
+    shown_today: Incidental Business Activities
+    printed_as:
+    - FL-16 - Incidental Business Activities
+  DF_TENANT_VANDALISM:
+    meaning: ''
+    tell_apart: ''
+    shown_today: Tenant Vandalism Endorsement
+    printed_as:
+    - FL-VC Tenant Vandalism Endorsement - Related Private Structures
+    - FL-VC Tenant Vandalism Endorsement - Residence
+  DF_VMM_LOSS_OF_USE:
+    meaning: ''
+    tell_apart: ''
+    shown_today: Vandalism and malicious mischief - Additional Living Expense / Loss of Rent
+    printed_as:
+    - VMM - Additional Living Expense / Loss of Rent
+  DF_VMM_OTHER_STRUCTURES:
+    meaning: ''
+    tell_apart: ''
+    shown_today: Vandalism and malicious mischief - Related Private Structures
+    printed_as:
+    - VMM - Related Private Structures
+  DF_VMM_PERSONAL_PROPERTY:
+    meaning: ''
+    tell_apart: ''
+    shown_today: Vandalism and malicious mischief - Personal Property
+    printed_as:
+    - VMM - Personal Property
+  DF_VMM_RESIDENCE:
+    meaning: ''
+    tell_apart: ''
+    shown_today: Vandalism and malicious mischief - Residence
+    printed_as:
+    - VMM - Residence
+personal_auto:
+  PA_ADDITIONAL_DEATH_BENEFITS:
+    meaning: ''
+    tell_apart: ''
+    shown_today: ADDITIONAL DEATH BENEFITS
+    printed_as:
+    - ADDITIONAL DEATH BENEFITS
+    - DEATH BENEFIT
+  PA_ADDITIONAL_PIP:
+    meaning: ''
+    tell_apart: ''
+    shown_today: Additional personal injury protection (APIP)
+    printed_as:
+    - Additional Personal Injury Protection
+    - ADDITIONAL PERSONAL INJURY PROTECTION (PIP)
+    - Added PIP
+    - Added Personal Injury Protection Benefits
+    - Additional PIP
+    - Additional Personal Injury Protection - Full
+    - BROADENED ADDITIONAL PIP
+    - INCREASED PIP
+    note: 'Kept apart from X_PIP: NY policies print basic PIP, OBEL and APIP as separate coverages with their own
+      limits and premiums (CR-PA-01).'
+  PA_AGGREGATE_DEATH_BENEFITS:
+    meaning: ''
+    tell_apart: ''
+    shown_today: AGGREGATE DEATH BENEFITS
+    printed_as:
+    - AGGREGATE DEATH BENEFITS
+  PA_AGGREGATE_NO_FAULT_BENEFITS_AVAILABLE:
+    meaning: ''
+    tell_apart: ''
+    shown_today: Aggregate no-fault benefits available
+    printed_as:
+    - AGGREGATE NO FAULT BENEFITS AVAILABLE
+    - Aggregate No-Fault Coverage
+    - Total No-Fault Benefits Available
+  PA_AGREED_VALUE:
+    meaning: ''
+    tell_apart: ''
+    shown_today: Agreed value (classic auto)
+    printed_as:
+    - AGREED VALUE
+  PA_ASSURANCE_PLUS:
+    meaning: ''
+    tell_apart: ''
+    shown_today: Assurance Plus Package
+    printed_as:
+    - Assurance Plus Package
+  PA_CUSTOMIZING:
+    meaning: ''
+    tell_apart: ''
+    shown_today: CUSTOMIZING
+    printed_as:
+    - CUSTOMIZING
+  PA_EXCESS_EQUIPMENT:
+    meaning: ''
+    tell_apart: ''
+    shown_today: EXCESS EQUIPMENT
+    printed_as:
+    - EXCESS EQUIPMENT
+  PA_EXTENDED_NON_OWNED:
+    meaning: ''
+    tell_apart: ''
+    shown_today: EXTENDED NON- OWNED
+    printed_as:
+    - EXTENDED NON- OWNED
+  PA_FULL_GLASS:
+    meaning: ''
+    tell_apart: ''
+    shown_today: FULL COVERAGE WINDOW GLASS
+    printed_as:
+    - FULL COVERAGE WINDOW GLASS
+    - Full Glass Coverage
+    - No deductible for glass
+  PA_NEW_CAR_REPLACEMENT:
+    meaning: ''
+    tell_apart: ''
+    shown_today: NEW CAR REPLACEMENT
+    printed_as:
+    - NEW CAR REPLACEMENT
+  PA_OEM_PARTS:
+    meaning: ''
+    tell_apart: ''
+    shown_today: OEM PARTS
+    printed_as:
+    - OEM PARTS
+  PA_OPTIONAL_BASIC_ECONOMIC_LOSS:
+    meaning: ''
+    tell_apart: ''
+    shown_today: Optional basic economic loss (OBEL)
+    printed_as:
+    - Optional Basic Economic Loss
+    - OBEL
+    - OPTIONAL BASIC ECONOMIC LOSS
+    note: Kept apart from X_PIP (CR-PA-01).
+  PA_OUT_OF_STATE_PERSONAL_INJURY_PROTECTION:
+    meaning: ''
+    tell_apart: ''
+    shown_today: OUT OF STATE PERSONAL INJURY PROTECTION (PIP)
+    printed_as:
+    - OUT OF STATE PERSONAL INJURY PROTECTION (PIP)
+    - OUT OF STATE PIP
+  PA_PERSONAL_ARTICLES:
+    meaning: ''
+    tell_apart: ''
+    shown_today: PERSONAL ARTICLES COVERAGE
+    printed_as:
+    - PERSONAL ARTICLES COVERAGE
+  PA_PET_INJURY:
+    meaning: ''
+    tell_apart: ''
+    shown_today: PET INJURY COVERAGE
+    printed_as:
+    - PET INJURY COVERAGE
+  PA_SPARE_PARTS:
+    meaning: ''
+    tell_apart: ''
+    shown_today: Spare parts (classic auto)
+    printed_as:
+    - Spare Parts
+  PA_SUPPLEMENTAL_SPOUSAL_LIABILITY:
+    meaning: ''
+    tell_apart: ''
+    shown_today: Supplemental spousal liability
+    printed_as:
+    - Spousal Liability
+    - Supplemental Spousal Liability
+    - Including Supplemental Spousal
+    - SUPP SPOUSAL LIAB
+    note: Shared code proposed (CR-PA-02).
+  PA_TAPES_DISCS_MEDIA:
+    meaning: ''
+    tell_apart: ''
+    shown_today: TAPES/DISCS & MEDIA
+    printed_as:
+    - TAPES/DISCS & MEDIA
+  PA_TRAVELING_COLLECTOR:
+    meaning: ''
+    tell_apart: ''
+    shown_today: Traveling collector endorsement (classic auto)
+    printed_as:
+    - Traveling Collector Endorsement
+  PA_TRIP_INTERRUPTION:
+    meaning: ''
+    tell_apart: ''
+    shown_today: TRAVEL - TRIP INTERRUPTION (FAMILY PLUS)
+    printed_as:
+    - TRAVEL - TRIP INTERRUPTION (FAMILY PLUS)
+    - TRIP INTERRUPTION
+  PA_UMPD:
+    meaning: ''
+    tell_apart: ''
+    shown_today: UNINSURED MOTORISTS PROPERTY DAMAGE
+    printed_as:
+    - UNINSURED MOTORISTS PROPERTY DAMAGE
+  PA_UNLICENSED_HOUSEHOLD_MEMBERS_19:
+    meaning: ''
+    tell_apart: ''
+    shown_today: UNLICENSED HOUSEHOLD MEMBERS < 19
+    printed_as:
+    - UNLICENSED HOUSEHOLD MEMBERS < 19
+  PA_VEHICLE_UNDER_CONSTRUCTION:
+    meaning: ''
+    tell_apart: ''
+    shown_today: Vehicle under construction endorsement (classic auto)
+    printed_as:
+    - Vehicle Under Construction Endorsement
+motorcycle:
+  MC_ACCESSORIES:
+    meaning: ''
+    tell_apart: ''
+    shown_today: Accessories / optional equipment
+    printed_as:
+    - ACCESSORIES
+    - Accessory Coverage
+    - Optional Equipment
+  MC_GUEST_LIABILITY:
+    meaning: ''
+    tell_apart: ''
+    shown_today: Guest Liability
+    printed_as:
+    - Guest Liability
+  MC_OPTIONAL_BASIC_ECONOMIC_LOSS:
+    meaning: ''
+    tell_apart: ''
+    shown_today: Optional basic economic loss (OBEL)
+    printed_as:
+    - OPT BASIC ECON LOSS
+    - OPTIONAL BASIC ECON LOSS
+    - Optional Basic Economic Loss
+    note: See CR-PA-01 (split X_PIP).
+  MC_PASSENGER_LIABILITY:
+    meaning: ''
+    tell_apart: ''
+    shown_today: PASSENGER LIABILITY
+    printed_as:
+    - PASSENGER LIABILITY
+  MC_PEDESTRIAN_PIP:
+    meaning: ''
+    tell_apart: ''
+    shown_today: Pedestrian personal injury protection
+    printed_as:
+    - Mandatory Pedestrian Personal Injury Protection
+    - PEDESTRIAN PIP
+  MC_SAFETY_CLOTHING_TOWING:
+    meaning: ''
+    tell_apart: ''
+    shown_today: SAFETY CLOTHING & TOWING
+    printed_as:
+    - SAFETY CLOTHING & TOWING
+  MC_SUPPLEMENTAL_SPOUSAL_LIABILITY:
+    meaning: ''
+    tell_apart: ''
+    shown_today: Supplemental spousal liability
+    printed_as:
+    - Including Supplemental Spousal Liability
+    - Supplemental Spousal Liability
+    - Supplemental Spousal liability
+    note: Shared code proposed (CR-PA-02).
+  MC_WRONGFUL_DEATH:
+    meaning: ''
+    tell_apart: ''
+    shown_today: WRONGFUL DEATH
+    printed_as:
+    - WRONGFUL DEATH
+recreational_vehicle:
+  RV_ACCESSORY_COVERAGE:
+    meaning: ''
+    tell_apart: ''
+    shown_today: Accessory coverage / optional equipment
+    printed_as:
+    - Accessory Coverage
+    - Optional Equipment
+  RV_ADDITIONAL_PIP:
+    meaning: ''
+    tell_apart: ''
+    shown_today: Additional personal injury protection (APIP)
+    printed_as:
+    - ADDITIONAL PERSONAL INJURY PROTECTION
+    - Additional Personal Injury Protection
+    note: See CR-PA-01 (split X_PIP).
+  RV_EMERGENCY_EXPENSE:
+    meaning: ''
+    tell_apart: ''
+    shown_today: EMERGENCY EXPENSE
+    printed_as:
+    - EMERGENCY EXPENSE
+    - Emergency Expense
+  RV_FIRE_DEPARTMENT_SERVICE:
+    meaning: ''
+    tell_apart: ''
+    shown_today: Fire Department Service
+    printed_as:
+    - Fire Department Service
+  RV_GUEST_LIABILITY:
+    meaning: ''
+    tell_apart: ''
+    shown_today: Guest Liability
+    printed_as:
+    - Guest Liability
+    - Motel Liab Guest
+  RV_HELMET_COLLISION:
+    meaning: ''
+    tell_apart: ''
+    shown_today: Helmet Collision Coverage
+    printed_as:
+    - Helmet Collision Coverage
+  RV_MEXICO_COVERAGE:
+    meaning: ''
+    tell_apart: ''
+    shown_today: Mexico Coverage
+    printed_as:
+    - Mexico Coverage
+  RV_OPTIONAL_BASIC_ECONOMIC_LOSS:
+    meaning: ''
+    tell_apart: ''
+    shown_today: Optional basic economic loss (OBEL)
+    printed_as:
+    - OPTIONAL BASIC ECONOMIC LOSS
+    - Optional Basic Economic Loss
+    note: See CR-PA-01 (split X_PIP).
+  RV_PASSENGER_LIABILITY:
+    meaning: ''
+    tell_apart: ''
+    shown_today: Passenger Liability
+    printed_as:
+    - Passenger Liability
+  RV_PEDESTRIAN_PIP:
+    meaning: ''
+    tell_apart: ''
+    shown_today: Pedestrian personal injury protection
+    printed_as:
+    - Mandatory Pedestrian Personal Injury Protection
+  RV_REPLACEMENT_COST_PERSONAL_EFFECTS:
+    meaning: ''
+    tell_apart: ''
+    shown_today: Replacement cost personal effects
+    printed_as:
+    - PERSONAL PROPERTY
+    - Replacement Cost Personal Effects
+  RV_SAFETY_APPAREL:
+    meaning: ''
+    tell_apart: ''
+    shown_today: Safety Apparel
+    printed_as:
+    - Safety Apparel
+  RV_SUPPLEMENTAL_SPOUSAL_LIABILITY:
+    meaning: ''
+    tell_apart: ''
+    shown_today: Supplemental spousal liability
+    printed_as:
+    - SUPPLEMENTAL SPOUSAL LIABILITY BODILY INJURY
+    note: Shared code proposed (CR-PA-02, CR-RV-03).
+  RV_TRAILER:
+    meaning: ''
+    tell_apart: ''
+    shown_today: Trailer (used with motorhome and included with Comprehensive and Collision coverage)
+    printed_as:
+    - Trailer (used with motorhome and included with Comprehensive and Collision coverage)
+  RV_TRAVEL_LOSS:
+    meaning: ''
+    tell_apart: ''
+    shown_today: Travel Loss
+    printed_as:
+    - Travel Loss
+  RV_TRIP_INTERRUPTION:
+    meaning: ''
+    tell_apart: ''
+    shown_today: Trip Interruption
+    printed_as:
+    - Trip Interruption
+  RV_VACATION_LIABILITY:
+    meaning: ''
+    tell_apart: ''
+    shown_today: VACATION LIABILITY
+    printed_as:
+    - VACATION LIABILITY
+    - Vacation Liability
+  RV_WRONGFUL_DEATH:
+    meaning: ''
+    tell_apart: ''
+    shown_today: Wrongful Death
+    printed_as:
+    - Wrongful Death
+ocean_marine:
+  OM_AGREED_VALUE_HULL:
+    meaning: ''
+    tell_apart: ''
+    shown_today: Agreed Value Loss Settlement - Hull
+    printed_as:
+    - Agreed Value Loss Settlement - Hull
+  OM_AGREED_VALUE_MACHINERY:
+    meaning: ''
+    tell_apart: ''
+    shown_today: Agreed Value Loss Settlement - Machinery
+    printed_as:
+    - Agreed Value Loss Settlement - Machinery
+  OM_COASTAL_NAVIGATION:
+    meaning: ''
+    tell_apart: ''
+    shown_today: Coastal Navigation
+    printed_as:
+    - Coastal Navigation
+  OM_DISAPPEARING_DEDUCTIBLE:
+    meaning: ''
+    tell_apart: ''
+    shown_today: Disappearing / diminishing deductible
+    printed_as:
+    - Diminishing Deductible
+    - Disappearing Deductible
+  OM_DRIVE_SYSTEM_PROTECTION:
+    meaning: ''
+    tell_apart: ''
+    shown_today: Drive System Protect Plus Coverage
+    printed_as:
+    - Drive System Protect Plus Coverage
+  OM_FUEL_SPILL_LIABILITY:
+    meaning: ''
+    tell_apart: ''
+    shown_today: Fuel spill / oil pollution liability
+    printed_as:
+    - Accidental Fuel Spill Liability Coverage
+    - Fuel Spill Liability
+    - Oil Pollution Liability
+  OM_HAUL_OUT_EXPENSE:
+    meaning: ''
+    tell_apart: ''
+    shown_today: Hurricane/Tsunami Haul Out Expense Reimbursement
+    printed_as:
+    - Hurricane/Tsunami Haul Out Expense Reimbursement
+  OM_MARINE_ELECTRONICS:
+    meaning: ''
+    tell_apart: ''
+    shown_today: Marine Electronics
+    printed_as:
+    - Marine Electronics
+  OM_NEW_BOAT_REPLACEMENT:
+    meaning: ''
+    tell_apart: ''
+    shown_today: New Boat Replacement Coverage
+    printed_as:
+    - New Boat Replacement Coverage
+  OM_ON_WATER_TOWING:
+    meaning: ''
+    tell_apart: ''
+    shown_today: On-water towing (Sign & Glide)
+    printed_as:
+    - Sign & Glide®
+  OM_PERSONAL_PROPERTY:
+    meaning: ''
+    tell_apart: ''
+    shown_today: Personal effects / personal property
+    printed_as:
+    - Personal Effects
+    - Personal Property Coverage
+  OM_PROPULSION_PLUS:
+    meaning: ''
+    tell_apart: ''
+    shown_today: Propulsion Plus®
+    printed_as:
+    - Propulsion Plus®
+  OM_REPLACEMENT_COST_PERSONAL_EFFECTS:
+    meaning: ''
+    tell_apart: ''
+    shown_today: Replacement Cost Personal Effects
+    printed_as:
+    - Replacement Cost Personal Effects
+  OM_TRAILER:
+    meaning: ''
+    tell_apart: ''
+    shown_today: Trailer
+    printed_as:
+    - Trailer
+  OM_WATERCRAFT_EQUIPMENT:
+    meaning: ''
+    tell_apart: ''
+    shown_today: Watercraft and equipment (hull) physical damage
+    printed_as:
+    - Watercraft & Equipment, Agreed Value
+    - Watercraft and Auxiliary Equipment Coverage
+  OM_WRECKAGE_REMOVAL:
+    meaning: ''
+    tell_apart: ''
+    shown_today: Wreckage Removal
+    printed_as:
+    - Wreckage Removal
+personal_umbrella:
+  PU_EXCESS_UM_UIM:
+    meaning: ''
+    tell_apart: ''
+    shown_today: Excess uninsured / underinsured motorists
+    printed_as:
+    - EXCESS UNINSURED/UNDERINSURED MOTORIST LIMIT
+  PU_INCIDENTAL_OCCUPANCY:
+    meaning: ''
+    tell_apart: ''
+    shown_today: Permitted incidental occupancies
+    printed_as:
+    - PERSONAL UMBRELLA LIABILITY POLICY - PERMITTED INCIDENTAL OCCUPANCIES
+  PU_LIABILITY:
+    meaning: ''
+    tell_apart: ''
+    shown_today: Personal umbrella liability
+    printed_as:
+    - Liability Limit
+    - Liability Per Occurrence
+    - Liability Per Occurrence*
