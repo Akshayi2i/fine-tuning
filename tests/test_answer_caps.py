@@ -7,7 +7,7 @@ from common.config import answer_cap
 
 def test_each_section_gets_its_own_budget():
     assert answer_cap("policy_declarations", "policy") == 4096
-    assert answer_cap("policy_schedule", "policy") == 8192
+    assert answer_cap("policy_schedule", "policy") == 12288
     assert answer_cap("policy_endorsements", "policy") == 3072
     assert answer_cap(None, "policy") == answer_cap("extract", "policy")
 

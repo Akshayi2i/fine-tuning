@@ -148,19 +148,27 @@ def test_the_output_budget_always_fits_inside_the_cap():
         )
 
 
-def test_lossrun_rows_reserves_the_largest_output_budget():
-    """An OUTPUT-bound task: the window planner shrinks the page window until the
-    estimated row output fits. No task may out-reserve it, or that planner would
-    be sizing against the wrong limit. Policy schedules, the other output-bound
-    task, may equal it (both 8,192 since the smoke run measured complete labels)."""
+def test_each_output_bound_planner_sizes_against_its_own_reservation_and_serving_allows_every_one(monkeypatch):
+    """The Loss Run window planner sizes a window from lossrun_rows' own reserved
+    output, and a policy window's pages come from what policy_schedule leaves of
+    its sequence - neither from another task's. So a task may reserve more than
+    lossrun_rows (policy schedules 12,288 since the SPEC_21 set) as long as
+    serving lets every task write its full reservation."""
     from common.tasks import Task
+    from data_pipeline.dataset_builder.expand_tasks import pages_per_extraction_call
+    from serving.pipeline import lossrun_window_budget
 
-    rows = int(config.sequence_for_task(str(Task.LOSSRUN_ROWS))["max_output_tokens"])
-    others = {
-        str(t): int(config.sequence_for_task(str(t))["max_output_tokens"])
-        for t in Task if t is not Task.LOSSRUN_ROWS
-    }
-    assert rows >= max(others.values()), f"lossrun_rows reserves {rows}, others {others}"
+    reserved = {str(t): int(config.sequence_for_task(str(t))["max_output_tokens"]) for t in Task}
+    assert lossrun_window_budget() == reserved[str(Task.LOSSRUN_ROWS)]
+    generation = config.load_yaml(config.CONFIG_DIR / "inference" / "vllm_serving.yaml")["generation"]
+    assert int(generation["max_new_tokens"]) >= max(reserved.values()), (generation, reserved)
+    pages = pages_per_extraction_call("policy", None, "homeowners", "arrays")
+    schedule = config.sequence_for_task("policy_schedule")
+    shorter = {**schedule, "max_output_tokens": schedule["max_output_tokens"] - 8192}
+    original = config.sequence_for_task
+    monkeypatch.setattr(config, "sequence_for_task", lambda task, doc_type=None: (
+        shorter if task == "policy_schedule" else original(task, doc_type)))
+    assert pages_per_extraction_call("policy", None, "homeowners", "arrays") > pages   # its own reservation
 
 
 def test_an_unknown_task_is_refused_rather_than_silently_defaulted():

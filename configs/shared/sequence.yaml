@@ -92,13 +92,18 @@ tasks:
 
   policy_schedule:
     max_seq_len: 32768
-    max_output_tokens: 8192
+    max_output_tokens: 12288
     composition: "row schema ~1k + window pages + rows output"
     note: >
       OUTPUT-bound, like lossrun_rows: the window is sized so the estimated rows
       fit max_output_tokens. A vehicle schedule runs to hundreds of rows, and a
       clipped assistant span is an unparseable target in training and a silently
-      short extraction in serving.
+      short extraction in serving. 12,288, not 8,192 (2026-10-07): on the SPEC_21
+      set three seeds' schedule windows answered in 8,700-11,900 tokens and were
+      set aside (93 documents), and one NYCM auto policy prints ~8,600 tokens of
+      rows on a single page, so no smaller window could hold it. The pages a
+      window reads come from what is left of max_seq_len after this reservation
+      (expand_tasks.pages_per_extraction_call), so windows shrink by about a page.
 
   policy_endorsements:
     max_seq_len: 20480
