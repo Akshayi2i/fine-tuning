@@ -41,6 +41,13 @@ PAGE_SIGNALS: dict[str, float] = {
     "common policy declarations": 10.0,
     "schedule": 5.0,
     "coverage schedule": 6.0,
+    # A schedule's own title on its continuation pages ("Coverage Summary
+    # Page 2 ... (Continued)"), and the word every limits table carries
+    # ("Peril Deductible"). Without them those pages scored 0 and their rows were
+    # never read: 788 homeowners values on the SPEC_21 set (2026-10-07), for
+    # about 7% more pages read in routed policies.
+    "coverage summary": 6.0,
+    "deductible": 3.0,
     "named insured": 4.0,
     "policy number": 4.0,
     "policy period": 4.0,
@@ -114,7 +121,7 @@ def plan_pages(
     """
     total = len(page_texts)
     # Scored whatever the length. The declarations page is what the decl group
-    # reads beyond pages 1-3, and a short policy behind a fax cover sheet — its
+    # reads beyond its leading pages, and a short policy behind a fax cover sheet — its
     # declarations on page 4 or 5 of 5 — reported none, so its policy-level
     # fields were asked of three pages that do not print them.
     scores = [score_page(text, page) for page, text in sorted(page_texts.items())]

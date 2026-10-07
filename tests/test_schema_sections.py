@@ -148,15 +148,15 @@ def test_the_declarations_group_follows_the_declarations_page():
     """Scanned intake routinely opens with a fax cover sheet, a billing notice
     or a broker letter, which puts the real declarations on page 4 or 5.
 
-    Pinned to pages 1-3, nothing would ask for the policy-level fields on
-    exactly the documents most likely to be messy, and every one of them would
-    come back null.
+    Pinned to its leading pages, nothing would ask for the policy-level fields
+    on exactly the documents most likely to be messy, and every one of them
+    would come back null. The leading pages are 1-5 (declarations_leading).
     """
-    routed = [1, 2, 3, 5, 40, 41]
-    assert pages_for("decl", routed) == [1, 2, 3]
-    assert pages_for("decl", routed, declarations_page=5) == [1, 2, 3, 5]
+    routed = [1, 2, 3, 5, 7, 40, 41]
+    assert pages_for("decl", routed) == [1, 2, 3, 5]
+    assert pages_for("decl", routed, declarations_page=40) == [1, 2, 3, 5, 40]
     # A detected page outside the routed set is not invented into it.
-    assert pages_for("decl", routed, declarations_page=99) == [1, 2, 3]
+    assert pages_for("decl", routed, declarations_page=99) == [1, 2, 3, 5]
 
 
 def test_the_array_groups_read_every_routed_page():

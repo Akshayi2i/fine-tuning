@@ -299,8 +299,8 @@ def plan_policy_windows(
     Two rules, both about keeping a window readable rather than merely legal:
 
     * **The declarations lead — where the group reads them.** ``leading`` pages
-      (the declarations group's: pages 1-3 plus the page the declarations were
-      found on) open the windows, together. Every group used to set pages 1-3
+      (the declarations group's: its leading pages, ``declarations_leading``,
+      plus the page the declarations were found on) open the windows, together. Every group used to set pages 1-3
       apart, so a routed group spent a call on them alone even when they held
       none of its tables, and a declarations page found on page 5 was read in a
       window apart from the leading pages it continues.

@@ -103,8 +103,15 @@ groups:
 # real declarations on page 4 or 5. Pinning this group to pages 1-3 would mean
 # nothing asks for the policy-level fields on exactly the documents most likely
 # to be messy, and every one of them would come back null.
+#
+# 5, not 3 (2026-10-07): on the SPEC_21 set the declarations' own sections -
+# billing installments, the carrier's address, premium items, the insured -
+# are printed on pages 4 and 5 often enough that 2,842 values sat on pages no
+# window of their group read. Five leading pages, plus a declarations page found
+# later, is six: one declarations window still holds them, and its answer stays
+# far below its reservation (largest 1,627 of 4,096 tokens).
 pages:
-  declarations_leading: 3
+  declarations_leading: 5
 
 # --------------------------------------------------------------------------
 # Identifying keys, for de-duplicating a row that two windows both returned

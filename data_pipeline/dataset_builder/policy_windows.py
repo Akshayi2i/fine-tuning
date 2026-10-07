@@ -147,8 +147,8 @@ def plan_windows(
     for group in groups_for(lob):
         pages = pages_for(group, list(routed), declarations_page=declarations_page)
         capacity = pages_per_extraction_call("policy", None, lob, group)
-        # A declarations group's pages all lead — pages 1-3 and the page the
-        # declarations were found on, read together. A routed group packs by
+        # A declarations group's pages all lead — its leading pages and the page
+        # the declarations were found on, read together. A routed group packs by
         # runs alone.
         windows = plan_policy_windows(
             pages, pages_per_window=capacity,
