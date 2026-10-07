@@ -69,8 +69,12 @@ PENDING=()
 step "1/7 checking the pod"
 [ "$(uname -s)" = Linux ] || die "run this on the RunPod pod, not the laptop"
 command -v nvidia-smi >/dev/null 2>&1 || die "no nvidia-smi: this pod has no GPU (every stage is GPU only)"
-gpu="$(nvidia-smi --query-gpu=name,memory.total --format=csv,noheader | head -n1)"
-echo "GPU: $gpu"
+# Every GPU's line read in full, then the first taken. `| head -n1` closed the pipe
+# while nvidia-smi was still writing on a multi-GPU pod, and under pipefail its
+# SIGPIPE ended the script silently at this line (4x H200, 2026-10-07).
+gpus="$(nvidia-smi --query-gpu=name,memory.total --format=csv,noheader)"
+gpu="${gpus%%$'\n'*}"
+echo "GPU: $gpu x$(printf '%s\n' "$gpus" | grep -c .)"
 case "$gpu" in
   *H200*) ;;
   *) echo "WARNING: expected an H200 SXM; the configs are sized for its 141 GB." ;;

@@ -50,6 +50,25 @@ def test_it_checks_the_gpu_the_mount_and_the_space_first():
     assert 'MIN_FREE_GB="${FIDEON_MIN_FREE_GB:-150}"' in SCRIPT
 
 
+@pytest.mark.skipif(BASH is None, reason="needs bash")
+def test_the_gpu_check_survives_a_pod_with_several_gpus(tmp_path):
+    """nvidia-smi writes one line per GPU. Cut short with `| head -n1`, it died
+    of SIGPIPE on a 4x H200 pod and pipefail ended the bootstrap at step 1."""
+    fake = tmp_path / "bin"
+    fake.mkdir()
+    (fake / "nvidia-smi").write_text(
+        '#!/usr/bin/env bash\nfor i in 0 1 2 3; do echo "NVIDIA H200, 143771 MiB"; sleep 0.05; done\n',
+        encoding="utf-8", newline="\n")
+    (fake / "nvidia-smi").chmod(0o755)
+    start = SCRIPT.index('gpus="$(nvidia-smi')
+    end = SCRIPT.index("\n", SCRIPT.index('echo "GPU:', start))
+    check = "set -euo pipefail\n" + SCRIPT[start:end] + "\necho survived\n"
+    done = subprocess.run([BASH, "-c", check], capture_output=True, text=True,
+                          env={"PATH": f"{fake.as_posix()}:/usr/bin:/bin"})
+    assert done.returncode == 0, done.stderr
+    assert done.stdout.splitlines() == ["GPU: NVIDIA H200, 143771 MiB x4", "survived"]
+
+
 def test_the_base_model_comes_at_the_pinned_revision():
     assert "snapshot_download(repo_id=model_id, revision=revision" in SCRIPT
     assert '"PIN_ME"' in SCRIPT   # refuses to download a floating revision
