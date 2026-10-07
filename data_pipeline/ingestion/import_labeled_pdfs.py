@@ -294,7 +294,7 @@ def import_batch(
     # The same checksum map `ingest_directory` builds, so re-importing a
     # corrected batch re-labels the documents already stored rather than storing
     # a second copy of each PDF under a new source_id.
-    from data_pipeline.ingestion.pull_raw_pdfs import _existing_checksums
+    from data_pipeline.ingestion.pull_raw_pdfs import IngestionError, _existing_checksums
 
     known = _existing_checksums(raw_client, doc_type, tenant_id)
     for bundle in bundles:
@@ -303,7 +303,9 @@ def import_batch(
                 bundle, doc_type, client, raw_client,
                 tenant_id=tenant_id, known_checksums=known,
             )
-        except (LabeledPdfError, ValueError) as exc:
+        # An unreadable PDF is that document's failure, not the batch's: it ended
+        # an import part-way, every later document unimported.
+        except (LabeledPdfError, IngestionError, ValueError) as exc:
             next(c for c in report.checks if c.name == bundle.directory.name).errors.append(str(exc))
             continue
         report.imported[bundle.directory.name] = source_id

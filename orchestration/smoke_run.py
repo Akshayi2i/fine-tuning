@@ -89,13 +89,16 @@ def assert_fresh(client, tenant: str, version: str, steps: list[str]) -> None:
     training "already complete", re-merged the OLD adapter and reported success
     without training on the new batch at all.
 
-    Checked only when the run starts from the beginning (``import``): resuming a
-    failed run with ``--steps check,finetune`` is the same run, and is allowed.
+    Checked only when the run starts from the beginning (``select``): resuming a
+    failed run is the same run, and is allowed - from ``import`` too, which skips
+    the documents it already imported (same checksum). Checked at ``import``, the
+    resume this script prints after a failed import was refused whenever any
+    document had gone in before the failure.
     """
     from artifact_registry import paths
     from data_pipeline.labeling.export_golden_labels import list_labeled_source_ids
 
-    if "import" not in steps:
+    if "select" not in steps:
         return
     held = list_labeled_source_ids(client, "policy", tenant)
     problems = []
@@ -120,7 +123,7 @@ def assert_fresh(client, tenant: str, version: str, steps: list[str]) -> None:
             "; ".join(problems) + ". This smoke run would reuse that state instead of testing the "
             "new batch. Start it under names nothing has used: --tenant smoke2 --version v0.1 "
             "(any unused pair). To carry on a smoke run that stopped part-way, leave out "
-            "select and import: --steps check,preflight,finetune."
+            "select: --steps import,ocr,check,preflight,finetune (or from the step that failed)."
         )
 
 

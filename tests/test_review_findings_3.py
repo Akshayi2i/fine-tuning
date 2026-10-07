@@ -51,8 +51,10 @@ def test_a_smoke_run_refuses_a_tenant_that_already_holds_documents(client):
     client.write_json(paths.golden_label("policy", "policy_0001", "smoke2"), {})
     with pytest.raises(SmokeError, match="already holds 1 imported document"):
         assert_fresh(client, "smoke2", "v0.1", ["select", "import", "finetune"])
-    # Carrying on a run that stopped part-way is the same run.
+    # Carrying on a run that stopped part-way is the same run - from the import
+    # too, as the smoke run's own message after a failed import says.
     assert_fresh(client, "smoke2", "v0.1", ["check", "preflight", "finetune"])
+    assert_fresh(client, "smoke2", "v0.1", ["import", "ocr", "check", "preflight", "finetune"])
 
 
 # 2 - the launcher carries the caller's GPU selection into the session

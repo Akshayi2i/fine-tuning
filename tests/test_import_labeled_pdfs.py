@@ -123,6 +123,22 @@ def test_every_problem_with_a_label_is_reported_at_once(tmp_path):
     assert len(check.errors) >= 2
 
 
+def test_an_unreadable_pdf_fails_its_document_and_the_rest_are_imported(tmp_path, client, raw_client,
+                                                                       monkeypatch):
+    """One PDF no reader could open ended an import part-way."""
+    from data_pipeline.ingestion import pull_raw_pdfs
+
+    def inspect(path):
+        if path.read_bytes() == b"%PDF-1.7 0":
+            raise pull_raw_pdfs.IngestionError(f"could not read {path.name}: Unexpected end of stream.")
+        return {"page_count": 2, "is_scanned": False, "text_chars_per_sampled_page": 900.0}
+
+    monkeypatch.setattr(pull_raw_pdfs, "inspect_pdf", inspect)
+    report = import_batch(batch(tmp_path, ("a", "b")), "policy", client, raw_client)
+    assert list(report.imported) == ["b"]
+    assert report.failed and any("Unexpected end of stream" in e for c in report.checks for e in c.errors)
+
+
 def test_validate_only_writes_nothing(tmp_path, client, raw_client):
     """The mode to use while labels are still being corrected."""
     report = import_batch(

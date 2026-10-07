@@ -95,12 +95,26 @@ def inspect_pdf(path: Path) -> dict[str, Any]:
     try:
         reader = PdfReader(str(path))
         pages = len(reader.pages)
-        sampled = reader.pages[: min(3, pages)]
-        text = "".join((p.extract_text() or "") for p in sampled)
+        sampled = min(3, pages)
+        text = "".join((p.extract_text() or "") for p in reader.pages[:sampled])
     except Exception as exc:
-        raise IngestionError(f"could not read {path.name}: {exc}") from exc
+        # pypdf gives up on content PyMuPDF reads: an inline image whose
+        # run-length data ends early stopped a whole import (one SPEC_21 seed, a
+        # 9-page homeowners endorsement). PyMuPDF is the renderer the pipeline
+        # uses for every page anyway, so its reading counts; only a PDF neither
+        # can open is refused.
+        try:
+            import pymupdf
 
-    chars_per_page = len(text.strip()) / max(1, len(sampled))
+            with pymupdf.open(str(path)) as document:
+                pages = document.page_count
+                sampled = min(3, pages)
+                text = "".join(document[i].get_text() for i in range(sampled))
+        except Exception as fallback:
+            raise IngestionError(f"could not read {path.name}: {exc}; PyMuPDF: {fallback}") from exc
+        log.warning("%s: pypdf could not read it (%s); read with PyMuPDF instead", path.name, exc)
+
+    chars_per_page = len(text.strip()) / max(1, sampled)
     return {
         "page_count": pages,
         "is_scanned": chars_per_page < 50,
