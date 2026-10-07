@@ -24,7 +24,9 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 from dataclasses import dataclass, field
+from functools import lru_cache
 from typing import Any
 
 from common.config import sequence_for_task, vision_for_task
@@ -34,6 +36,13 @@ log = logging.getLogger(__name__)
 #: Characters per token for English prose and Markdown tables. Real tokenizers
 #: average nearer 4; 3.5 rounds against the budget, which is the safe direction.
 CHARS_PER_TOKEN = 3.5
+
+#: How far a real answer runs past its estimate, at most. Answer JSON is
+#: punctuation and short keys ("raw", "parsed", "page_ref"), which the base
+#: model's tokenizer splits finer than prose: over every window answer of the
+#: SPEC_21 set, real tokens were 1.12x the estimate typically and 1.22x at the
+#: worst (2026-10-07). Applied only where the tokenizer itself is not at hand.
+TARGET_ESTIMATE_FACTOR = 1.25
 
 #: Pixels per visual token — 16px patches with a 2x2 spatial merge.
 #: TODO Phase 0 (spike item 4, `visual_token_geometry`): replace with the
@@ -180,6 +189,43 @@ def estimate_text_tokens(text: str | None) -> int:
     return digits + int((len(text) - digits) / CHARS_PER_TOKEN) + 1
 
 
+@lru_cache(maxsize=1)
+def _answer_tokenizer() -> Any:
+    """The base model's own tokenizer where its files are on this machine (the
+    pod's /workspace/models), else ``None``."""
+    from common.config import base_model_dir
+
+    local = base_model_dir()
+    if local is None or not (local / "tokenizer.json").is_file():
+        return None
+    try:
+        # As training.length_check loads it, so the two count alike.
+        from transformers import AutoTokenizer
+
+        return AutoTokenizer.from_pretrained(str(local), trust_remote_code=True)
+    except Exception as exc:  # noqa: BLE001 - an unreadable tokenizer falls back to the padded estimate
+        log.warning("could not load the tokenizer in %s (%s); answers are estimated", local, exc)
+        return None
+
+
+def target_tokens(text: str | None) -> int:
+    """Tokens of an answer (the assistant turn).
+
+    Counted by the base model's tokenizer when it is on this machine, so the
+    corpus sets aside exactly the rows the pre-launch length check
+    (training.length_check) would refuse; estimated and padded by
+    :data:`TARGET_ESTIMATE_FACTOR` otherwise. The plain estimate passed answers
+    of 12,954-13,492 tokens against a 12,288 reservation, and training refused
+    them at launch, after the whole corpus had been built and staged.
+    """
+    if not text:
+        return 0
+    tokenizer = _answer_tokenizer()
+    if tokenizer is not None:
+        return len(tokenizer(text, add_special_tokens=False)["input_ids"])
+    return math.ceil(estimate_text_tokens(text) * TARGET_ESTIMATE_FACTOR)
+
+
 def estimate_visual_tokens(pages: int, task: str) -> int:
     """Visual tokens for ``pages`` pages at this task's pixel budget.
 
@@ -214,7 +260,7 @@ def estimate_row(
         prompt_tokens=estimate_text_tokens(system_prompt),
         ocr_tokens=sum(estimate_text_tokens(p) for p in (ocr_pages or [])),
         visual_tokens=estimate_visual_tokens(page_count, task),
-        output_tokens=estimate_text_tokens(target),
+        output_tokens=target_tokens(target),
     )
 
 
