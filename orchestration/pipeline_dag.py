@@ -1125,6 +1125,30 @@ def _selection_settings(ctx: StageContext) -> dict[str, float]:
     }
 
 
+def _checkpoint_scorer(ctx: StageContext) -> Any:
+    """The scorer checkpoint selection uses: one vLLM engine per GPU, the
+    candidates scored at once, when training had several GPUs
+    (evaluation.checkpoint_eval.ParallelScorer); else one engine in this process."""
+    from common.config import training_config
+    from evaluation.checkpoint_eval import parallel_vllm_scorer, scoring_gpus, vllm_scorer
+    from training.train import training_gpus
+
+    settings = {
+        "client": ctx.client,
+        # The scope's own validation view: scoring a policy checkpoint on
+        # Loss Runs it never trained on measures the base model.
+        "val_path": paths.corpus_scope_eval_split(ctx.corpus, "val", ctx.scope.name, ctx.tenant_id),
+        "images_root": paths.staging_train_images_dir(ctx.corpus, ctx.tenant_id),
+        "sample_rows": int(_selection_settings(ctx)["validation_sample_rows"]),
+    }
+    distributed = training_config(ctx.scope.training_config).get("distributed") or {}
+    gpus = scoring_gpus()[: training_gpus(distributed)]
+    if len(gpus) > 1:
+        staged = paths.scoped_staging_adapter_dir(ctx.scope.name, ctx.out_version)
+        return parallel_vllm_scorer(**settings, gpus=gpus, work_dir=Path(staged) / "checkpoint_scores")
+    return vllm_scorer(**settings)
+
+
 def stage_checkpoint_eval(ctx: StageContext) -> StageResult:
     """Pick the checkpoint that ships, by GENERATED field F1.
 
@@ -1153,18 +1177,7 @@ def stage_checkpoint_eval(ctx: StageContext) -> StageResult:
     # meaning the same thing is one that can disagree with the first.
     scorer = ctx.checkpoint_scorer
     if scorer is None:  # pragma: no cover - needs a GPU
-        from evaluation.checkpoint_eval import vllm_scorer
-
-        scorer = vllm_scorer(
-            client=ctx.client,
-            # The scope's own validation view: scoring a policy checkpoint on
-            # Loss Runs it never trained on measures the base model.
-            val_path=paths.corpus_scope_eval_split(
-                ctx.corpus, "val", ctx.scope.name, ctx.tenant_id
-            ),
-            images_root=paths.staging_train_images_dir(ctx.corpus, ctx.tenant_id),
-            sample_rows=int(_selection_settings(ctx)["validation_sample_rows"]),
-        )
+        scorer = _checkpoint_scorer(ctx)
 
     try:
         report = select_best(checkpoints, scorer, best_loss=ctx.best_loss_checkpoint)

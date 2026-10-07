@@ -23,13 +23,25 @@ the weights folded in.
 The candidate set is small on purpose. Scoring every checkpoint would multiply
 the cost by the epoch count for a decision that, in practice, sits between the
 last few and the one early stopping liked.
+
+**On a pod with several GPUs the candidates are scored at once**, one worker
+process and vLLM engine per GPU (:class:`ParallelScorer`), each with the engine
+the in-process scorer uses; only how many run at a time changes. One engine on
+one card took ~35 minutes a candidate on the smoke set, ~2.5 hours for four,
+with three of four GPUs idle.
 """
 
 from __future__ import annotations
 
+import json
 import logging
+import os
 import re
+import subprocess
+import sys
+import time
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Protocol
 
 log = logging.getLogger(__name__)
@@ -194,9 +206,16 @@ def select_best(
     contention.
     """
     report = SelectionReport()
-    for candidate in select_candidates(checkpoints, best_loss, trailing=trailing):
+    candidates = select_candidates(checkpoints, best_loss, trailing=trailing)
+    # A scorer that can score several at once (ParallelScorer) is given them all.
+    outcomes = _score_all(scorer, [c.checkpoint for c in candidates])
+    for candidate in candidates:
         try:
-            candidate.metrics = dict(scorer(candidate.checkpoint))
+            outcome = (outcomes[candidate.checkpoint] if outcomes is not None
+                       else scorer(candidate.checkpoint))
+            if isinstance(outcome, BaseException):
+                raise outcome
+            candidate.metrics = dict(outcome)
         except Exception as exc:  # noqa: BLE001 - one bad candidate must not lose the rest
             report.skipped.append((candidate.checkpoint, f"{type(exc).__name__}: {exc}"))
             log.warning("could not score %s: %s", candidate.checkpoint, exc)
@@ -283,10 +302,14 @@ def break_tie(report: SelectionReport, full_scorer: Scorer, margin: float) -> Se
     if len(report.scores) < 2 or report.margin >= margin:
         return report
     first, second = sorted(report.scores, key=lambda s: (s.field_f1, s.step), reverse=True)[:2]
+    outcomes = _score_all(full_scorer, [first.checkpoint, second.checkpoint])
     full: dict[str, float] = {}
     for candidate in (first, second):
-        full[candidate.checkpoint] = float(
-            dict(full_scorer(candidate.checkpoint)).get("field_normalized_match", 0.0))
+        outcome = (outcomes[candidate.checkpoint] if outcomes is not None
+                   else full_scorer(candidate.checkpoint))
+        if isinstance(outcome, BaseException):
+            raise outcome
+        full[candidate.checkpoint] = float(dict(outcome).get("field_normalized_match", 0.0))
     winner = max((first, second), key=lambda s: (full[s.checkpoint], s.step))
     report.tie_break = {
         "margin_on_sample": report.margin, "threshold": margin,
@@ -325,12 +348,161 @@ def vllm_scorer(
         return generation_scorer(rows, model)
     # Candidates are ranked on the fixed validation sample, the rows the training
     # checks read; ``.full`` scores every row, for the near-tie (break_tie). One
-    # engine serves both.
+    # engine serves both. A split no bigger than the sample has no ``.full``: the
+    # near-tie would be scored again on the very rows that tied.
     from evaluation.validation_sample import validation_sample
 
-    score = generation_scorer(validation_sample(rows, sample_rows), model)
-    score.full = generation_scorer(rows, model)  # type: ignore[attr-defined]
+    sample = validation_sample(rows, sample_rows)
+    score = generation_scorer(sample, model)
+    if len(sample) < len(rows):
+        score.full = generation_scorer(rows, model)  # type: ignore[attr-defined]
     return score
+
+
+def _score_all(scorer: Any, checkpoints: list[str]) -> dict[str, Any] | None:
+    """Every checkpoint's metrics (or the exception scoring it raised) from one
+    call, when the scorer can score several at once; ``None`` when it cannot."""
+    many = getattr(scorer, "score_many", None)
+    return many(checkpoints) if callable(many) else None
+
+
+def scoring_gpus() -> list[str]:
+    """The GPUs this process may score on, as ``CUDA_VISIBLE_DEVICES`` ids: those it
+    is limited to, or every one torch counts. Empty off a GPU machine."""
+    visible = os.environ.get("CUDA_VISIBLE_DEVICES")
+    if visible is not None:
+        return [d.strip() for d in visible.split(",") if d.strip() and d.strip() != "-1"]
+    try:
+        import torch
+
+        return [str(i) for i in range(torch.cuda.device_count())]
+    except Exception:  # noqa: BLE001 - no torch / no CUDA: nothing to score on in parallel
+        return []
+
+
+def _spawn(command: list[str], env: dict[str, str], log_path: Path) -> subprocess.Popen:
+    """Start one scoring worker, its output in ``log_path``. A seam for tests."""
+    handle = log_path.open("w", encoding="utf-8")
+    process = subprocess.Popen(command, env=env, stdout=handle, stderr=subprocess.STDOUT)
+    process.log_handle = handle  # type: ignore[attr-defined] - closed once the worker ends
+    return process
+
+
+def _tail(path: Path, lines: int = 15) -> str:
+    try:
+        return "\n".join(path.read_text(encoding="utf-8", errors="replace").splitlines()[-lines:])
+    except OSError:
+        return "(no log)"
+
+
+@dataclass
+class ParallelScorer:
+    """Scores checkpoints at once, one worker process per GPU.
+
+    Each worker (``evaluation.checkpoint_score_worker``) sees one GPU and builds
+    the in-process scorer there - :func:`vllm_scorer`, the same engine, rows and
+    scoring - so a candidate scores as it would alone. Candidates are dealt to
+    the GPUs in turn; a worker that fails fails only the candidates it held, each
+    with the end of its log.
+    """
+
+    val_path: str
+    images_root: str | None
+    sample_rows: int
+    gpus: list[str]
+    work_dir: Path
+    #: Score every validation row, not the sample (the near-tie's ``.full``).
+    full_split: bool = False
+    poll_seconds: float = 15.0
+
+    def __call__(self, checkpoint: str) -> dict[str, float]:
+        outcome = self.score_many([checkpoint])[checkpoint]
+        if isinstance(outcome, BaseException):
+            raise outcome
+        return outcome
+
+    def close(self) -> None:
+        """Nothing to free here: each worker's engine ended with the worker."""
+
+    def score_many(self, checkpoints: list[str]) -> dict[str, Any]:
+        checkpoints = list(dict.fromkeys(checkpoints))
+        lanes = self.gpus[: max(1, len(checkpoints))]
+        shares = {gpu: checkpoints[index::len(lanes)] for index, gpu in enumerate(lanes)}
+        self.work_dir.mkdir(parents=True, exist_ok=True)
+        kind = "full" if self.full_split else "sample"
+        running = {}
+        for gpu, share in shares.items():
+            if not share:
+                continue
+            out = self.work_dir / f"scores-{kind}-gpu{gpu}.json"
+            out.unlink(missing_ok=True)
+            command = [sys.executable, "-m", "evaluation.checkpoint_score_worker",
+                       "--val-path", self.val_path, "--sample-rows", str(self.sample_rows),
+                       "--out", str(out)]
+            if self.images_root:
+                command += ["--images-root", str(self.images_root)]
+            if self.full_split:
+                command.append("--full")
+            for checkpoint in share:
+                command += ["--checkpoint", checkpoint]
+            # One GPU each; the worker scores in place - it must not re-launch
+            # itself into tmux as the pod's long jobs do.
+            env = {**os.environ, "CUDA_VISIBLE_DEVICES": gpu, "FIDEON_NO_DETACH": "1"}
+            log_path = self.work_dir / f"scores-{kind}-gpu{gpu}.log"
+            running[gpu] = (share, out, log_path, _spawn(command, env, log_path))
+        log.info("scoring %d checkpoint(s) on %d GPU(s) at once (%s rows); logs: %s",
+                 len(checkpoints), len(running), kind, self.work_dir)
+
+        outcomes: dict[str, Any] = {}
+        while running:
+            for gpu in [g for g, (*_, proc) in running.items() if proc.poll() is not None]:
+                share, out, log_path, proc = running.pop(gpu)
+                if getattr(proc, "log_handle", None) is not None:
+                    proc.log_handle.close()
+                try:
+                    results = json.loads(out.read_text(encoding="utf-8")) if out.is_file() else {}
+                except ValueError:
+                    results = {}
+                for checkpoint in share:
+                    result = results.get(checkpoint)
+                    if result and "metrics" in result:
+                        outcomes[checkpoint] = result["metrics"]
+                        log.info("scored %s on GPU %s: field F1 %.4f", checkpoint, gpu,
+                                 float(result["metrics"].get("field_normalized_match", 0.0)))
+                    else:
+                        why = (result or {}).get("error") or (
+                            f"the worker on GPU {gpu} exited {proc.returncode} without a score")
+                        outcomes[checkpoint] = CheckpointEvalError(f"{why}\n{_tail(log_path)}")
+            if running:
+                time.sleep(self.poll_seconds)
+        return outcomes
+
+
+def parallel_vllm_scorer(
+    *, client: Any, val_path: str, images_root: str | None, sample_rows: int, gpus: list[str],
+    work_dir: Path,
+) -> ParallelScorer:
+    """A :class:`ParallelScorer` over the stored validation split, with a ``.full``
+    one for the near-tie when the sample is smaller than the split.
+
+    The page images are fetched here, once, into the shared cache, so the workers
+    only read them: four fetching the same missing page at once could each see
+    another's half-written file.
+    """
+    from evaluation.validation_generation import read_rows
+    from evaluation.validation_sample import validation_sample
+
+    rows = read_rows(client.read_text(val_path))
+    if images_root is not None:
+        from training.stage_data import localize_rows
+
+        localize_rows(rows, client, images_root)
+    settings = dict(val_path=val_path, images_root=images_root, sample_rows=sample_rows,
+                    gpus=list(gpus), work_dir=Path(work_dir))
+    scorer = ParallelScorer(**settings)
+    if sample_rows and len(validation_sample(rows, sample_rows)) < len(rows):
+        scorer.full = ParallelScorer(**settings, full_split=True)  # type: ignore[attr-defined]
+    return scorer
 
 
 def discover_checkpoints(output_dir: str) -> tuple[list[str], str | None]:

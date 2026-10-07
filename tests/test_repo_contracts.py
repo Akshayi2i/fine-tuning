@@ -95,6 +95,10 @@ RUNTIME_SET_VARS = frozenset({
     "TMUX",
     # The OS's own: read so ms-swift is found next to the running Python.
     "PATH",
+    # CUDA's own, set by the job launcher (scripts/pod_run.sh) or a scheduler:
+    # which GPUs checkpoint selection may run its engines on. Never in .env -
+    # the pod sources it, and an empty value there would hide every GPU.
+    "CUDA_VISIBLE_DEVICES",
 })
 
 
