@@ -136,6 +136,25 @@ def test_the_smoke_subset_needs_every_split(tmp_path):
         select_sources(tmp_path, val_sources=2)
 
 
+def test_the_smoke_subset_can_take_a_validation_and_a_test_source_of_every_line(tmp_path):
+    from orchestration.smoke_run import parse_args, select_sources
+
+    _bundles(tmp_path)
+    for split, lob, template in [("val", "homeowners", "A/homeowners/h4"), ("val", "motorcycle", "C/motorcycle/m2"),
+                                 ("test", "homeowners", "A/homeowners/h5"), ("test", "motorcycle", "C/motorcycle/m3")]:
+        folder = tmp_path / f"{lob}__{template.rsplit('/', 1)[-1]}__synth_000"
+        folder.mkdir()
+        (folder / "metadata.json").write_text(json.dumps(
+            {"split": split, "lob": lob, "template_id": template, "synthetic": False}), encoding="utf-8")
+    args, _steps = parse_args(["--tenant", "smoke9", "--val-sources", "2", "--test-sources", "2"])
+    chosen = select_sources(tmp_path, train_sources=args.train_sources, val_sources=args.val_sources,
+                            test_sources=args.test_sources)
+    metas = [json.loads((f / "metadata.json").read_text("utf-8")) for f in chosen]
+    for split in ("val", "test"):
+        assert len({m["lob"] for m in metas if m["split"] == split}) == 2        # one per line first
+    assert parse_args(["--tenant", "smoke9"])[0].val_sources == 1                # as before by default
+
+
 def test_the_smoke_subset_is_linked_not_moved(tmp_path):
     from orchestration.smoke_run import select_sources, stage_subset
 

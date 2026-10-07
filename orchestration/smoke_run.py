@@ -4,7 +4,8 @@
     python -m orchestration.smoke_run --steps check,finetune
 
 It takes a handful of source documents from the uploaded batch — each with all
-of its synthetic twins, so the delivered split stays intact — and runs them
+of its synthetic twins, so the delivered split stays intact (``--train-sources``,
+``--val-sources``, ``--test-sources``: 4, 1 and 1 by default) — and runs them
 through import, OCR, the post-OCR check and ``finetune``, under their own
 tenant (``smoke``) and version (``v0``). Nothing it writes touches the real
 data: corpus, labels and OCR output are tenant-scoped, and the model versions
@@ -161,12 +162,17 @@ def commands(*, batch_dir: Path, subset_dir: Path, tenant: str, version: str,
     }
 
 
-def main(argv: list[str] | None = None) -> int:  # pragma: no cover - thin CLI over the functions above
+def parse_args(argv: list[str] | None = None) -> tuple[argparse.Namespace, list[str]]:
+    """The smoke run's arguments and its steps, refused when they cannot run."""
     parser = argparse.ArgumentParser(description="A small end-to-end run on the pod")
     parser.add_argument("--batch", default="personal-v1", help="the uploaded batch under intake/")
     parser.add_argument("--tenant", default=DEFAULT_TENANT)
     parser.add_argument("--version", default=DEFAULT_VERSION)
     parser.add_argument("--train-sources", type=int, default=4)
+    # One per line first, as for train: a validation and a test source of every
+    # line give each line its own checkpoint and calibration documents.
+    parser.add_argument("--val-sources", type=int, default=1)
+    parser.add_argument("--test-sources", type=int, default=1)
     parser.add_argument("--steps", default=",".join(STEPS), help=f"comma-separated, from {STEPS}")
     args = parser.parse_args(argv)
     steps = [s.strip() for s in args.steps.split(",") if s.strip()]
@@ -175,6 +181,11 @@ def main(argv: list[str] | None = None) -> int:  # pragma: no cover - thin CLI o
         parser.error(f"unknown step(s) {unknown}; choose from {STEPS}")
     if args.tenant in ("", "default"):
         parser.error("the smoke run needs its own tenant, never the real data's")
+    return args, steps
+
+
+def main(argv: list[str] | None = None) -> int:  # pragma: no cover - thin CLI over the functions above
+    args, steps = parse_args(argv)
     # On the pod, run detached in tmux: a closed laptop must not stop this job.
     from orchestration.detach import detach_module_if_needed
 
@@ -202,7 +213,8 @@ def main(argv: list[str] | None = None) -> int:  # pragma: no cover - thin CLI o
             print(report.describe(), flush=True)
             if report.failed:
                 return 1
-        folders = select_sources(batch_dir, train_sources=args.train_sources)
+        folders = select_sources(batch_dir, train_sources=args.train_sources,
+                                 val_sources=args.val_sources, test_sources=args.test_sources)
         print(f"smoke subset: {stage_subset(folders, subset_dir)} document(s) in {subset_dir}", flush=True)
     env = {**os.environ, "FIDEON_DETACHED": "1"}          # already in tmux: steps run in place
     for step, command in commands(batch_dir=batch_dir, subset_dir=subset_dir, tenant=args.tenant,

@@ -310,8 +310,9 @@ GPU free, packages, the pinned base model, config invariants, disk, Azure write/
 document OCR'd, the post-OCR check passed, and the corpus: rows per split, documents set aside and why, share
 over the sequence caps (WARN above 5%, FAIL above 25%). The smoke run runs it before its own `finetune`.
 
-It takes 4 train, 1 val and 1 test source document with all their twins (split intact, lines spread), never
-freezes or packages, and leaves the real data untouched. Read the corpus build's rejected-row count and the
+It takes 4 train, 1 val and 1 test source document with all their twins (split intact, lines spread; more with
+`--train-sources`, `--val-sources`, `--test-sources`), never freezes or packages, and leaves the real data
+untouched. Read the corpus build's rejected-row count and the
 post-OCR report before the full `finetune`.
 
 ## Scopes
