@@ -38,6 +38,8 @@ class CommonModelTally:
     links_found: int = 0
     codes_scored: int = 0
     codes_right: int = 0
+    #: Coverages the label holds: the denominator of a code found at all.
+    codes_gold: int = 0
 
     def add(self, expected: dict[str, Any], got: dict[str, Any], lob: Any) -> None:
         gold, wrote = _overflow(expected), _overflow(got)
@@ -45,15 +47,14 @@ class CommonModelTally:
         self.overflow_written += sum(wrote.values())
         self.overflow_matched += sum((gold & wrote).values())
 
-        from common.structural_ids import reference_pairs
+        found, gold_links = _links(expected, got, lob)
+        self.links_gold += gold_links
+        self.links_found += found
 
-        links, found = Counter(reference_pairs(expected, lob)), Counter(reference_pairs(got, lob))
-        self.links_gold += sum(links.values())
-        self.links_found += sum((links & found).values())
-
-        right, scored = _codes(expected, got)
+        right, scored, gold_codes = _codes(expected, got)
         self.codes_right += right
         self.codes_scored += scored
+        self.codes_gold += gold_codes
 
     def metrics(self) -> dict[str, float | None]:
         def ratio(a: int, b: int) -> float | None:
@@ -64,6 +65,10 @@ class CommonModelTally:
             "additional_fields_precision": ratio(self.overflow_matched, self.overflow_written),
             "reference_accuracy": ratio(self.links_found, self.links_gold),
             "coverage_code_accuracy": ratio(self.codes_right, self.codes_scored),
+            # Of the label's coverages, the share the answer holds with the right
+            # code: a coverage it missed counts too, where the accuracy above
+            # only judges the coverages it paired.
+            "coverage_code_recall": ratio(self.codes_right, self.codes_gold),
         }
 
 
@@ -124,12 +129,87 @@ def _codes(expected: dict[str, Any], got: dict[str, Any]) -> tuple[int, int]:
         rows = (doc or {}).get("coverages") if isinstance(doc, dict) else None
         return [row for row in rows or [] if isinstance(row, dict)]
 
-    answer = coverages(got)
+    answer, label = coverages(got), coverages(expected)
     right = scored = 0
-    for row, mate in zip(answer, pair_coverages_by_name(coverages(expected), answer), strict=True):
+    for row, mate in zip(answer, pair_coverages_by_name(label, answer), strict=True):
         if mate is None:
             continue
         scored += 1
         right += str(values_view(mate.get("coverage_code")) or "") == str(
             values_view(row.get("coverage_code")) or "")
-    return right, scored
+    return right, scored, len(label)
+
+
+def _links(expected: dict[str, Any], got: dict[str, Any], lob: Any) -> tuple[int, int]:
+    """``(links found, links the label holds)``, judged row by row.
+
+    Rows are paired as field match pairs them (``aligned_for_scoring``); a label
+    row's link is found when its answer row links the same unit. The same unit
+    is decided by ``common.structural_ids.same_unit`` - the first unit key BOTH
+    rows state - so a location the label names by its address and the answer by
+    its number and address is one location. Compared as exact key strings, every
+    link to it was lost, and with it every link of a row whose name differed.
+
+    A link to a unit with no key at all (a building with no number) can only
+    match the same text. A single-part policy's ``part`` links nothing.
+    """
+    from common.canonical import values_view
+    from common.schema_sections import references
+    from evaluation.metrics.field_accuracy import aligned_for_scoring
+
+    refs = dict(references(lob))
+    parts = (expected or {}).get("lob_parts") if isinstance(expected, dict) else None
+    if not (isinstance(parts, list) and len(parts) > 1):
+        refs.pop("part", None)
+    if not refs:
+        return 0, 0
+    label, answer = values_view(expected or {}), values_view(got or {})
+    units = (_units(label, lob), _units(answer, lob))
+    aligned_label, aligned_answer = aligned_for_scoring(label, answer)
+    found = total = 0
+    for table, rows in (aligned_label or {}).items():
+        if not isinstance(rows, list):
+            continue
+        mates = (aligned_answer or {}).get(table) or []
+        for index, row in enumerate(rows):
+            if not isinstance(row, dict):
+                continue
+            mate = mates[index] if index < len(mates) and isinstance(mates[index], dict) else {}
+            for field_name in refs:
+                wanted = _targets(row.get(field_name))
+                offered = _targets(mate.get(field_name))
+                total += len(wanted)
+                for target in wanted:
+                    match = next((t for t in offered if _same_target(target, t, units, lob)), None)
+                    if match is not None:
+                        offered.remove(match)
+                        found += 1
+    return found, total
+
+
+def _targets(value: Any) -> list[str]:
+    values = value if isinstance(value, list) else [value] if value not in (None, "") else []
+    return [str(v) for v in values if v not in (None, "")]
+
+
+def _units(doc: dict[str, Any], lob: Any) -> dict[str, tuple[str, dict[str, Any]]]:
+    """Each unit row by the name a link to it carries (``locations:location_number=2``)."""
+    from common.schema_sections import structural_ids
+    from common.structural_ids import _unit_key
+
+    out: dict[str, tuple[str, dict[str, Any]]] = {}
+    for table in structural_ids(lob):
+        for row in doc.get(table) or []:
+            key = _unit_key(table, row, lob, {})
+            if key is not None:
+                out[f"{table}:" + ",".join(f"{f}={v}" for f, v in zip(key[1], key[2], strict=True))] = (table, row)
+    return out
+
+
+def _same_target(wanted: str, offered: str, units: tuple[dict, dict], lob: Any) -> bool:
+    if wanted == offered:
+        return True
+    from common.structural_ids import same_unit
+
+    left, right = units[0].get(wanted), units[1].get(offered)
+    return bool(left and right and left[0] == right[0] and same_unit(left[0], left[1], right[1], lob))

@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
 from typing import Any
@@ -72,8 +73,10 @@ class ValidationGeneration:
             "is_scanned": bool(self.row.get("is_scanned", False)),
             "page_count": images or 1,
             # The text the prompt carried (None for image-only), so the report
-            # can tell an invented value from a misread one (hallucination_rate).
+            # can tell an invented value from a misread one (hallucination_rate),
+            # and each page's own, so a value is looked for on the pages it cites.
             "ocr_text": self.page_text,
+            "ocr_pages": self.ocr_pages,
         }
 
     @property
@@ -90,6 +93,31 @@ class ValidationGeneration:
             for part in message["content"]
             if isinstance(part, dict) and part.get("type") == "text"
         ])
+
+
+    @property
+    def ocr_pages(self) -> dict[int, str] | None:
+        """Each page's OCR text the prompt carried, by its page number (read
+        from its ``<page N of M>`` marker); ``None`` for image-only."""
+        from inference_core.input_builder import EMPTY_PAGE_TEXT
+
+        if self.row.get("modality_mode") == "image_only":
+            return None
+        pages: dict[int, str] = {}
+        for message in self.row.get("messages", []):
+            if message.get("role") != "user" or not isinstance(message.get("content"), list):
+                continue
+            for part in message["content"]:
+                if isinstance(part, dict) and part.get("type") == "text":
+                    marker = _PAGE_MARKER.match(part.get("text") or "")
+                    if marker:
+                        text = part["text"][marker.end():].strip()
+                        pages[int(marker.group(1))] = "" if text == EMPTY_PAGE_TEXT else text
+        return pages or None
+
+
+#: A page's marker at the head of its text block (inference_core.input_builder.PAGE_MARKER).
+_PAGE_MARKER = re.compile(r"<page (\d+) of \d+>\s*")
 
 
 def read_rows(text: str) -> list[dict[str, Any]]:
@@ -256,9 +284,13 @@ def calibration_samples(
     """
     from calibration.features import build_document_features
     from common.canonical import values_view, without_bare_values
-    from common.normalize import values_match
     from common.schemas import is_common_model
-    from evaluation.metrics.field_accuracy import aligned_for_scoring, flatten_scalars, rows_aligned_to
+    from evaluation.metrics.field_accuracy import (
+        aligned_for_scoring,
+        flatten_scalars,
+        rows_aligned_to,
+        values_agree,
+    )
 
     halves: dict[str, list[tuple[Any, bool]]] = {"calibration": [], "threshold": []}
     unassigned = 0
@@ -299,9 +331,7 @@ def calibration_samples(
             page_text=generation.page_text,
             common_model=common_model,
         ):
-            correct = values_match(
-                expected.get(features.field_path), features.value, field_path=features.field_path
-            )
+            correct = values_agree(expected.get(features.field_path), features.value, features.field_path)
             halves[half].append((features, bool(correct)))
 
     if unassigned:

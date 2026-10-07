@@ -40,7 +40,7 @@ from functools import cache
 from pathlib import Path
 from typing import Any
 
-from common.normalize import normalize_text, values_match
+from common.normalize import values_match
 
 log = logging.getLogger(__name__)
 
@@ -273,13 +273,16 @@ def ocr_agreement(value: Any, page_text: str | None) -> float | None:
     definition, and scoring it as disagreement would teach the calibrator that
     every image-only field is untrustworthy, which is a statement about the
     input mode rather than about the extraction.
+
+    Matched as ``common.grounding`` matches - on word boundaries, so "1" no
+    longer agrees with every page holding a 1 - and ``None`` for a value too
+    short to look for at all.
     """
-    if page_text is None:
+    from common import grounding
+
+    if page_text is None or not grounding.checkable(value):
         return None
-    needle = normalize_text(value)
-    if not needle:
-        return None
-    return 1.0 if needle in (normalize_text(page_text) or "") else 0.0
+    return 1.0 if grounding.appears(value, page_text) else 0.0
 
 
 def rule_checks(field_path: str, value: Any, document: dict[str, Any]) -> bool | None:

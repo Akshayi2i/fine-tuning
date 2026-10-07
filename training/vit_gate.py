@@ -34,7 +34,12 @@ from typing import Any, Literal
 log = logging.getLogger(__name__)
 
 Decision = Literal["fire", "hold", "insufficient_data"]
-ErrorClass = Literal["perception", "schema_reasoning", "omission", "unknown"]
+ErrorClass = Literal["perception", "schema_reasoning", "omission", "invented", "unknown"]
+
+#: Classes that are not a misreading or a misplacement of a printed value, so
+#: they say nothing about the vision tower: a value written where the label has
+#: none, and a record that was never classified.
+_NOT_READ_ERRORS = frozenset({"invented", "unknown"})
 
 #: Below this many evaluated documents in a subset, the metric is noise and the
 #: gate refuses to decide. Nine documents — pilot volume for image-only — is
@@ -103,6 +108,10 @@ def classify_error(expected: Any, got: Any, *, all_expected: dict[str, Any] | No
       the ViT is not implicated.
     * **perception** — the value is a near-miss on the expected string, the
       signature of a misread character.
+    * **invented** — a value where the label has none, and that no other field
+      of the label holds either. Counted in the report's error totals; left out
+      of the ViT error mix, which asks how printed values were misread or
+      misplaced.
     """
     if got is None or got == "":
         return "omission"
@@ -126,9 +135,13 @@ def classify_error(expected: Any, got: Any, *, all_expected: dict[str, Any] | No
             ):
                 return "schema_reasoning"
 
-    expected_text, got_text = str(expected or "").strip(), str(got).strip()
-    if not expected_text:
-        return "unknown"
+    # After the misplacement check: a value the label holds under another field,
+    # written where it holds none (a policy number copied into the extra fields),
+    # was read right and placed wrong. Only a value the label holds nowhere is
+    # invented.
+    if expected is None or str(expected).strip() == "":
+        return "invented"
+    expected_text, got_text = str(expected).strip(), str(got).strip()
 
     if _near_miss(expected_text, got_text):
         return "perception"
@@ -186,7 +199,7 @@ def in_gated_subsets(errors: list[ErrorRecord]) -> list[ErrorRecord]:
 
 def summarise_error_mix(errors: list[ErrorRecord]) -> dict[str, float]:
     """Share of each error class among classified errors."""
-    counts = Counter(e.error_class for e in errors if e.error_class != "unknown")
+    counts = Counter(e.error_class for e in errors if e.error_class not in _NOT_READ_ERRORS)
     total = sum(counts.values())
     return {cls: round(n / total, 3) for cls, n in counts.items()} if total else {}
 

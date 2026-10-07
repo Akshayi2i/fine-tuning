@@ -140,6 +140,8 @@ class SubsetReport:
     documents: int = 0
     metrics: dict[str, Any] = field(default_factory=dict)
     error_records: list[dict[str, Any]] = field(default_factory=list)
+    #: The errors totalled by class, by line and for the worst fields (:func:`_error_summary`).
+    error_summary: dict[str, Any] = field(default_factory=dict)
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -147,6 +149,7 @@ class SubsetReport:
             "subset": self.subset,
             "documents": self.documents,
             **{k: (round(v, 4) if isinstance(v, float) else v) for k, v in self.metrics.items()},
+            "error_summary": self.error_summary,
             "error_records": self.error_records,
         }
 
@@ -321,6 +324,7 @@ def score_subset(
         _is_empty,
         score_false_nulls,
         score_hallucinations,
+        score_page_refs,
         score_page_selection,
     )
     from evaluation.metrics.field_accuracy import score_all_list_fields, score_fields
@@ -432,6 +436,7 @@ def score_subset(
                 "error_class": classify_error(result.expected, result.got, all_expected=expected),
                 "modality_mode": metadata.get("modality_mode", "ocr_plus_image"),
                 "is_scanned": bool(metadata.get("is_scanned")),
+                "lob": _line_name(lines[index]),
             })
 
         tables = (without_overflow(expected), without_overflow(got)) if common_model[index] else (expected, got)
@@ -448,6 +453,10 @@ def score_subset(
 
     lob = score_lob([(e, g) for e, g, _m in scored])
     misattribution = aggregate_misattribution(misattributions)
+    page_refs = score_page_refs([
+        _read_values(expected, got, cm) for (expected, got, _m), cm in zip(scored, common_model, strict=True)
+    ])
+    report.error_summary = _error_summary(report.error_records)
 
     # An ACORD document with no recorded form has no selectable schema. Counting
     # it as invalid keeps the run going and does not flatter the result; letting
@@ -524,6 +533,11 @@ def score_subset(
             if total >= 3
         ][:15] or None,
         "schema_validity_rate": validity_rate,
+        # Reported, not gated: do right values cite the pages that print them
+        # (every page, as the convention asks)? None where no page was compared.
+        "page_ref_exact_rate": page_refs.exact_rate,
+        "page_ref_precision": page_refs.precision,
+        "page_ref_recall": page_refs.recall,
         # None when no value carried a flag (a flat extraction): not measured.
         "auto_accept_error_rate": auto_accept.rate,
         # Absent, not 0.0, when no document in the set carries a line to score.
@@ -554,11 +568,11 @@ def score_subset(
         #
         # Only rows that were SENT text: against an image-only row's empty text
         # every value the model read off the image would count as invented.
-        "hallucination_rate": score_hallucinations([
-            (*_read_values(expected, got, cm), str(metadata["ocr_text"]))
-            for (expected, got, metadata), cm in zip(scored, common_model, strict=True)
-            if metadata.get("ocr_text")
-        ]).rate if any(m.get("ocr_text") for _, _, m in scored) else None,
+        # The extra fields apart: free text by design, they hid the rate of the
+        # schema's own fields.
+        "hallucination_rate": _hallucination_rate(scored, common_model, score_hallucinations),
+        "additional_fields_hallucination_rate": _hallucination_rate(
+            scored, common_model, score_hallucinations, overflow=True),
         # Only meaningful where routing ran. A document that sent every page has
         # no selection to score, and counting it as perfect recall would dilute
         # the metric toward 1.0 with documents that never exercised it.
@@ -606,6 +620,45 @@ def _is_common_model_document(doc_type: str, metadata: dict[str, Any]) -> bool:
 #: Where :func:`build_report` keeps a common-model document as it was produced,
 #: on its own copy of the metadata: the document schema validity is asked of.
 _PRODUCED = "_produced_output"
+
+
+def _error_summary(records: list[dict[str, Any]]) -> dict[str, Any]:
+    """The errors totalled: by class (left empty, invented, misread, value of
+    another field, other wrong value), by line, and for the fields that fail
+    most. Reported, not gated - where the next fix should go."""
+    from collections import Counter
+
+    if not records:
+        return {}
+    by_line: dict[str, Counter] = {}
+    by_field: dict[str, Counter] = {}
+    for record in records:
+        kind = record.get("error_class") or "unknown"
+        by_line.setdefault(record.get("lob") or "unknown", Counter())[kind] += 1
+        by_field.setdefault(re.sub(r"\[[^\]]*\]", "[]", record.get("field_path", "")), Counter())[kind] += 1
+    return {
+        "by_class": dict(Counter(r.get("error_class") or "unknown" for r in records).most_common()),
+        "by_line": {line: dict(counts.most_common()) for line, counts in sorted(by_line.items())},
+        "top_fields": [
+            {"field": name, "errors": sum(counts.values()), "by_class": dict(counts.most_common())}
+            for name, counts in sorted(by_field.items(), key=lambda item: -sum(item[1].values()))[:15]
+        ],
+    }
+
+
+def _hallucination_rate(scored: list[tuple[Any, Any, dict[str, Any]]], common_model: list[bool],
+                        score: Any, *, overflow: bool = False) -> float | None:
+    """``score_hallucinations`` over the rows that were sent OCR text, each
+    page's own text where the row kept it (``ocr_pages``) so a value is looked
+    for on the pages it cites; ``None`` when nothing checkable was emitted on a
+    row that was sent text - not measured, rather than a perfect 0."""
+    sent = [
+        (*_read_values(expected, got, cm), metadata.get("ocr_pages") or str(metadata["ocr_text"]))
+        for (expected, got, metadata), cm in zip(scored, common_model, strict=True)
+        if metadata.get("ocr_text")
+    ]
+    report = score(sent, overflow=overflow) if sent else None
+    return report.rate if report is not None and report.opportunities else None
 
 
 def _read_values(expected: Any, got: Any, common_model: bool) -> tuple[Any, Any]:

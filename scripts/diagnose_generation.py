@@ -472,7 +472,7 @@ def error_breakdown(report_path: str, top: int = 3) -> dict[str, dict]:
                 kind = classify_error(r.expected, r.got, all_expected=golden)
                 if kind == "omission":
                     name = "left empty"
-                elif kind == "unknown":
+                elif kind in ("invented", "unknown"):
                     name = "invented (not in the label)"
                 elif kind == "perception":
                     name = "misread (near miss)"

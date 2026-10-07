@@ -118,8 +118,7 @@ def oracle(source_id: str, label: dict, lob: Any, page_count: int,
         result.lost_values.append((path, str(value)[:80], reason))
 
     def compare(expected: Any, actual: Any, path: str, unmatched_row: bool = False) -> None:
-        from common.normalize import values_match
-        from evaluation.metrics.field_accuracy import _infer_key_fields, _is_empty, _row_key
+        from evaluation.metrics.field_accuracy import _infer_key_fields, _is_empty, _row_key, values_agree
 
         if isinstance(expected, dict):
             sub = actual if isinstance(actual, dict) else {}
@@ -141,7 +140,7 @@ def oracle(source_id: str, label: dict, lob: Any, page_count: int,
                 compare(row, found, f"{path}[{index}]", unmatched_row or found is None)
         elif not _is_empty(expected):
             result.gold_values += 1
-            if values_match(expected, actual, field_path=path):
+            if values_agree(expected, actual, path):
                 result.recovered += 1
             else:
                 lose(path, expected, unmatched_row)

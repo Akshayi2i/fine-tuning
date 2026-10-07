@@ -48,6 +48,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from common import grounding
 from data_pipeline.ocr.run_mineru import TEXT_LAYER_MIN_CHARS as MIN_TEXT_CHARS
 
 log = logging.getLogger(__name__)
@@ -57,10 +58,9 @@ DEFAULT_INPUT = REPO / "data" / "bundles"   # prepare_bundles output
 DEFAULT_OUT = REPO / "data" / "audit_report"
 
 #: Values this short ("Y", "1") match almost any page; they are not checked.
-MIN_CHECKABLE_CHARS = 3
+MIN_CHECKABLE_CHARS = grounding.MIN_CHECKABLE_CHARS
 #: Share of each line drawn for the manual spot check.
 SPOT_CHECK_SHARE = 0.05
-_NON_WORD = re.compile(r"[^0-9a-z]+")
 
 
 @dataclass
@@ -118,36 +118,14 @@ class AuditReport:
 
 
 # --------------------------------------------------------------------------
-# Text matching
+# Text matching: common.grounding, the one definition the hallucination metric,
+# the calibration feature and label verification share with the audit
 # --------------------------------------------------------------------------
 
-
-def normalise(text: str) -> str:
-    """Case, punctuation and line breaks removed; words separated by one space."""
-    return " ".join(_NON_WORD.sub(" ", str(text).casefold()).split())
-
-
-def appears(raw: str, page_text: str) -> bool:
-    """Whether ``raw`` is on the page, as a phrase or — across line breaks and
-    columns — as every one of its words."""
-    return _appears(normalise(raw), _Page(page_text))
-
-
-class _Page:
-    """A page's text normalised once, for every value looked up on it."""
-
-    def __init__(self, text: str) -> None:
-        self.padded = f" {normalise(text)} "
-        self.words = set(self.padded.split())
-
-
-def _appears(value: str, page: _Page) -> bool:
-    if not value:
-        return False
-    if f" {value} " in page.padded:
-        return True
-    words = value.split()
-    return len(words) > 1 and set(words) <= page.words
+normalise = grounding.normalise
+appears = grounding.appears
+_Page = grounding.PageText
+_appears = grounding.appears_on
 
 
 def iter_envelopes(node: Any, path: str = ""):

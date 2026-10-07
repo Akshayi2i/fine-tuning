@@ -21,7 +21,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from common.lob import lob_values
-from common.normalize import values_match
+from evaluation.metrics.field_accuracy import values_agree
 
 # --------------------------------------------------------------------------
 # Line of Business (arch §0b)
@@ -318,7 +318,7 @@ def score_by_mode(
             if isinstance(expected_value, (list, dict)):
                 continue
             got_value = got.get(field_path)
-            correct = values_match(expected_value, got_value, field_path=field_path)
+            correct = values_agree(expected_value, got_value, field_path)
             outcomes.append(correct)
             if not correct:
                 error_counter[classify_error(expected_value, got_value, all_expected=expected)] += 1

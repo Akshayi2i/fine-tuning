@@ -17,6 +17,7 @@ a dropped Loss Run claim.
 
 from __future__ import annotations
 
+import re
 from collections import Counter
 from dataclasses import dataclass, field
 from typing import Any
@@ -25,6 +26,30 @@ from common.normalize import values_match
 
 #: Fields that are containers, not values — scored by their rows, not directly.
 _CONTAINER_TYPES = (list, dict)
+
+#: The normalizer for a field type the common model declares; an enum or an
+#: undeclared field is left to the field's name.
+_KIND_BY_TYPE = {"money": "currency", "number": "number", "date": "date", "identifier": "identifier"}
+
+
+def scoring_kind(field_path: str) -> str | None:
+    """How a scored field is compared, by the type its schema declares: a
+    MoneyValue as money (``$831.00`` is 831.0), a YearValue or a count as a
+    number. ``None`` leaves it to the name (``common.normalize.infer_field_kind``),
+    which reads ``premium.total`` or ``year_built`` as text.
+
+    Scoring only: the serving merge keeps its own reading of what a field is.
+    Rows are written either way (``coverages[2]``, ``coverages[coverage_code=x]``).
+    """
+    from calibration.features import common_model_field_types
+
+    declared = common_model_field_types().get(re.sub(r"\[[^\]]*\]", "", field_path))
+    return _KIND_BY_TYPE.get(declared) if declared else None
+
+
+def values_agree(expected: Any, got: Any, field_path: str) -> bool:
+    """:func:`common.normalize.values_match` with the field's declared type."""
+    return values_match(expected, got, field_path=field_path, kind=scoring_kind(field_path))
 
 
 @dataclass
@@ -140,13 +165,15 @@ def score_fields(
         if skip_lists and "[" in path:
             continue
         got_value = got_flat.get(path) if path in got_flat else _rows_at(got_flat, path)
+        correct = values_agree(expected_value, got_value, path)
         report.results.append(
             FieldResult(
                 field_path=path,
                 expected=expected_value,
                 got=got_value,
-                correct=values_match(expected_value, got_value, field_path=path),
-                exact=expected_value == got_value,
+                correct=correct,
+                # Never above the normalised match: 957 == 957.0 in Python.
+                exact=correct and expected_value == got_value,
             )
         )
     for path, got_value in sorted(got_flat.items()):

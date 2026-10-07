@@ -182,6 +182,10 @@ def normalize_identifier(value: Any) -> str | None:
     """
     if value is None:
         return None
+    if isinstance(value, float) and value.is_integer():
+        # A number read as 1.0 is the identifier 1: as text it became "10",
+        # so location 1 missed 1.0 and matched 10.
+        value = int(value)
     cleaned = _NON_ALNUM.sub("", str(value)).upper()
     return cleaned or None
 
@@ -281,13 +285,17 @@ def normalize_value(value: Any, field_path: str | None = None, kind: str | None 
     resolved = kind or (infer_field_kind(field_path) if field_path else "text")
     if resolved == "date":
         return normalize_date(value)
-    if resolved == "currency":
+    if resolved in ("currency", "number"):
         return normalize_currency(value)
     if resolved == "identifier":
         return normalize_identifier(value)
     if resolved == "entity":
         return normalize_entity_name(value)
     return normalize_text(value)
+
+
+def _is_number(value: Any) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
 
 
 def values_match(
@@ -322,6 +330,11 @@ def values_match(
 
     if expected is None or actual is None:
         return False
+    if _is_number(expected) and _is_number(actual):
+        # Two numbers are equal or not whatever the field is called: 957 and
+        # 957.0 compared as text under a name the kinds above do not know (a
+        # total, a year, a count) failed - a correct value scored as wrong.
+        return abs(float(expected) - float(actual)) < 0.005
     a = normalize_value(expected, field_path, kind)
     b = normalize_value(actual, field_path, kind)
     if a is None or b is None:

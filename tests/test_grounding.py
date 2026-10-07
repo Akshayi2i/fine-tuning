@@ -1,0 +1,88 @@
+"""Whether a value is printed, and where: one matcher for every caller (common.grounding)."""
+
+from __future__ import annotations
+
+from calibration.features import ocr_agreement
+from common import grounding
+from evaluation.metrics.extraction_faults import score_hallucinations
+
+
+def _value(raw, parsed, pages):
+    return {"raw": raw, "parsed": parsed, "page_ref": pages}
+
+
+PAGES = {1: "Named Insured: Rivera Fabrication LLC", 2: "Coverage A Dwelling $219,000\nDeductible 1,000",
+         3: ""}
+
+
+def test_ground_says_where_a_value_is_printed_against_the_pages_it_cites():
+    assert grounding.ground("$219,000", [2], PAGES).status == grounding.ON_CITED_PAGE
+    assert grounding.ground("$219,000", [1], PAGES) == grounding.Grounding(grounding.ON_OTHER_PAGE, (2,))
+    assert grounding.ground("Loss of Use", [2], PAGES).status == grounding.NOT_PRINTED
+    assert grounding.ground("Rivera Fabrication LLC", [], PAGES).status == grounding.ON_CITED_PAGE
+
+
+def test_what_cannot_be_checked_is_neither_grounded_nor_not():
+    assert grounding.ground("NY", [1], PAGES).status == grounding.UNCHECKED          # too short
+    assert grounding.ground("Loss of Use", [3], PAGES).status == grounding.UNCHECKED  # cited page has no text
+    assert grounding.ground("anything", [1], {1: ""}).status == grounding.UNCHECKED  # nothing has text
+
+
+def test_words_split_across_lines_or_columns_still_match():
+    assert grounding.appears("Rivera Fabrication LLC", "applicant:\nRIVERA   Fabrication, LLC")
+    assert grounding.appears("1420 Foundry Road", "Foundry Road 1420")
+    assert not grounding.appears("Rivera Fabrication LLC", "Meridian Holdings")
+
+
+def test_the_ocr_feature_matches_on_word_boundaries_and_skips_short_values():
+    assert ocr_agreement("10", "Policy 10 of 12") is None          # too short to look for
+    assert ocr_agreement("2100", "Limit 21000") == 0.0              # no longer a substring hit
+    assert ocr_agreement("Fabrication", "RIVERA FABRICATION LLC") == 1.0
+    assert ocr_agreement("Fabrication", None) is None
+
+
+def test_a_value_is_looked_for_as_printed_not_as_reformatted():
+    got = {"coverages": [{"limits": [{"amount": _value("$219,000", 219000.0, [2])}]}]}
+    report = score_hallucinations([({}, got, PAGES)])
+    assert (report.opportunities, report.hits) == (1, 0)       # parsed 219000.0 is not on the page; raw is
+
+
+def test_an_invented_value_is_counted_and_a_short_one_is_left_out():
+    got = {"coverages": [{"coverage_name": _value("Debris Removal", "Debris Removal", [2]),
+                          "premium": _value("18", 18.0, [2])}]}
+    report = score_hallucinations([({}, got, PAGES)])
+    assert (report.opportunities, report.hits) == (1, 1)
+    assert report.instances[0]["field"] == "coverages[0].coverage_name"
+
+
+def test_printed_on_another_page_is_a_wrong_page_not_an_invention():
+    got = {"named_insured": {"primary_name": _value("Rivera Fabrication LLC", "Rivera Fabrication LLC", [2])}}
+    assert score_hallucinations([({}, got, PAGES)]).hits == 0
+
+
+def test_extra_fields_are_scored_apart():
+    got = {"policy": {"policy_number": _value("Dwelling", "Dwelling", [2])},
+           "additional_fields": [{"label": "Note", "section_hint": "discounts",
+                                  "value": _value("Water Leak Detection", "x", [1])}]}
+    core = score_hallucinations([({}, got, PAGES)])
+    extra = score_hallucinations([({}, got, PAGES)], overflow=True)
+    assert (core.name, core.opportunities, core.hits) == ("hallucination_rate", 1, 0)
+    # Its label and section hint are bare values of a canonical answer: not looked for.
+    assert (extra.name, extra.opportunities, extra.hits) == ("additional_fields_hallucination_rate", 1, 1)
+
+
+def test_a_flat_answers_bare_values_are_printed_text():
+    got = {"insured_name": "Rivera Fabrication LLC", "policy_number": "ZZ-404-9"}
+    report = score_hallucinations([({}, got, "Applicant: Rivera Fabrication LLC")])
+    assert (report.opportunities, report.hits) == (2, 1)
+
+
+def test_a_validation_row_keeps_each_pages_text_by_its_number():
+    from evaluation.validation_generation import ValidationGeneration
+
+    row = {"modality_mode": "ocr_plus_image", "messages": [{"role": "user", "content": [
+        {"type": "image", "image": "p9.png"}, {"type": "text", "text": "<page 9 of 20>\n\nLimit $5,000"},
+        {"type": "image", "image": "p14.png"}, {"type": "text", "text": "<page 14 of 20>\n\nForms list"},
+    ]}]}
+    assert ValidationGeneration(row=row, golden={}).ocr_pages == {9: "Limit $5,000", 14: "Forms list"}
+    assert ValidationGeneration(row={**row, "modality_mode": "image_only"}, golden={}).ocr_pages is None

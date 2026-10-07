@@ -1,0 +1,90 @@
+"""Measures added so every later change is judged honestly (accuracy plan, stage 0.3)."""
+
+from __future__ import annotations
+
+from evaluation.metrics.extraction_faults import score_page_refs
+from evaluation.run_eval import _error_summary
+from training.vit_gate import ErrorRecord, classify_error, summarise_error_mix
+
+
+def _value(parsed, pages):
+    return {"raw": str(parsed), "parsed": parsed, "page_ref": pages}
+
+
+def test_an_error_is_classed_by_what_went_wrong():
+    gold = {"policy": {"policy_number": "NYHP0000004000"}, "carrier": {"name": "Mercury Casualty Company"}}
+    assert classify_error("NYHP0000004000", None, all_expected=gold) == "omission"
+    assert classify_error("NYHP0000004000", "NYHP0000004001", all_expected=gold) == "perception"
+    # The policy number written where the label holds nothing: read right, placed wrong.
+    assert classify_error(None, "NYHP0000004000", all_expected=gold) == "schema_reasoning"
+    # A value the label holds nowhere: invented.
+    assert classify_error(None, "Debris Removal", all_expected=gold) == "invented"
+    assert classify_error(0, 5, all_expected=gold) == "perception"     # a zero is a value, not "nothing"
+
+
+def test_invented_values_stay_out_of_the_vision_error_mix():
+    errors = [ErrorRecord("d", "a", None, "x", error_class="invented"),
+              ErrorRecord("d", "b", "1", "7", error_class="perception")]
+    assert summarise_error_mix(errors) == {"perception": 1.0}
+
+
+def test_right_values_are_checked_for_the_pages_they_cite():
+    gold = {"policy": {"policy_number": _value("NYHP0000004000", [1, 2, 3, 4]),
+                       "effective_date": _value("05/21/2025", [2])}}
+    got = {"policy": {"policy_number": _value("NYHP0000004000", [2]),          # right value, pages missing
+                      "effective_date": _value("05/21/2025", [2])}}           # right value, right page
+    report = score_page_refs([(gold, got)])
+    assert (report.compared, report.exact) == (2, 1)
+    assert report.precision == 1.0 and report.recall == 2 / 5
+
+
+def test_a_wrong_value_says_nothing_about_its_pages():
+    gold = {"policy": {"policy_number": _value("NYHP0000004000", [2])}}
+    got = {"policy": {"policy_number": _value("ZZ-1", [9])}}
+    assert score_page_refs([(gold, got)]).compared == 0
+
+
+def _home(location: dict, coverages: list[dict]) -> dict:
+    return {"lob_parts": [{"lob": "homeowners"}], "locations": [location], "coverages": coverages}
+
+
+def test_a_link_to_one_location_named_two_ways_is_found():
+    from evaluation.metrics.common_model import CommonModelTally
+
+    address = {"street": "2 TOWN RD", "city": "MOUNT MARION", "state": "NY", "postal_code": "12456"}
+    label_key = "locations:address=12456|2 town rd|mount marion|ny"
+    gold = _home({"address": address}, [{"coverage_name": "A. Dwelling", "coverage_code": "HO_COV_A",
+                                         "applies_to": [label_key]}])
+    got = _home({"location_number": 2, "address": address},
+                [{"coverage_name": "A. Dwelling", "coverage_code": "HO_COV_A",
+                  "applies_to": ["locations:location_number=2"]}])
+    tally = CommonModelTally()
+    tally.add(gold, got, "homeowners")
+    assert tally.metrics()["reference_accuracy"] == 1.0          # was 0.0 on exact key strings
+
+
+def test_coverage_code_recall_counts_coverages_the_answer_missed():
+    from evaluation.metrics.common_model import CommonModelTally
+
+    gold = {"coverages": [{"coverage_name": "A. Dwelling", "coverage_code": "HO_COV_A"},
+                          {"coverage_name": "D. Loss Of Use", "coverage_code": "X_LOSS_OF_USE"}]}
+    got = {"coverages": [{"coverage_name": "A. Dwelling", "coverage_code": "HO_COV_A"}]}
+    tally = CommonModelTally()
+    tally.add(gold, got, "homeowners")
+    metrics = tally.metrics()
+    assert (metrics["coverage_code_accuracy"], metrics["coverage_code_recall"]) == (1.0, 0.5)
+
+
+def test_errors_are_totalled_by_class_line_and_field():
+    records = [
+        {"field_path": "coverages[0].coverage_name", "error_class": "invented", "lob": "homeowners"},
+        {"field_path": "coverages[3].coverage_name", "error_class": "invented", "lob": "homeowners"},
+        {"field_path": "locations[0].location_number", "error_class": "schema_reasoning", "lob": "homeowners"},
+        {"field_path": "policy.policy_number", "error_class": "omission", "lob": "personal_auto"},
+    ]
+    summary = _error_summary(records)
+    assert summary["by_class"] == {"invented": 2, "schema_reasoning": 1, "omission": 1}
+    assert summary["by_line"]["homeowners"] == {"invented": 2, "schema_reasoning": 1}
+    assert summary["top_fields"][0] == {"field": "coverages[].coverage_name", "errors": 2,
+                                        "by_class": {"invented": 2}}
+    assert _error_summary([]) == {}
