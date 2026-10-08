@@ -263,14 +263,100 @@ def _finish(entry: ValidationGeneration, result: Any) -> None:
 def score_generations(
     generations: Sequence[ValidationGeneration], *, model_version: str = "validation"
 ) -> dict[str, Any]:
-    """The gate's metrics over these generations — the one definition of correct."""
+    """The gate's metrics over these generations — the one definition of correct.
+
+    Window by window, as each row was asked; and, where policies were read in
+    windows, the same metrics over whole documents (``document_*``): each
+    document's windows merged as serving merges them (:func:`merged_documents`).
+    A window's score cannot see what only the merge does - a row read twice, a
+    value two windows disagree on, a link that survives only when one window
+    shows both rows - and the document is what ships.
+    """
     from evaluation.run_eval import build_report
 
     report = build_report(
         model_version,
         [(g.golden, g.extraction or {}, g.metadata) for g in generations],
     )
-    return dict(report.gate_metrics())
+    metrics = dict(report.gate_metrics())
+    if any(_is_window(g) for g in generations):
+        whole = build_report(model_version, merged_documents(generations)).gate_metrics()
+        metrics.update({f"document_{name}": value for name, value in whole.items()
+                        if isinstance(value, (int, float)) and not isinstance(value, bool)})
+    return metrics
+
+
+def _is_window(generation: ValidationGeneration) -> bool:
+    row = generation.row
+    return row.get("doc_type") == "policy" and bool(row.get("sections")) and bool(row.get("window_pages"))
+
+
+def merged_documents(
+    generations: Sequence[ValidationGeneration],
+) -> list[tuple[dict[str, Any], dict[str, Any], dict[str, Any]]]:
+    """``(gold, answer, metadata)`` per document and reading mode: a policy's
+    window rows merged into one document by the serving merge - its window
+    targets into the gold, its generations into the answer - and every other row
+    as it is.
+
+    The gold is the merged targets, not the full label: what windowing loses
+    (the oracle's ceiling) is lost from both, and the score reads the model
+    alone. A window that failed to generate merges as an empty answer: its
+    values count as missed, as they do window by window.
+    """
+    out = [(g.golden, g.extraction or {}, g.metadata) for g in generations if not _is_window(g)]
+    out += [(d.gold, d.answer, d.metadata) for d in merged_windows(generations)]
+    return out
+
+
+@dataclass
+class MergedDocument:
+    """One document's windows merged as serving merges them."""
+
+    gold: dict[str, Any]
+    answer: dict[str, Any]
+    #: The answer's token logprobs by values-view path, carried through the merge.
+    spans: dict[str, Any]
+    metadata: dict[str, Any]
+    members: list[ValidationGeneration]
+
+
+def merged_windows(generations: Sequence[ValidationGeneration]) -> list[MergedDocument]:
+    """Each policy document read in windows, per reading mode, merged."""
+    from common.schema_sections import group_names
+    from serving.policy_merge import PolicyWindow, merge_policy_windows
+
+    documents: dict[tuple[Any, Any], list[ValidationGeneration]] = {}
+    for generation in generations:
+        if _is_window(generation):
+            key = (generation.row.get("source_id"), generation.row.get("modality_mode"))
+            documents.setdefault(key, []).append(generation)
+
+    out: list[MergedDocument] = []
+    for members in documents.values():
+        lob = members[0].row.get("lob")
+        rank = {name: index for index, name in enumerate(group_names(lob))}
+        members.sort(key=lambda g: (rank.get(g.row["sections"], len(rank)), int(g.row.get("window_index") or 0)))
+
+        def window(g: ValidationGeneration, extraction: Any, spans: Any) -> Any:
+            return PolicyWindow(group=g.row["sections"], pages=[int(p) for p in g.row["window_pages"]],
+                                extraction=extraction or {}, spans=spans or {})
+
+        gold = merge_policy_windows([window(g, g.golden, None) for g in members], lob=lob)
+        answer = merge_policy_windows(
+            [window(g, g.extraction, g.logprobs_by_path) for g in members], lob=lob)
+        pages: dict[int, str] = {}
+        for generation in members:
+            pages.update(generation.ocr_pages or {})
+        metadata = {
+            **members[0].metadata,
+            "sections": None,
+            "page_count": len({int(p) for g in members for p in g.row["window_pages"]}),
+            "ocr_pages": pages or None,
+            "ocr_text": "\n\n".join(pages[number] for number in sorted(pages)) if pages else None,
+        }
+        out.append(MergedDocument(gold.extraction, answer.extraction, dict(answer.spans), metadata, members))
+    return out
 
 
 def calibration_samples(

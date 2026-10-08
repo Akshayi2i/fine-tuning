@@ -1123,6 +1123,8 @@ def _selection_settings(ctx: StageContext) -> dict[str, float]:
     return {
         "validation_sample_rows": int(evaluation.get("validation_sample_rows") or 0),
         "selection_tie_break_margin": float(evaluation.get("selection_tie_break_margin") or 0.0),
+        "selection_document_finalists": int(evaluation.get("selection_document_finalists") or 0),
+        "selection_guard_margin": float(evaluation.get("selection_guard_margin") or 0.0),
     }
 
 
@@ -1180,13 +1182,21 @@ def stage_checkpoint_eval(ctx: StageContext) -> StageResult:
     if scorer is None:  # pragma: no cover - needs a GPU
         scorer = _checkpoint_scorer(ctx)
 
+    settings = _selection_settings(ctx)
     try:
         report = select_best(checkpoints, scorer, best_loss=ctx.best_loss_checkpoint)
         full = getattr(scorer, "full", None)
-        if full is not None:
+        if settings["selection_document_finalists"] >= 2:
+            # The finalists on every validation row, judged on whole documents
+            # (which also settles any near-tie on the sample).
+            from evaluation.checkpoint_eval import choose_on_documents
+
+            report = choose_on_documents(report, full, finalists=settings["selection_document_finalists"],
+                                         guard_margin=settings["selection_guard_margin"])
+        elif full is not None:
             from evaluation.checkpoint_eval import break_tie
 
-            report = break_tie(report, full, _selection_settings(ctx)["selection_tie_break_margin"])
+            report = break_tie(report, full, settings["selection_tie_break_margin"])
     except CheckpointEvalError as exc:
         raise PipelineError(
             f"no checkpoint could be selected for {ctx.out_version}: {exc}. Merging an "

@@ -164,3 +164,41 @@ def test_a_batch_that_fails_together_is_retried_row_by_row(client):
     generations = generate_validation(rows, load_model("base", client, backend_impl=backend))
     assert [g.error is None for g in generations] == [True, False, True]
     assert "bad page" in generations[1].error and generations[1].extraction == {}
+
+
+def _window(sections, index, pages, golden, extraction, source="s1"):
+    from evaluation.validation_generation import ValidationGeneration
+
+    row = {"doc_type": "policy", "source_id": source, "lob": "homeowners", "sections": sections,
+           "window_index": index, "window_pages": pages, "modality_mode": "image_only", "messages": []}
+    return ValidationGeneration(row=row, golden=golden, extraction=extraction)
+
+
+def _env(raw, pages):
+    return {"raw": raw, "parsed": raw, "page_ref": pages}
+
+
+def test_a_policys_windows_are_scored_as_one_document_too():
+    from evaluation.validation_generation import merged_documents, score_generations
+
+    decl = {"document": {}, "carrier": {}, "named_insured": {}, "policy": {"policy_number": _env("HO-778812", [1])}}
+    arrays = {"coverages": [{"coverage_id": "cov_1", "coverage_code": "HO_COV_A",
+                             "coverage_name": _env("Dwelling", [2])}]}
+    generations = [_window("arrays", 0, [2], arrays, None),            # this window failed
+                   _window("decl", 0, [1], decl, decl)]
+    documents = merged_documents(generations)
+    assert len(documents) == 1
+    gold, answer, metadata = documents[0]
+    assert gold["policy"]["policy_number"]["raw"] == "HO-778812" and gold["coverages"]
+    assert not answer.get("coverages") and metadata["sections"] is None and metadata["page_count"] == 2
+    metrics = score_generations(generations)
+    assert 0 < metrics["document_field_normalized_match"] < 1
+
+
+def test_rows_read_whole_have_no_document_metrics():
+    from evaluation.validation_generation import ValidationGeneration, score_generations
+
+    row = {"doc_type": "lossrun", "source_id": "l1", "modality_mode": "image_only", "messages": []}
+    golden = {"carrier_name": "Northfield Mutual"}
+    metrics = score_generations([ValidationGeneration(row=row, golden=golden, extraction=golden)])
+    assert not any(name.startswith("document_") for name in metrics)

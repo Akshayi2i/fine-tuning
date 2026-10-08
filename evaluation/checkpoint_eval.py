@@ -101,6 +101,9 @@ class SelectionReport:
     #: Set when the top two were within the tie-break margin on the sample and
     #: were scored again on the full validation split.
     tie_break: dict[str, Any] | None = None
+    #: Set when the finalists were scored on whole validation documents, which
+    #: decided (:func:`choose_on_documents`).
+    document_choice: dict[str, Any] | None = None
 
     @property
     def best_loss_checkpoint(self) -> str | None:
@@ -137,6 +140,7 @@ class SelectionReport:
             "candidates": [s.as_dict() for s in self.scores],
             "skipped": [{"checkpoint": c, "reason": r} for c, r in self.skipped],
             "tie_break": self.tie_break,
+            "document_choice": self.document_choice,
         }
 
 
@@ -318,6 +322,74 @@ def break_tie(report: SelectionReport, full_scorer: Scorer, margin: float) -> Se
     }
     log.info("near-tie (%.4f < %.4f) broken on the full validation split: %s",
              report.margin, margin, winner.checkpoint)
+    report.selected = winner.checkpoint
+    return report
+
+
+#: Document-level metrics the finalists are judged on (validation_generation.score_generations).
+DOCUMENT_ACCURACY = "document_field_normalized_match"
+DOCUMENT_GUARDS = ("document_hallucination_rate", "document_false_null_rate")
+
+
+def choose_on_documents(
+    report: SelectionReport, full_scorer: Scorer | None, *, finalists: int, guard_margin: float,
+) -> SelectionReport:
+    """Re-decide among the ``finalists`` best candidates on whole validation documents.
+
+    The candidates were ranked window by window on the validation sample - a few
+    hundred windows, a few dozen documents. The finalists are scored on every
+    validation row (``full_scorer``; ``None`` when the sample already is the
+    whole split, and its scores are used as they are), and the one with the best
+    accuracy over whole documents - windows merged as serving merges them -
+    wins, among those whose rate of invented values and of printed values left
+    empty is within ``guard_margin`` of the best finalist's. A checkpoint that
+    buys accuracy by inventing more, or by leaving more empty, does not win on
+    it. Ties go to the later step, as in :func:`select_best`.
+    """
+    ranked = sorted(report.scores, key=lambda s: (s.field_f1, s.step), reverse=True)[:finalists]
+    if len(ranked) < 2:
+        return report
+    metrics: dict[str, dict[str, float]] = {}
+    if full_scorer is None:
+        metrics = {c.checkpoint: dict(c.metrics) for c in ranked}
+    else:
+        outcomes = _score_all(full_scorer, [c.checkpoint for c in ranked])
+        for candidate in ranked:
+            try:
+                outcome = (outcomes[candidate.checkpoint] if outcomes is not None
+                           else full_scorer(candidate.checkpoint))
+                if isinstance(outcome, BaseException):
+                    raise outcome
+                metrics[candidate.checkpoint] = dict(outcome)
+            except Exception as exc:  # noqa: BLE001 - a finalist that cannot be scored drops out
+                report.skipped.append((candidate.checkpoint, f"document scoring: {type(exc).__name__}: {exc}"))
+                log.warning("could not score %s on whole documents: %s", candidate.checkpoint, exc)
+    scored = [c for c in ranked if c.checkpoint in metrics]
+    if len(scored) < 2:
+        return report
+
+    def accuracy(c: CheckpointScore) -> float:
+        m = metrics[c.checkpoint]
+        return float(m.get(DOCUMENT_ACCURACY, m.get("field_normalized_match", 0.0)))
+
+    best = {g: min((metrics[c.checkpoint][g] for c in scored if g in metrics[c.checkpoint]), default=None)
+            for g in DOCUMENT_GUARDS}
+    excluded = [c.checkpoint for c in scored if any(
+        best[g] is not None and g in metrics[c.checkpoint] and metrics[c.checkpoint][g] > best[g] + guard_margin
+        for g in DOCUMENT_GUARDS)]
+    eligible = [c for c in scored if c.checkpoint not in excluded] or scored
+    winner = max(eligible, key=lambda c: (accuracy(c), c.step))
+    report.document_choice = {
+        "finalists": {c.checkpoint: {k: round(float(metrics[c.checkpoint][k]), 4)
+                                     for k in (DOCUMENT_ACCURACY, *DOCUMENT_GUARDS) if k in metrics[c.checkpoint]}
+                      for c in scored},
+        "guard_margin": guard_margin,
+        "excluded_by_guard": excluded,
+        "decided": winner.checkpoint,
+        "changed_choice": winner.checkpoint != report.selected,
+    }
+    if winner.checkpoint != report.selected:
+        log.info("whole validation documents changed the choice: %s -> %s", report.selected, winner.checkpoint)
     report.selected = winner.checkpoint
     return report
 

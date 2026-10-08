@@ -103,3 +103,49 @@ def test_checkpoint_selection_ranks_on_the_sample_and_keeps_the_full_split_for_t
     finally:
         C.generation_scorer = original
     assert seen == [400, 900] and callable(scorer.full)
+
+
+def _document_metrics(accuracy, invented=0.10, empty=0.40):
+    return {"field_normalized_match": accuracy, "document_field_normalized_match": accuracy,
+            "document_hallucination_rate": invented, "document_false_null_rate": empty}
+
+
+def test_the_finalists_are_judged_on_whole_documents():
+    from evaluation.checkpoint_eval import choose_on_documents
+
+    report = _report([(280, 0.62), (560, 0.60), (600, 0.55), (640, 0.40)])
+    full = {"/ck/checkpoint-280": _document_metrics(0.50), "/ck/checkpoint-560": _document_metrics(0.58),
+            "/ck/checkpoint-600": _document_metrics(0.52)}
+    asked = []
+    choose_on_documents(report, lambda ck: asked.append(ck) or full[ck], finalists=3, guard_margin=0.02)
+    assert report.selected == "/ck/checkpoint-560" and report.document_choice["changed_choice"] is True
+    assert sorted(asked) == sorted(full)                         # the top three only
+
+
+def test_a_finalist_that_invents_more_does_not_win_on_accuracy():
+    from evaluation.checkpoint_eval import choose_on_documents
+
+    report = _report([(280, 0.62), (560, 0.60)])
+    full = {"/ck/checkpoint-280": _document_metrics(0.55, invented=0.10),
+            "/ck/checkpoint-560": _document_metrics(0.58, invented=0.16)}     # 6 points more invented
+    choose_on_documents(report, lambda ck: full[ck], finalists=3, guard_margin=0.02)
+    assert report.selected == "/ck/checkpoint-280"
+    assert report.document_choice["excluded_by_guard"] == ["/ck/checkpoint-560"]
+
+
+def test_a_sample_that_is_the_whole_split_is_judged_without_scoring_again():
+    from evaluation.checkpoint_eval import choose_on_documents
+
+    report = _report([(280, 0.62), (560, 0.60)])
+    report.scores[0].metrics.update(_document_metrics(0.50))
+    report.scores[1].metrics.update(_document_metrics(0.58))
+    choose_on_documents(report, None, finalists=2, guard_margin=0.02)
+    assert report.selected == "/ck/checkpoint-560"
+
+
+def test_one_candidate_needs_no_document_choice():
+    from evaluation.checkpoint_eval import choose_on_documents
+
+    report = _report([(280, 0.62)])
+    choose_on_documents(report, lambda ck: 1 / 0, finalists=3, guard_margin=0.02)
+    assert report.selected == "/ck/checkpoint-280" and report.document_choice is None

@@ -146,6 +146,14 @@ evaluation:
   # sample, those two are scored again on the full validation split, which
   # decides. Sample noise only matters inside such a margin.
   selection_tie_break_margin: 0.015
+  # The best candidates on the sample are then scored on every validation row
+  # and judged on whole documents - windows merged as serving merges them: the
+  # best document accuracy wins, among finalists whose rates of invented values
+  # and of printed values left empty are within the guard margin of the best
+  # finalist's. 0 or 1: the sample decides (with the near-tie rule above).
+  # Costs one full validation pass per finalist, run at once on a multi-GPU pod.
+  selection_document_finalists: 3
+  selection_guard_margin: 0.02
   metric_for_best_model: "eval_loss"
   greater_is_better: false
   early_stopping_patience: 3
