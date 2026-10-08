@@ -51,6 +51,13 @@ generation:
   # (a training-health signal: whether the model learned the format on its own).
   structured_outputs: true
 
+  # The same answer for the same input on every run: batch-invariant kernels
+  # where this vLLM has them, and no prefix caching (RunnerConfig.repeatable).
+  # Greedy decoding alone differs between runs when the batch around a request
+  # changes. Off: without the prefix cache each window pays its system prompt
+  # again. Turn on for a run-to-run check, and measure the cost first.
+  repeatable: false
+
 serving:
   backend: "vllm"              # vllm | hf | gguf
   served_model_tag: null       # resolved from the registry at deploy time

@@ -56,6 +56,15 @@ class RunnerConfig:
     #: (``json_schema``); this flag is what the engine is loaded for.
     structured_outputs: bool = False
 
+    #: Generate the same answer for the same input on every run: batch-invariant
+    #: kernels where the installed vLLM has them, and no prefix caching. Greedy
+    #: decoding alone is not enough - which requests share a batch changes the
+    #: floating-point reductions, and a near-tie then flips (the smoke run read
+    #: one document as 15 coverages and as 40). Off by default: without the
+    #: prefix cache every window pays its whole system prompt again. For a
+    #: run-to-run check; measure its cost before turning it on for evaluation.
+    repeatable: bool = False
+
     @property
     def is_greedy(self) -> bool:
         return self.temperature == 0.0
@@ -104,6 +113,8 @@ class RunnerConfig:
             f"{self.backend}|{self.temperature}|{self.top_p}|{self.max_new_tokens}"
             f"|{self.seed}|{resolution_cap_px()}|{self.structured_outputs}|{self.logprobs_mode}"
         )
+        if self.repeatable:
+            payload += "|repeatable"
         return hashlib.sha256(payload.encode()).hexdigest()[:12]
 
 
@@ -139,6 +150,7 @@ def load_runner_config(backend: Backend | None = None) -> RunnerConfig:
         # unconstrained while the config said otherwise.
         logprobs_mode=str(generation.get("logprobs_mode", "raw_logprobs")),
         structured_outputs=bool(generation.get("structured_outputs", False)),
+        repeatable=bool(generation.get("repeatable", False)),
     )
     config.assert_logprobs_are_the_models_own()
 

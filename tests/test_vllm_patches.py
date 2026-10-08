@@ -243,6 +243,29 @@ def test_page_refs_are_held_to_the_documents_pages():
     assert with_page_bounds(base, None) is base
 
 
+def test_a_window_may_cite_only_its_own_pages():
+    from common.schemas import resolved_schema, with_page_bounds
+
+    base = resolved_schema("policy", None, "homeowners", "arrays")
+
+    def ref(pages):
+        return with_page_bounds(base, 40, pages=pages)["$defs"]["FieldValue"]["properties"]["page_ref"]
+
+    assert ref([7, 5, 6])["items"] == {"type": "integer", "minimum": 5, "maximum": 7} and ref([5, 6, 7])["maxItems"] == 3
+    assert ref([2, 9, 14])["items"] == {"type": "integer", "enum": [2, 9, 14]}
+    assert ref(list(range(1, 80, 2)))["items"] == {"type": "integer", "minimum": 1, "maximum": 79}  # too long to list
+    assert not _xgrammar_unsupported(with_page_bounds(base, 40, pages=[2, 9, 14]))
+
+
+def test_the_pages_a_prompt_shows_are_read_from_its_markers():
+    from inference_core.input_builder import shown_pages
+
+    messages = [{"role": "user", "content": [
+        {"type": "text", "text": "<page 10 of 20>\n..."}, {"type": "text", "text": "<page 9 of 20>\nDECLARATIONS"}]}]
+    assert shown_pages(messages) == [9, 10]
+    assert shown_pages([{"role": "user", "content": "no markers"}]) == []
+
+
 def test_the_bounded_schema_is_one_xgrammar_compiles():
     from common.schemas import resolved_schema, with_page_bounds
 
@@ -275,4 +298,28 @@ def test_validation_generation_constrains_with_the_bound(monkeypatch):
         {"role": "user", "content": [{"type": "text", "text": "<page 1 of 3>\ntext"}]},
         {"role": "assistant", "content": '{"a": 1}'}]}
     generate_validation([row], model, constrain=True)
-    assert seen[0]["$defs"]["FieldValue"]["properties"]["page_ref"]["maxItems"] == 3
+    ref = seen[0]["$defs"]["FieldValue"]["properties"]["page_ref"]
+    assert ref["maxItems"] == 1 and ref["items"]["maximum"] == 1       # it shows page 1 of 3
+
+
+def test_repeatable_generation_turns_off_the_prefix_cache_and_asks_for_invariant_kernels(monkeypatch):
+    import dataclasses
+
+    from inference_core.model_runner import repeatable_engine_settings
+    from inference_core.runner_config import RunnerConfig
+
+    monkeypatch.delenv("VLLM_BATCH_INVARIANT", raising=False)
+    assert repeatable_engine_settings(RunnerConfig()) == {}
+    import os
+
+    assert "VLLM_BATCH_INVARIANT" not in os.environ
+    config = dataclasses.replace(RunnerConfig(), repeatable=True)
+    assert repeatable_engine_settings(config) == {"enable_prefix_caching": False}
+    assert os.environ["VLLM_BATCH_INVARIANT"] == "1"
+    assert config.fingerprint() != RunnerConfig().fingerprint()       # two runs that differ in it say so
+
+
+def test_the_shipped_config_generates_with_the_prefix_cache():
+    from inference_core.runner_config import load_runner_config
+
+    assert load_runner_config().repeatable is False

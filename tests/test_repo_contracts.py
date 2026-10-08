@@ -99,6 +99,9 @@ RUNTIME_SET_VARS = frozenset({
     # which GPUs checkpoint selection may run its engines on. Never in .env -
     # the pod sources it, and an empty value there would hide every GPU.
     "CUDA_VISIBLE_DEVICES",
+    # vLLM's own, set by the code for the engine it builds when generation is
+    # asked to be repeatable (inference_core.model_runner) - never by a person.
+    "VLLM_BATCH_INVARIANT",
 })
 
 

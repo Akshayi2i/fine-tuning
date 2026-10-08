@@ -263,11 +263,12 @@ def test_serving_asks_the_windows_training_built(client):
     from common.schemas import resolved_schema, with_page_bounds
     from inference_core.input_builder import page_total
 
-    # Each constrained to its slice, with page_ref bounded to the document's pages.
+    # Each constrained to its slice, with page_ref bounded to the pages its
+    # training row showed.
     assert served_schemas == [
         with_page_bounds(resolved_schema("policy", None, "wc", group),
-                         page_total(call["messages"]))
-        for (group, _pages), call in zip(trained, backend.calls, strict=True)
+                         page_total(call["messages"]), pages=list(pages))
+        for (group, pages), call in zip(trained, backend.calls, strict=True)
     ]
     served_prompts = [call["messages"][0]["content"] for call in backend.calls]
     trained_prompts = [r["messages"][0]["content"] for r in rows]

@@ -235,6 +235,32 @@ def to_vllm_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
     ]
 
 
+def repeatable_engine_settings(config: RunnerConfig) -> dict[str, Any]:
+    """The engine arguments, and the environment, for ``config.repeatable``.
+
+    Batch-invariant kernels (``VLLM_BATCH_INVARIANT``) make a request's numbers
+    independent of what shares its batch, where the installed vLLM has them; the
+    prefix cache is turned off either way, so no request reuses another's
+    computed prompt. Set before vLLM is imported: it reads the variable then.
+    """
+    if not config.repeatable:
+        return {}
+    import importlib.util
+    import os
+
+    os.environ["VLLM_BATCH_INVARIANT"] = "1"
+    try:
+        has_kernels = importlib.util.find_spec("vllm.model_executor.layers.batch_invariant") is not None
+    except ModuleNotFoundError:
+        has_kernels = False
+    if not has_kernels:
+        log.warning(
+            "repeatable generation asked for, and this vLLM has no batch-invariant kernels: "
+            "only the prefix cache is turned off, so answers may still differ between runs"
+        )
+    return {"enable_prefix_caching": False}
+
+
 class VLLMBackend(ModelBackend):
     """vLLM — the serving path. Multi-LoRA hot-swap, OpenAI-compatible."""
 
@@ -289,6 +315,7 @@ class VLLMBackend(ModelBackend):
 
         # Before vLLM is imported (inference_core.vllm_patches).
         patch_qwen3_vl_lora()
+        repeatable = repeatable_engine_settings(config)
         from vllm import LLM
 
         from common.gpu import require_cuda
@@ -326,8 +353,10 @@ class VLLMBackend(ModelBackend):
             # read the post-mask distribution under structured decoding (§5.1).
             logprobs_mode=config.logprobs_mode,
             structured_outputs_config=STRUCTURED_OUTPUTS_ENGINE,
+            **repeatable,
         )
-        log.info("vLLM engine up on %s (lora=%s)", model_path, config.enable_lora)
+        log.info("vLLM engine up on %s (lora=%s, repeatable=%s)", model_path, config.enable_lora,
+                 config.repeatable)
         return self._engine
 
     @staticmethod

@@ -275,12 +275,14 @@ def _build_request(
     # (arch v2.1 §13). Without this the schema-validity floor in §13b measured an
     # unconstrained model, so one malformed bf16 output made every quantized
     # format unvalidatable.
-    # Page references bounded to the document's pages (with_page_bounds): an
-    # unbounded list let a model count past the last page to max_new_tokens.
+    # Page references bounded to the pages this request shows (with_page_bounds):
+    # an unbounded list let a model count past the last page to max_new_tokens,
+    # and a window may cite only its own pages, as training taught it.
     schema = (
         with_page_bounds(
             resolved_schema(route_.schema_doc_type, route_.schema_acord_form, lob, sections),
             total_pages or len(image_paths),
+            pages=page_numbers,
         )
         if getattr(model.config, "structured_outputs", False) else None
     )
@@ -479,6 +481,19 @@ def _extract_policy_windows(
         len(routed), rounds, merged.duplicates_collapsed, len(merged.conflicts), len(failed),
     )
     return merged.extraction, merged.spans, round(wall_ms, 1), sorted(routed), flags
+
+
+def _likely_missed(extraction: dict[str, Any], page_texts: dict[int, str], lob: Any, page_threshold: int) -> list[str]:
+    """Declarations fields left empty whose label and a value of their type open
+    a line of the pages the declarations windows read (serving.conventions)."""
+    from common.schema_sections import groups_for, pages_for, reads_declarations
+    from data_pipeline.dataset_builder.policy_windows import routed_pages
+    from serving.conventions import declaration_objects, likely_missed
+
+    routed, declarations_page = routed_pages(page_texts, len(page_texts), page_threshold=page_threshold)
+    pages = sorted({page for group in groups_for(lob) if reads_declarations(group)
+                    for page in pages_for(group, list(routed), declarations_page=declarations_page)})
+    return likely_missed(extraction, page_texts, pages, declaration_objects(lob))
 
 
 #: A coverage served with no unit while the answer holds several units of a kind.
@@ -1070,6 +1085,22 @@ def extract(
         extraction, all_spans, latency, pages_used, merge_flags = _extract_policy_windows(
             request, model, route_, lob, page_threshold=page_threshold, latencies=window_latencies,
         )
+        if common_model:
+            # The conventions the training labels follow, applied to the merged
+            # answer against every page's text (serving.conventions): each value
+            # once, citing every page that prints it; no extra field repeating a
+            # field; a value no page prints flagged.
+            from data_pipeline.ocr.modality import NATIVE
+            from serving.conventions import conform
+
+            page_texts = None if request.modality_mode == "image_only" else (
+                dict(request.page_texts) or dict(enumerate(_all_page_texts(request), start=1)))
+            conformed = conform(extraction, all_spans, page_texts,
+                                native=(request.ocr_meta or {}).get("modality") == NATIVE)
+            extraction, all_spans = conformed.extraction, conformed.spans
+            merge_flags.extend(conformed.flags)
+            if page_texts:
+                merge_flags.extend(_likely_missed(extraction, page_texts, lob, page_threshold))
     elif len(windows) > 1:
         # A Loss Run longer than one window: read by window, merged and
         # reconciled. One that fits a window is read in one call below.

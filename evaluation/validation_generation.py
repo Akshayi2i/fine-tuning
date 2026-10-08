@@ -160,7 +160,7 @@ def generate_validation(
     generations describes a model nobody serves.
     """
     from common.schemas import resolved_schema, with_page_bounds
-    from inference_core.input_builder import page_total
+    from inference_core.input_builder import page_total, shown_pages
     from inference_core.model_runner import generate, generate_batch
 
     if constrain is None:
@@ -178,13 +178,15 @@ def generate_validation(
             # row with no form (no schema to select), used to raise out of the
             # loop and abort every other row's scoring with it.
             messages, entry.golden = split_prompt(row)
-            # Page references bounded to the document's pages (with_page_bounds).
+            # Page references bounded to the pages the row shows (with_page_bounds),
+            # as serving bounds them.
             schema = (
                 with_page_bounds(
                     resolved_schema(
                         row["doc_type"], row.get("acord_form"), row.get("lob"), row.get("sections")
                     ),
                     page_total(messages),
+                    pages=shown_pages(messages),
                 )
                 if constrain else None
             )

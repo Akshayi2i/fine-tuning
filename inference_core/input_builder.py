@@ -70,6 +70,21 @@ def page_total(messages: list[dict[str, Any]]) -> int | None:
     return max(totals) if totals else None
 
 
+def shown_pages(messages: list[dict[str, Any]]) -> list[int]:
+    """The page numbers a prompt carries, read back from its ``<page i of N>``
+    markers: a window's own pages, in the document's numbering."""
+    import re
+
+    return sorted({
+        int(match)
+        for message in messages
+        if isinstance(message.get("content"), list)
+        for part in message["content"]
+        if isinstance(part, dict) and part.get("type") == "text"
+        for match in re.findall(r"<page (\d+) of \d+>", part.get("text") or "")
+    })
+
+
 class InputBuilderError(RuntimeError):
     """Raised on an unusable modality mode, page list, or image path."""
 
