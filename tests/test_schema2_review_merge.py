@@ -76,7 +76,7 @@ def test_an_alias_to_an_id_already_renumbered_still_resolves():
     assert out["coverages"][0]["applies_to"] == ["veh_1"] and not report.dangling
 
 
-def test_a_window_showing_only_the_second_vehicle_teaches_no_link_to_the_first():
+def test_a_window_showing_only_the_second_vehicle_teaches_no_link_to_the_first(no_window_overlap):
     """Vehicle 1 on page 2, vehicle 2 on page 5, the coverages of both on pages
     4-5. The window over pages 4-6 shows only vehicle 2: the first vehicle's
     coverages lose their link (counted), not gain vehicle 2's."""

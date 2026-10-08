@@ -200,6 +200,13 @@ common_model:
     forms_and_endorsements: [form_number, edition_date]
     additional_fields: [label, value]
 
+  # Pages two windows of one split page run share (policy_windows.plan_windows,
+  # for training and serving alike): a row printed across their boundary - a
+  # vehicle's VIN at the foot of one page, its coverages at the top of the next -
+  # is then whole in one window. The windowing oracle on the bundles: links kept
+  # 87.1% -> 93.6%, values kept unchanged, for 22% more windows.
+  run_overlap_pages: 1
+
   # What identifies a risk unit across windows: the FIRST of these that a row
   # states (a list inside means those fields together). Unlike array_keys, a
   # row carrying only its VIN and a fragment carrying only its vehicle number

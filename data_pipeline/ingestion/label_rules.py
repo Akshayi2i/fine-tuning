@@ -33,6 +33,11 @@ The rules, each logged as a correction (:func:`apply_label_rules`):
 * **extra field moved to its field** - Protection Class and a "Paid By:
   Mortgagee" line, where the proper field is empty (and dropped where it holds
   them already).
+* **link names the building** - an entry that applies to a location with one
+  building names the building, as the client's own example does (Coverage A
+  and the mortgagee of homeowners_minimal.json name ``bldg_1``). The labels
+  named such a premises by its location in some seeds and its building in
+  others, so the model learned a habit per layout.
 * **number not printed** - a location or building number no page prints as
   one ("Location 1", "Property: 1", "Bldg 2", or a "Loc. #" column with the
   number in a cell of its own), never the house number of the street address.
@@ -139,6 +144,7 @@ def apply_label_rules(gold: dict[str, Any], pages: dict[int, str], *,
         texts = {}
     reliable = _reliable_pages(gold, texts) - set(scanned) if texts else set()
     notes: list[tuple[str, str]] = []
+    _building_links(gold, notes)
     _extra_fields(gold, texts, reliable, notes)
     if texts:
         _numbers(gold, pages, reliable, notes)
@@ -386,6 +392,39 @@ def _move_to_field(gold: dict[str, Any], label: str, value: dict[str, Any], note
         notes.append(("extra field moved to its field", f"{where} {label!r} -> interested_parties.is_payor"))
         return True
     return False
+
+
+def _building_links(gold: dict[str, Any], notes: list) -> None:
+    """Every ``applies_to`` link to a location with exactly one building
+    rewritten to that building. A building with no ``location_ref`` belongs to
+    the document's only location, when there is one."""
+    locations = [row["unit_id"] for row in gold.get("locations") or [] if isinstance(row, dict) and row.get("unit_id")]
+    homes: dict[str, list[str]] = {}
+    for row in gold.get("buildings") or []:
+        if not (isinstance(row, dict) and row.get("unit_id")):
+            continue
+        home = row.get("location_ref") or (locations[0] if len(locations) == 1 else None)
+        if isinstance(home, str):
+            homes.setdefault(home, []).append(row["unit_id"])
+    only = {location: ids[0] for location, ids in homes.items() if len(ids) == 1}
+    if not only:
+        return
+
+    def walk(node: Any, path: str) -> None:
+        if isinstance(node, list):
+            for index, item in enumerate(node):
+                walk(item, f"{path}[{index}]")
+        elif isinstance(node, dict):
+            links = node.get("applies_to")
+            if isinstance(links, list) and any(link in only for link in links):
+                rewritten = list(dict.fromkeys(only.get(link, link) for link in links))
+                node["applies_to"] = rewritten
+                notes.append(("link names the building", f"{path}.applies_to {links} -> {rewritten}"))
+            for key, value in node.items():
+                if key not in ("locations", "buildings", "applies_to"):
+                    walk(value, f"{path}.{key}" if path else key)
+
+    walk(gold, "")
 
 
 def _numbers(gold: dict[str, Any], pages: dict[int, str], reliable: set[int], notes: list) -> None:

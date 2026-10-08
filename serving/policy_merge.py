@@ -42,6 +42,7 @@ the one numbering function training also uses.
 from __future__ import annotations
 
 import logging
+from collections import Counter
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from typing import Any
@@ -475,6 +476,100 @@ _REFERRING_TABLES = ("coverages", "deductibles", "interested_parties", "rating_m
 _Join = Callable[[dict[str, Any], dict[str, Any]], None]
 
 
+def _drop_shared_page_rows(ordered: list[PolicyWindow]) -> int:
+    """Rows read twice because two windows of a group share a page (a split
+    run overlaps, ``run_overlap_pages``), dropped from one of them; the number
+    dropped.
+
+    A row the later window holds only on the shared pages is the earlier
+    window's row, read again - dropped when the earlier window holds a row
+    agreeing on its values. Then a fragment the earlier window holds only on
+    the shared pages (a coverage's name at the foot of the page) is dropped
+    where the later window holds the row whole. Left in, the second copy has
+    lost what the shared page does not show - the vehicle or boat its row
+    applies to, read in the other window - and the merge cannot tell which
+    unit's row it is: two boats' identical coverage lines stayed unmatched.
+    Spans were taken from the windows already; dropping a row moves no other.
+    """
+    dropped = 0
+    groups: dict[str, list[PolicyWindow]] = {}
+    for window in ordered:
+        groups.setdefault(window.group, []).append(window)
+    for windows in groups.values():
+        for earlier, later in zip(windows, windows[1:], strict=False):
+            shared = {int(p) for p in earlier.pages} & {int(p) for p in later.pages}
+            if shared:
+                dropped += _drop_read_again(later, earlier, shared) + _drop_read_again(earlier, later, shared)
+    return dropped
+
+
+def _drop_read_again(window: PolicyWindow, other: PolicyWindow, shared: set[int]) -> int:
+    dropped = 0
+    for table, rows in list(window.extraction.items()):
+        if not isinstance(rows, list):
+            continue
+        others = [row for row in other.extraction.get(table) or [] if isinstance(row, dict)]
+        # Compared with what the other row reads on the shared pages only: a
+        # coverage of the same name printed for another vehicle on another page
+        # is not this row.
+        theirs = [_row_values(row, within=shared) for row in others]
+        kept = []
+        for row in rows:
+            mine = _row_values(row) if isinstance(row, dict) else None
+            match = (next((o for o, their in zip(others, theirs, strict=True) if not (mine - their)), None)
+                     if mine and _cited_within(row, shared) else None)
+            if match is not None:
+                # The copy dropped may be the one that names the row's unit -
+                # the window that shows the vehicle - which the kept copy could
+                # not: its links go to the kept row.
+                for key, value in row.items():
+                    if match.get(key) in (None, "", []) and isinstance(value, (str, list)) and not any(
+                            is_field_value(v) or isinstance(v, dict) for v in (value if isinstance(value, list) else [])):
+                        match[key] = value
+                dropped += 1
+                continue
+            kept.append(row)
+        if len(kept) != len(rows):
+            window.extraction[table] = kept
+    return dropped
+
+
+def _row_values(row: Any, path: str = "", *, within: set[int] | None = None) -> Counter:
+    """A row's printed values as ``(field path without positions, normalised
+    text)`` - those citing a page of ``within``, when given."""
+    out: Counter = Counter()
+    if is_field_value(row):
+        raw = row.get("raw") if row.get("raw") not in (None, "") else row.get("parsed")
+        cited = {int(p) for p in row.get("page_ref") or [] if str(p).lstrip("-").isdigit()}
+        if raw not in (None, "") and (within is None or cited & within):
+            out[(path, normalize_text(str(raw)))] += 1
+    elif isinstance(row, dict):
+        for key, value in row.items():
+            out += _row_values(value, f"{path}.{key}" if path else key, within=within)
+    elif isinstance(row, list):
+        for item in row:
+            out += _row_values(item, f"{path}[]", within=within)
+    return out
+
+
+def _cited_within(node: Any, pages: set[int]) -> bool:
+    """Whether every value in ``node`` cites only ``pages`` (and one at least does)."""
+    refs: list[set[int]] = []
+
+    def walk(item: Any) -> None:
+        if is_field_value(item):
+            refs.append({int(p) for p in item.get("page_ref") or [] if str(p).lstrip("-").isdigit()})
+        elif isinstance(item, dict):
+            for value in item.values():
+                walk(value)
+        elif isinstance(item, list):
+            for value in item:
+                walk(value)
+
+    walk(node)
+    return bool(refs) and all(ref and ref <= pages for ref in refs)
+
+
 def _merge_common_model(windows: list[PolicyWindow], lob: str | list[str]) -> MergedPolicy:
     from common.schema_sections import group_names, references, structural_ids
     from common.structural_ids import renumber_structural_ids
@@ -490,6 +585,7 @@ def _merge_common_model(windows: list[PolicyWindow], lob: str | list[str]) -> Me
         # Ids are numbered within a window: veh_1 of one window is not veh_1 of
         # the next. Namespaced, they cannot be mistaken for each other.
         _namespace(window.extraction, f"w{index}", ids, refs)
+    report.duplicates_collapsed += _drop_shared_page_rows(ordered)
 
     # Units first, in the section map's order: a table referred to (lob_parts,
     # locations) is merged before the tables that refer to it.

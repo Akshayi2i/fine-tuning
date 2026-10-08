@@ -340,7 +340,7 @@ def test_the_every_key_fill_adds_no_annotation_keys(lob):
 # --------------------------------------------------------------------------
 
 
-def test_the_ceiling_counts_links_apart_from_values():
+def test_the_ceiling_counts_links_apart_from_values(no_window_overlap):
     from evaluation.windowing_ceiling import ceiling, oracle
 
     texts = ["Declarations"] + [f"Schedule page {p}" for p in range(2, 7)]

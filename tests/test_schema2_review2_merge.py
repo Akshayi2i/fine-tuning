@@ -181,7 +181,7 @@ def _vins(merged, ids):
     return sorted(by_id[i] for i in ids)
 
 
-def test_a_discount_and_a_party_on_vehicles_in_two_windows_are_one_row_each():
+def test_a_discount_and_a_party_on_vehicles_in_two_windows_are_one_row_each(no_window_overlap):
     """One label row each - a multi-car discount and a lienholder on both
     vehicles - with vehicle 1 printed in the first arrays window and vehicle 2
     in the second. Each window is taught a link only to the vehicle it sees;

@@ -102,3 +102,56 @@ def test_a_line_outside_the_common_model_keeps_its_rules():
     text = render_system_prompt("lossrun", "ocr_plus_image")
     assert "notes, or source references. Values only." in text
     assert "Write it once" not in text and "list only the rows printed" not in text
+
+
+def test_a_common_model_line_shares_a_page_between_the_windows_of_a_split_run():
+    from common.schema_sections import run_overlap
+
+    assert run_overlap("homeowners") == 1 and run_overlap("personal_auto") == 1
+    assert run_overlap("gl") == 0                                  # a self-contained line plans as before
+
+
+def test_the_prompt_says_a_lone_building_is_named_not_its_location():
+    assert "for a location with a single building, the building's" in _prompt("arrays")
+
+
+def _vehicles(page):
+    return [{"unit_id": "veh_1", "vin": _v("1HGCM82633A004352", [page])},
+            {"unit_id": "veh_2", "vin": _v("2T1BURHE0JC123456", [page])}]
+
+
+def _merged(*windows):
+    from serving.policy_merge import PolicyWindow, merge_policy_windows
+
+    return merge_policy_windows([PolicyWindow(group="arrays", pages=list(pages), extraction=extraction)
+                                 for pages, extraction in windows], lob="personal_auto").extraction
+
+
+def _coverage(name, pages, premium=None, premium_page=None, unit=None):
+    row = {"coverage_id": "cov_1", "coverage_code": "X_MED_PAY", "coverage_name": _v(name, pages)}
+    if premium:
+        row["premium"] = _v(premium, [premium_page], float(premium.strip("$")))
+    if unit:
+        row["applies_to"] = [unit]
+    return row
+
+
+def test_a_row_read_twice_through_a_shared_page_is_served_once():
+    # Two vehicles' identical lines on page 7, read whole by the window showing
+    # the vehicles and again, unit-less, by the next window.
+    whole = [_coverage("Medical Payments", [6, 7], "$12.00", 7, unit) for unit in ("veh_1", "veh_2")]
+    again = [_coverage("Medical Payments", [7], "$12.00", 7) for _ in range(2)]
+    merged = _merged(([5, 6, 7], {"vehicles": _vehicles(5), "coverages": whole}), ([7, 8], {"coverages": again}))
+    assert sorted(c["applies_to"][0] for c in merged["coverages"]) == ["veh_1", "veh_2"]
+
+
+def test_a_fragment_on_a_shared_page_keeps_its_vehicle_link():
+    # veh_1's coverage named at the foot of page 3 - the copy that names the
+    # vehicle, which the next window cannot see; its premium, and veh_2's
+    # coverage, on the pages the vehicles' window does not show.
+    fragment = _coverage("Medical Payments", [3], unit="veh_1")
+    rows = [_coverage("Medical Payments", [3], "$12.00", 4), _coverage("Medical Payments", [5], "$15.00", 5)]
+    merged = _merged(([1, 2, 3], {"vehicles": _vehicles(1), "coverages": [fragment]}),
+                     ([3, 4, 5], {"coverages": rows}))
+    linked = [c for c in merged["coverages"] if c.get("applies_to") == ["veh_1"]]
+    assert len(linked) == 1 and linked[0]["premium"]["parsed"] == 12.0

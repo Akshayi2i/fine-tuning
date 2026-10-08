@@ -40,7 +40,7 @@ PROMPT_DIR = Path(__file__).resolve().parent.parent / "prompts"
 #: Bumped whenever the template's rendered output changes in any way.
 #: Recorded in the corpus manifest; a change forces a corpus rebuild and a new
 #: training cycle, exactly like a schema change (arch §7).
-PROMPT_TEMPLATE_VERSION = "7.1.0"
+PROMPT_TEMPLATE_VERSION = "7.2.0"
 
 _SYSTEM_TEMPLATE = "system_prompt_template.jinja"
 _CLASSIFIER_TEMPLATE = "doc_type_classifier_prompt.jinja"

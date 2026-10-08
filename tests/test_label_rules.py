@@ -335,3 +335,21 @@ def test_corrected_gold_runs_the_rules_on_the_text_layer(tmp_path):
     _fixed, notes, problem = corrected_gold(gold, "homeowners", carrier="example", text_pdf=pdf, recodes={})
     assert problem is None
     assert (PRINTED_NOWHERE, "policy.policy_number") in notes
+
+
+def test_a_link_to_a_location_with_one_building_names_the_building():
+    gold = _gold(buildings=[{"unit_id": "bldg_1", "location_ref": "loc_1", "year_built": _v("1990", [2], 1990)}])
+    gold["coverages"][0]["applies_to"] = ["loc_1"]
+    gold["interested_parties"][0]["applies_to"] = ["loc_1", "bldg_1"]
+    notes = apply_label_rules(gold, {})
+    assert gold["coverages"][0]["applies_to"] == ["bldg_1"]
+    assert gold["interested_parties"][0]["applies_to"] == ["bldg_1"]           # named once
+    assert ("link names the building", "coverages[0].applies_to ['loc_1'] -> ['bldg_1']") in notes
+    assert gold["buildings"][0]["location_ref"] == "loc_1"                    # a building still sits at its location
+
+
+def test_a_location_with_two_buildings_keeps_its_links():
+    gold = _gold(buildings=[{"unit_id": "bldg_1", "location_ref": "loc_1"}, {"unit_id": "bldg_2", "location_ref": "loc_1"}])
+    gold["coverages"][0]["applies_to"] = ["loc_1"]
+    apply_label_rules(gold, {})
+    assert gold["coverages"][0]["applies_to"] == ["loc_1"]

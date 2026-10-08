@@ -68,7 +68,7 @@ def _named_on_page_3(index):
 # T1 - a fragment is an orphan only when its values are taught elsewhere ----
 
 
-def test_a_coverage_split_at_the_window_boundary_keeps_its_values():
+def test_a_coverage_split_at_the_window_boundary_keeps_its_values(no_window_overlap):
     """The liability's limits and $410 premium are printed only on page 4. Left
     out of the 4-6 window as a nameless fragment, they were taught nowhere."""
     targets, report = _targets(_named_on_page_3(0))
@@ -83,7 +83,7 @@ def test_a_coverage_split_at_the_window_boundary_keeps_its_values():
     assert values_view(fragment["premium"]) == 410.0
 
 
-def test_a_collision_split_at_the_window_boundary_keeps_its_deductible():
+def test_a_collision_split_at_the_window_boundary_keeps_its_deductible(no_window_overlap):
     targets, report = _targets(_named_on_page_3(1))
     _assert_writable(targets)
     assert report.orphaned == []
