@@ -799,6 +799,7 @@ def _feature_calibrated(
     thresholds: Any,
     page_text: str | None,
     common_model: bool = False,
+    page_texts: dict[int, str] | None = None,
 ) -> CalibratedResult:
     """Per-field-type feature calibration (arch v2.1 §5.1-5.4).
 
@@ -836,7 +837,7 @@ def _feature_calibrated(
     # calibration fitting types them (validation_generation.calibration_samples).
     for features in build_document_features(
         extraction=extraction, spans=logprobs_by_path, page_text=page_text,
-        common_model=common_model,
+        common_model=common_model, page_texts=page_texts,
     ):
         confidence = calibrators.predict(features) if calibrators else None
         needs_review = (
@@ -1193,6 +1194,9 @@ def extract(
                 if request.page_texts else [request.ocr_text]
             ),
             common_model=common_model,
+            # Each page's own text, so a value is grounded on the pages it cites.
+            page_texts=None if request.modality_mode == "image_only" else (
+                {int(p): t for p, t in request.page_texts.items()} or None),
         )
     else:
         log.warning(

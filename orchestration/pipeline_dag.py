@@ -1818,14 +1818,31 @@ def stage_calibrate(ctx: StageContext) -> StageResult:
             "auto_accept_error_rate": round(
                 auto_accept_error_rate(scored_by_type, thresholds), 4
             ),
+            # Whether the confidence numbers mean what they say, on the half the
+            # calibrators were not fitted on: the gap between stated confidence
+            # and observed accuracy, per field type and over all fields.
+            "expected_calibration_error": _calibration_errors(scored_by_type),
         }
 
     detail = "; ".join(
         f"{fmt}: {len(body['guarantees'])} field type(s), "
-        f"auto-accept error {body['auto_accept_error_rate']:.2%}"
+        f"auto-accept error {body['auto_accept_error_rate']:.2%}, "
+        f"calibration error {body['expected_calibration_error']['all']:.3f}"
         for fmt, body in sorted(fitted.items())
     ) or "nothing fitted"
     return StageResult("calibrate", "completed", detail, {"by_format": fitted})
+
+
+def _calibration_errors(scored_by_type: dict[str, list[tuple[float, bool]]]) -> dict[str, float]:
+    """Expected calibration error per field type and over every field ("all")."""
+    from evaluation.metrics.coverage_metrics import expected_calibration_error
+
+    def ece(pairs: list[tuple[float, bool]]) -> float:
+        return round(expected_calibration_error([c for c, _ in pairs], [ok for _, ok in pairs]), 4)
+
+    out = {field_type: ece(pairs) for field_type, pairs in sorted(scored_by_type.items())}
+    out["all"] = ece([pair for pairs in scored_by_type.values() for pair in pairs])
+    return out
 
 
 # --------------------------------------------------------------------------

@@ -379,24 +379,13 @@ def calibration_samples(
         rows_aligned_to,
         values_agree,
     )
+    from serving.conventions import conform
 
     halves: dict[str, list[tuple[Any, bool]]] = {"calibration": [], "threshold": []}
     unassigned = 0
-    for generation in generations:
-        half = generation.row.get("val_half")
-        if half not in halves:
-            unassigned += 1
-            continue
-        if generation.error:
-            # No generation means no features. The failure is already counted in
-            # the scored metrics; it has no token evidence to calibrate on.
-            continue
-        # Fitted as serving calibrates (serving.pipeline._feature_calibrated): on
-        # a common-model line, typed as its schema declares and without its ids,
-        # codes and links, which serving never calibrates. Otherwise a calibrator
-        # is fitted on fields, and under types, it is never asked about.
-        common_model = generation.row.get("doc_type") == "policy" and is_common_model(
-            "policy", None, generation.row.get("lob"))
+
+    def add(half: str, golden: Any, answer: Any, spans: Any, *, common_model: bool, page_text: Any,
+            page_texts: Any) -> None:
         # The label's rows in the order the model wrote its own, paired by
         # identifier: compared by position, one omitted or reordered row made
         # every later row's correct values "wrong", and the calibrator learned
@@ -406,21 +395,53 @@ def calibration_samples(
         # name, limits and premium were fitted as wrong while the gate counted
         # them right. Answer row i keeps index i; label rows nothing paired go
         # after the answer's, where no feature path reaches them.
-        gold_values = values_view(generation.golden)
-        got_values = values_view(generation.extraction or {})
+        gold_values = values_view(golden)
+        got_values = values_view(answer or {})
         expected = flatten_scalars(
             aligned_for_scoring(gold_values, got_values)[0] if common_model
             else rows_aligned_to(gold_values, got_values)
         )
-        extraction = generation.extraction or {}
+        # Fitted as serving calibrates (serving.pipeline._feature_calibrated): on
+        # a common-model line, typed as its schema declares and without its ids,
+        # codes and links, which serving never calibrates. Otherwise a calibrator
+        # is fitted on fields, and under types, it is never asked about.
         for features in build_document_features(
-            extraction=without_bare_values(extraction) if common_model else extraction,
-            spans=generation.logprobs_by_path,
-            page_text=generation.page_text,
-            common_model=common_model,
+            extraction=without_bare_values(answer or {}) if common_model else (answer or {}),
+            spans=spans, page_text=page_text, common_model=common_model, page_texts=page_texts,
         ):
             correct = values_agree(expected.get(features.field_path), features.value, features.field_path)
             halves[half].append((features, bool(correct)))
+
+    # A policy read in windows is fitted as it is served: merged, then held to
+    # the label conventions (serving.conventions) - the answer serving asks the
+    # calibrators about, not one window of it.
+    for document in merged_windows(generations):
+        half = document.members[0].row.get("val_half")
+        if half not in halves:
+            unassigned += len(document.members)
+            continue
+        if all(g.error for g in document.members):
+            continue
+        conformed = conform(document.answer, document.spans, document.metadata.get("ocr_pages"),
+                            native=not document.metadata.get("is_scanned"))
+        add(half, document.gold, conformed.extraction, conformed.spans, common_model=True,
+            page_text=document.metadata.get("ocr_text"), page_texts=document.metadata.get("ocr_pages"))
+
+    for generation in generations:
+        if _is_window(generation):
+            continue
+        half = generation.row.get("val_half")
+        if half not in halves:
+            unassigned += 1
+            continue
+        if generation.error:
+            # No generation means no features. The failure is already counted in
+            # the scored metrics; it has no token evidence to calibrate on.
+            continue
+        common_model = generation.row.get("doc_type") == "policy" and is_common_model(
+            "policy", None, generation.row.get("lob"))
+        add(half, generation.golden, generation.extraction, generation.logprobs_by_path,
+            common_model=common_model, page_text=generation.page_text, page_texts=generation.ocr_pages)
 
     if unassigned:
         log.warning(

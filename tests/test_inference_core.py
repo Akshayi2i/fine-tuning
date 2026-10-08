@@ -170,6 +170,19 @@ def test_scalar_null_and_list_row_fields_all_map():
     assert all(s.token_logprobs for s in spans.values())
 
 
+def test_a_string_is_scored_on_its_own_tokens_not_its_quotes():
+    """The tokens around a value's quotes are the JSON's (``": "``, ``",``):
+    near-certain under any reading, they say nothing about the value."""
+    text = '{"policy_number": "HO-778812", "year": "2015"}'
+    tokens = ['{"', 'policy', '_number', '": "', 'HO', '-77', '8812', '", "', 'year', '": "', '2015', '"}']
+    logprobs = [0.0, 0.0, 0.0, -0.001, -0.5, -0.4, -0.3, -0.001, 0.0, -0.001, -0.2, -0.001]
+    spans = span_map.map_field_spans(text, tokens, logprobs)
+    assert spans["policy_number"].token_logprobs == [-0.5, -0.4, -0.3]
+    assert spans["year"].token_logprobs == [-0.2]
+    empty = span_map.map_field_spans('{"a": ""}', ['{"', 'a', '": ', '""', '}'], [0.0, 0.0, 0.0, -0.7, 0.0])
+    assert empty["a"].token_logprobs == [-0.7]                 # an empty string keeps its quotes
+
+
 def test_row_count_supports_the_completeness_signal():
     """A missing row emits no tokens, so counting generated rows is the only way
     to compare against the document's own count (IMPL-09)."""
@@ -517,3 +530,18 @@ def _runner_config():
     from inference_core.runner_config import RunnerConfig
 
     return RunnerConfig()
+
+
+def test_a_fields_confidence_reads_the_printed_value_not_its_reformatting():
+    """``parsed`` is written after ``raw`` and largely decided by it: its tokens
+    are near-certain whether the reading was right or not."""
+    from common.canonical import collapse_spans
+
+    text = '{"policy": {"effective_date": {"raw": "6/4/25", "parsed": "06/04/2025", "page_ref": [1]}}}'
+    spans = span_map.map_field_spans(text, list(text), [-0.3 if text[i] in "6/425" and i < 60 else -0.001
+                                                         for i in range(len(text))])
+    collapsed = collapse_spans(spans)
+    assert collapsed["policy.effective_date"] is spans["policy.effective_date.raw"]
+    no_raw = collapse_spans({"a.parsed": spans["policy.effective_date.parsed"],
+                             "a.raw": span_map.FieldSpan("a.raw", None, 0, 0)})
+    assert no_raw["a"] is spans["policy.effective_date.parsed"]      # nothing read: parsed stands in

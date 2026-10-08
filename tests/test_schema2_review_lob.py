@@ -82,8 +82,9 @@ def test_a_wrapped_answer_is_read_with_its_lines_confidence(wrapping):
     text = WRAPPED[wrapping]
     classification = ZeroShotClassifier(SimpleNamespace(), _answering(text)).classify(["p.png"], "x")
     assert classification.lob == "homeowners"
-    # One token per character at -0.01: the value's 12 characters, quotes included.
-    assert classification.lob_confidence == round(math.exp(-0.12), 4)
+    # One token per character at -0.01: the value's 10 characters, its quotes
+    # left out (inference_core.span_map scores a string's own characters).
+    assert classification.lob_confidence == round(math.exp(-0.10), 4)
 
 
 def test_only_the_values_tokens_count_wherever_the_object_sits():
@@ -91,7 +92,7 @@ def test_only_the_values_tokens_count_wherever_the_object_sits():
     text = WRAPPED["think"]
     value = text.index('"homeowners"')
     logprobs = [-0.01 if value <= i < value + len('"homeowners"') else -3.0 for i in range(len(text))]
-    assert line_confidence(text, list(text), logprobs) == round(math.exp(-0.12), 4)
+    assert line_confidence(text, list(text), logprobs) == round(math.exp(-0.10), 4)     # its 10 characters
 
 
 @pytest.mark.parametrize("tokens,logprobs", [

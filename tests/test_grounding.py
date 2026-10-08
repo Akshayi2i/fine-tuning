@@ -101,3 +101,18 @@ def test_a_validation_row_keeps_each_pages_text_by_its_number():
     ]}]}
     assert ValidationGeneration(row=row, golden={}).ocr_pages == {9: "Limit $5,000", 14: "Forms list"}
     assert ValidationGeneration(row={**row, "modality_mode": "image_only"}, golden={}).ocr_pages is None
+
+
+def test_the_agreement_feature_grounds_a_value_on_the_pages_it_cites():
+    from calibration.features import build_document_features, page_agreement
+
+    texts = {1: "Named Insured: Rivera Fabrication LLC", 2: "Coverage A Dwelling $219,000"}
+    assert page_agreement("$219,000", [2], texts) == 1.0
+    assert page_agreement("$219,000", [1], texts) == 0.5          # printed, on another page
+    assert page_agreement("$999,000", [2], texts) == 0.0
+    assert page_agreement("NY", [1], texts) is None and page_agreement("$219,000", [2], None) is None
+    doc = {"coverages": [{"limits": [{"amount": _value("$219,000", 219000.0, [1])}]}]}
+    [features] = build_document_features(extraction=doc, spans={}, page_texts=texts)
+    assert features.ocr_agreement == 0.5
+    [whole] = build_document_features(extraction=doc, spans={}, page_text=texts[2])
+    assert whole.ocr_agreement == 1.0                              # without page texts: the text searched whole

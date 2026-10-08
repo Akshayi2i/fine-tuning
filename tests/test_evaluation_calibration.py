@@ -1445,3 +1445,13 @@ def test_a_scope_that_forgot_to_declare_a_metric_is_still_not_blocked_by_it():
 
     assert "lossrun_totals_reconciliation_rate" in not_applicable_for(forgetful)
     assert promotion_gate(metrics, None, scope=forgetful).passed
+
+
+def test_the_calibrate_stage_reports_how_far_confidence_is_from_accuracy():
+    from orchestration.pipeline_dag import _calibration_errors
+
+    honest = [(0.95, True)] * 19 + [(0.95, False)]                  # 95% stated, 95% right
+    boastful = [(0.95, True)] * 10 + [(0.95, False)] * 10           # 95% stated, 50% right
+    errors = _calibration_errors({"money": honest, "date": boastful})
+    assert errors["money"] == 0.0 and errors["date"] == 0.45
+    assert 0.0 < errors["all"] < 0.45

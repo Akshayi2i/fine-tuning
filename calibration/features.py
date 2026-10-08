@@ -285,6 +285,23 @@ def ocr_agreement(value: Any, page_text: str | None) -> float | None:
     return 1.0 if grounding.appears(value, page_text) else 0.0
 
 
+#: ``common.grounding`` statuses as the agreement feature reads them: printed on
+#: a page the value cites, printed only elsewhere (a wrong page, or another
+#: row's figure), printed nowhere.
+_GROUNDED = {"on_cited_page": 1.0, "on_other_page": 0.5, "not_printed": 0.0}
+
+
+def page_agreement(value: Any, cited: Any, page_texts: dict[int, str] | None) -> float | None:
+    """Whether the value is printed on the pages it cites: 1.0, only on other
+    pages 0.5, on none 0.0; ``None`` with no page text, or a value too short to
+    look for, or a cited page with no text (a scan the OCR could not read)."""
+    from common import grounding
+
+    if not page_texts:
+        return None
+    return _GROUNDED.get(grounding.ground(value, cited, page_texts).status)
+
+
 def rule_checks(field_path: str, value: Any, document: dict[str, Any]) -> bool | None:
     """Consistency checks a confident model can still fail.
 
@@ -341,8 +358,14 @@ def build_features(
     reason: str | None = None,
     printed_value: Any = None,
     common_model: bool = False,
+    page_ref: Any = None,
+    page_texts: dict[int, str] | None = None,
 ) -> FieldFeatures:
     """Assemble one field's feature vector.
+
+    With ``page_texts`` (each page's text by its number), OCR agreement is
+    whether the value is printed on the pages it cites (``page_ref``,
+    :func:`page_agreement`); otherwise whether it is anywhere in ``page_text``.
 
     A ``null`` value carries no tokens, so its logprob features are left at zero
     and ``is_null`` carries the signal instead. That is the whole reason nulls
@@ -374,8 +397,9 @@ def build_features(
         # Against what the page PRINTS. ``value`` is the normalised form — a date
         # rewritten to MM/DD/YYYY, a figure stripped of "$" and "," — which is
         # not on the page, so every reformatted value scored 0 agreement.
-        ocr_agreement=None if is_null else ocr_agreement(
-            value if printed_value is None else printed_value, page_text
+        ocr_agreement=None if is_null else (
+            page_agreement(value if printed_value is None else printed_value, page_ref, page_texts)
+            if page_texts else ocr_agreement(value if printed_value is None else printed_value, page_text)
         ),
         rule_checks_passed=None if is_null else rule_checks(field_path, value, document),
     )
@@ -397,8 +421,12 @@ def build_document_features(
     page_text: str | None = None,
     cross_mode: dict[str, Any] | None = None,
     common_model: bool = False,
+    page_texts: dict[int, str] | None = None,
 ) -> list[FieldFeatures]:
     """Feature vectors for every scalar field in one extraction.
+
+    ``page_texts`` (each page's text by its number) grounds each value on the
+    pages its envelope cites; without it, ``page_text`` is searched whole.
 
     Fields the span mapper could not locate are included with ``mapped=False``,
     not dropped: a field that silently vanishes between generation and
@@ -415,6 +443,7 @@ def build_document_features(
     # (both views are no-ops on a flat extraction). The printed view keeps each
     # value's printed form — a canonical envelope's ``raw`` — for OCR agreement.
     printed = flatten_scalars(printed_view(extraction))
+    cited = _cited_pages(extraction) if page_texts else {}
     extraction = values_view(extraction)
     out: list[FieldFeatures] = []
     for path, value in sorted(flatten_scalars(extraction).items()):
@@ -432,7 +461,25 @@ def build_document_features(
             reason=None if located or empty else "no span located in the generation",
             printed_value=printed.get(path),
             common_model=common_model,
+            page_ref=cited.get(path),
+            page_texts=page_texts,
         ))
+    return out
+
+
+def _cited_pages(node: Any, path: str = "") -> dict[str, list[Any]]:
+    """Each value envelope's ``page_ref``, by its values-view path."""
+    from common.canonical import is_field_value
+
+    if is_field_value(node):
+        return {path: list(node.get("page_ref") or [])}
+    out: dict[str, list[Any]] = {}
+    if isinstance(node, dict):
+        for key, value in node.items():
+            out.update(_cited_pages(value, f"{path}.{key}" if path else str(key)))
+    elif isinstance(node, list):
+        for index, item in enumerate(node):
+            out.update(_cited_pages(item, f"{path}[{index}]"))
     return out
 
 

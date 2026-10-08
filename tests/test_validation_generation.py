@@ -202,3 +202,23 @@ def test_rows_read_whole_have_no_document_metrics():
     golden = {"carrier_name": "Northfield Mutual"}
     metrics = score_generations([ValidationGeneration(row=row, golden=golden, extraction=golden)])
     assert not any(name.startswith("document_") for name in metrics)
+
+
+def test_a_windowed_policy_is_calibrated_as_one_served_document():
+    from evaluation.validation_generation import calibration_samples
+
+    decl = {"document": {}, "carrier": {}, "named_insured": {}, "policy": {"policy_number": _env("HO-778812", [1])}}
+    arrays = {"coverages": [{"coverage_id": "cov_1", "coverage_code": "HO_COV_A",
+                             "coverage_name": _env("Dwelling", [2])}],
+              "additional_fields": [{"label": "Policy Number", "value": _env("HO-778812", [2]),
+                                     "page_ref": [2]}]}                 # repeats a field: folded, as served
+    generations = [_window("decl", 0, [1], decl, decl), _window("arrays", 0, [2], arrays, arrays)]
+    for g in generations:
+        g.row["val_half"] = "calibration"
+        g.logprobs_by_path = {"policy.policy_number": [-0.1], "coverages[0].coverage_name": [-0.2],
+                              "additional_fields[0].value": [-0.3]}
+    samples = calibration_samples(generations)["calibration"]
+    paths = sorted(features.field_path for features, _ in samples)
+    assert "policy.policy_number" in paths and "coverages[0].coverage_name" in paths
+    assert not any(path.startswith("additional_fields") for path in paths)
+    assert all(correct for _, correct in samples)

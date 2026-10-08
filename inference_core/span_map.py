@@ -175,6 +175,12 @@ class _Scanner:
 
         if char == '"':
             value, start, end = self._scan_string()
+            if end - start > 2:
+                # The value's own characters, not its quotes: a quote shares its
+                # token with the JSON around it (``": "``, ``",``), whose near-
+                # certain logprob says the structure was predictable, not that
+                # the value was read. An empty string keeps them: it has no other.
+                start, end = start + 1, end - 1
         else:
             value, start, end = self._scan_literal()
         yield FieldSpan(field_path=path or "<root>", value=value, char_start=start, char_end=end)

@@ -784,9 +784,11 @@ def collapse_spans(spans: Mapping[str, Any]) -> dict[str, Any]:
 
     The span mapper addresses every scalar it finds, so a canonical leaf arrives
     as ``policy.effective_date.raw``, ``….parsed`` and ``….page_ref[0]``. The
-    value that is calibrated is ``parsed``, so its span becomes the field's; when
-    nothing was parsed, ``raw``'s stands in, matching :func:`values_view`.
-    ``page_ref`` tokens say where a value was found, not what it is, and are
+    field's span is ``raw``'s - the reading of the page, written first. Doubt
+    about a character shows there; ``parsed`` is the same value reformatted,
+    written after it and largely decided by it, so its tokens are near-certain
+    whether the reading was right or not. With no ``raw``, ``parsed``'s stands
+    in. ``page_ref`` tokens say where a value was found, not what it is, and are
     dropped.
 
     Spans with no envelope suffix are returned untouched, so a flat document
@@ -801,7 +803,7 @@ def collapse_spans(spans: Mapping[str, Any]) -> dict[str, Any]:
             continue
         field = path[: -len(".parsed")]
         raw = spans.get(f"{field}.raw")
-        if getattr(span, "value", None) is None and raw is not None:
+        if raw is not None and getattr(raw, "value", None) not in (None, ""):
             span = raw
         out[field] = span
     return out
