@@ -165,6 +165,7 @@ def _links(expected: dict[str, Any], got: dict[str, Any], lob: Any) -> tuple[int
         return 0, 0
     label, answer = values_view(expected or {}), values_view(got or {})
     units = (_units(label, lob), _units(answer, lob))
+    docs = (label, answer)
     aligned_label, aligned_answer = aligned_for_scoring(label, answer)
     found = total = 0
     for table, rows in (aligned_label or {}).items():
@@ -180,7 +181,7 @@ def _links(expected: dict[str, Any], got: dict[str, Any], lob: Any) -> tuple[int
                 offered = _targets(mate.get(field_name))
                 total += len(wanted)
                 for target in wanted:
-                    match = next((t for t in offered if _same_target(target, t, units, lob)), None)
+                    match = next((t for t in offered if _same_target(target, t, units, lob, docs)), None)
                     if match is not None:
                         offered.remove(match)
                         found += 1
@@ -206,10 +207,47 @@ def _units(doc: dict[str, Any], lob: Any) -> dict[str, tuple[str, dict[str, Any]
     return out
 
 
-def _same_target(wanted: str, offered: str, units: tuple[dict, dict], lob: Any) -> bool:
+def _same_target(wanted: str, offered: str, units: tuple[dict, dict], lob: Any,
+                 docs: tuple[dict, dict] = ({}, {})) -> bool:
+    """Whether a label's link and an answer's name one unit - or one premises: a
+    location, and the only building at it. The labels name such a premises by
+    its location in 385 documents and by its building in 176, seed by seed, and
+    the client's own example names the building; either names the same thing."""
     if wanted == offered:
         return True
     from common.structural_ids import same_unit
 
     left, right = units[0].get(wanted), units[1].get(offered)
-    return bool(left and right and left[0] == right[0] and same_unit(left[0], left[1], right[1], lob))
+    if left and right and left[0] == right[0]:
+        return bool(same_unit(left[0], left[1], right[1], lob))
+    a, b = _premises(wanted, units[0], docs[0], lob), _premises(offered, units[1], docs[1], lob)
+    if a is None or b is None or a[0] == b[0]:
+        return False
+    if a[1] == b[1]:
+        return True
+    here, there = units[0].get(a[1]), units[1].get(b[1])
+    return bool(here and there and same_unit("locations", here[1], there[1], lob))
+
+
+def _premises(target: str, units: dict, doc: dict, lob: Any) -> tuple[str, str] | None:
+    """``(kind, the location's name)`` for a link to a location, or to a building
+    that is the only one at its location; else None. A building with no key
+    keeps its id as its link, and is the one named when it is the document's only
+    building."""
+    from common.schema_sections import structural_ids
+
+    unit = units.get(target)
+    if unit and unit[0] == "locations":
+        return "locations", target
+    buildings = [row for row in doc.get("buildings") or [] if isinstance(row, dict)]
+    prefix = (structural_ids(lob).get("buildings") or {}).get("prefix")
+    if unit and unit[0] == "buildings":
+        row = unit[1]
+    elif not unit and prefix and target.startswith(f"{prefix}_") and len(buildings) == 1:
+        row = buildings[0]
+    else:
+        return None
+    home = row.get("location_ref")
+    if not isinstance(home, str) or sum(b.get("location_ref") == home for b in buildings) != 1:
+        return None
+    return "buildings", home

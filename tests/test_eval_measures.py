@@ -63,6 +63,39 @@ def test_a_link_to_one_location_named_two_ways_is_found():
     assert tally.metrics()["reference_accuracy"] == 1.0          # was 0.0 on exact key strings
 
 
+def _premises_doc(target, *, number=None, buildings=1):
+    from common.structural_ids import comparable_view
+
+    rows = []
+    for n in range(1, buildings + 1):
+        row = {"unit_id": f"bldg_{n}", "location_ref": "loc_1", "year_built": _value(1990 + n, [1])}
+        if number:
+            row["building_number"] = _value(n, [1])
+        rows.append(row)
+    return comparable_view({
+        "locations": [{"unit_id": "loc_1", "address": {"street": _value("2 TOWN RD", [1])}}],
+        "buildings": rows,
+        "coverages": [{"coverage_id": "cov_1", "coverage_code": "HO_COV_A", "coverage_name": _value("Dwelling", [1]),
+                       "applies_to": [target]}]}, "homeowners")
+
+
+def test_a_location_and_its_only_building_are_one_premises():
+    from evaluation.metrics.common_model import _links
+
+    # Two links each: the coverage's, and the building's own location_ref. The
+    # labels name such a premises by its location in most seeds, its building in others.
+    assert _links(_premises_doc("loc_1"), _premises_doc("bldg_1"), "homeowners") == (2, 2)
+    assert _links(_premises_doc("bldg_1"), _premises_doc("loc_1"), "homeowners") == (2, 2)
+    assert _links(_premises_doc("loc_1", number=True), _premises_doc("bldg_1", number=True), "homeowners") == (2, 2)
+
+
+def test_a_location_with_two_buildings_is_not_either_building():
+    from evaluation.metrics.common_model import _links
+
+    gold, got = _premises_doc("loc_1", number=True, buildings=2), _premises_doc("bldg_1", number=True, buildings=2)
+    assert _links(gold, got, "homeowners") == (2, 3)          # both buildings' location_ref, not the coverage
+
+
 def test_coverage_code_recall_counts_coverages_the_answer_missed():
     from evaluation.metrics.common_model import CommonModelTally
 
