@@ -32,7 +32,11 @@ descriptions:
   DeductibleType: Kind of deductible.
   FormType: Kind of form.
   AdditionalField: A printed value that no field of the schema is defined for.
+  AdditionalField.value: The value the label introduces, as printed.
   additional_fields: Every printed value that no field of the schema is defined for.
+  Coverage.form_refs: >-
+    Form numbers printed with this coverage that grant or modify it. Printed
+    values: each exactly as printed, as a plain string.
   Coverage.coverage_code: >-
     What the coverage covers, as one of the listed codes. Policy comparison
     aligns coverages by it.

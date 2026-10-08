@@ -287,7 +287,7 @@ def select_policy_pages(
 
 
 def plan_policy_windows(
-    pages: list[int], *, pages_per_window: int, leading: Sequence[int] = (),
+    pages: list[int], *, pages_per_window: int, leading: Sequence[int] = (), overlap: int = 0,
 ) -> list[list[int]]:
     """Split a routed page set into calls, dropping nothing.
 
@@ -308,6 +308,11 @@ def plan_policy_windows(
       pp.140-146 is one table; splitting it at an arbitrary page boundary hands
       the model half a table with no header. Consecutive pages are grouped first
       and a run only breaks when it is longer than one window.
+
+    ``overlap`` pages are shared by consecutive windows of a run that has to be
+    split (:func:`_split_overlapping`): a row printed across their boundary - a
+    vehicle's VIN at the foot of page 6, its coverages at the top of page 7 - is
+    then whole in one window, where no window held all of it before.
     """
     if pages_per_window < 1:
         raise ExpansionError(f"a window must hold at least one page, got {pages_per_window}")
@@ -333,7 +338,8 @@ def plan_policy_windows(
             if open_window:
                 windows.append(open_window)
                 open_window = []
-            windows.extend(_split_evenly(run, pages_per_window))
+            windows.extend(_split_overlapping(run, pages_per_window, overlap) if overlap
+                           else _split_evenly(run, pages_per_window))
         elif len(open_window) + len(run) <= pages_per_window:
             open_window.extend(run)
         else:
@@ -376,6 +382,27 @@ def _split_evenly(pages: list[int], limit: int) -> list[list[int]]:
         take = size + (1 if index < remainder else 0)
         out.append(pages[start:start + take])
         start += take
+    return out
+
+
+def _split_overlapping(pages: list[int], limit: int, overlap: int) -> list[list[int]]:
+    """Split a run into the fewest windows of at most ``limit``, each after the
+    first opening on the last ``overlap`` pages of the one before, as evenly as
+    possible. Twelve pages at six with one shared: 5+5+4, sharing pages 5 and 9.
+    A window that could hold no page beyond the shared ones splits without them."""
+    step = limit - overlap
+    if step < 1:
+        return _split_evenly(pages, limit)
+    windows_needed = 1 + max(0, -(-(len(pages) - limit) // step))
+    if windows_needed <= 1:
+        return [pages]
+    size, remainder = divmod(len(pages) + overlap * (windows_needed - 1), windows_needed)
+    out: list[list[int]] = []
+    start = 0
+    for index in range(windows_needed):
+        take = size + (1 if index < remainder else 0)
+        out.append(pages[start:start + take])
+        start += take - overlap
     return out
 
 

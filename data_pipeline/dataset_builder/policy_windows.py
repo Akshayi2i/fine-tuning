@@ -46,7 +46,7 @@ target that grammar cannot write is refused, never taught.
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from functools import cache
 from typing import Any
@@ -55,6 +55,7 @@ from jsonschema import Draft202012Validator
 
 from common.canonical import CanonicalLabelError, in_schema_order, is_field_value, to_model_target
 from common.constants import DEFAULT_LONG_DOC_PAGE_THRESHOLD
+from common.model_view import PRINTED_STRING_FIELDS
 
 #: Never in an assistant target: attached at inference by the section builder
 #: (Fideon SPEC_21, ``fideon:fsm_exclude``; SPEC_09 amendment item 1).
@@ -62,6 +63,11 @@ EXCLUDED_FROM_TARGETS = frozenset({"text_sections"})
 
 #: Entries placed by their own page_ref (Fideon SPEC_21 §additional_fields).
 ADDITIONAL_FIELDS = "additional_fields"
+
+#: Keys of a common-model row whose plain strings are printed (a coverage's
+#: form numbers): taught on a window only where its pages print them, not with
+#: the ids and codes that ride with every fragment of the row.
+PRINTED_STRINGS = frozenset(name for names in PRINTED_STRING_FIELDS.values() for name in names)
 
 
 @dataclass(frozen=True)
@@ -137,7 +143,7 @@ def plan_windows(
     declarations_page: int | None = None,
 ) -> list[PolicyWindowPlan]:
     """Every window a policy is read with, in group order then page order."""
-    from common.schema_sections import groups_for, pages_for, reads_declarations
+    from common.schema_sections import groups_for, pages_for, reads_declarations, run_overlap
     from data_pipeline.dataset_builder.expand_tasks import (
         pages_per_extraction_call,
         plan_policy_windows,
@@ -153,6 +159,7 @@ def plan_windows(
         windows = plan_policy_windows(
             pages, pages_per_window=capacity,
             leading=pages if reads_declarations(group) else (),
+            overlap=run_overlap(lob),
         )
         plans.extend(
             PolicyWindowPlan(group, index, tuple(window), single=len(windows) == 1)
@@ -249,8 +256,14 @@ def window_target(
     lob: str | list[str] | None,
     plan: PolicyWindowPlan,
     report: TargetReport | None = None,
+    *,
+    printed_pages: Callable[[Any], set[int]] | None = None,
 ) -> dict[str, Any]:
     """The model-form target for one window: its sections, on its pages.
+
+    ``printed_pages`` (:func:`printed_pages_in` over the document's text) places
+    a coverage's form numbers, plain strings with no page of their own, on the
+    windows whose pages print them; without it they ride with their row.
 
     On a common-model line, raises :class:`CanonicalLabelError` for a label
     with more than one part or a part of another line (:func:`_with_own_part`),
@@ -276,7 +289,8 @@ def window_target(
     pages = set(plan.pages)
     sliced = {
         name: (_additional_within if name == ADDITIONAL_FIELDS else _within)(
-            label[name], name, pages, plan, report, lob=lob, common_model=common_model)
+            label[name], name, pages, plan, report, lob=lob, common_model=common_model,
+            printed_pages=printed_pages)
         for name in sections_for(plan.group, lob)
         if name in label and name not in EXCLUDED_FROM_TARGETS
     }
@@ -435,6 +449,7 @@ def _is_structural(value: Any) -> bool:
 def _within(
     node: Any, path: str, pages: set[int], plan: PolicyWindowPlan, report: TargetReport | None,
     *, lob: str | list[str] | None = None, common_model: bool = False,
+    printed_pages: Callable[[Any], set[int]] | None = None,
 ) -> Any:
     if is_field_value(node):
         if node.get("raw") is None and node.get("parsed") is None:
@@ -443,25 +458,33 @@ def _within(
     if isinstance(node, dict):
         kept = {}
         for key, value in node.items():
-            if common_model and _is_structural(value):
+            if common_model and (key in PRINTED_STRINGS or _is_structural(value)):
                 continue
             child = _within(value, f"{path}.{key}", pages, plan, report,
-                            lob=lob, common_model=common_model)
+                            lob=lob, common_model=common_model, printed_pages=printed_pages)
             if child not in (None, {}, []):
                 kept[key] = child
         if common_model and kept:
             # The row's ids, codes and types ride with what this window shows
             # of it, in the label's own order; a row the window shows nothing
-            # of is not in its target at all.
-            return {key: (value if _is_structural(value) else kept[key])
-                    for key, value in node.items() if _is_structural(value) or key in kept}
+            # of is not in its target at all. Its printed strings (a coverage's
+            # form numbers) ride only where these pages print them.
+            out = {}
+            for key, value in node.items():
+                if key in PRINTED_STRINGS:
+                    shown = _printed_here(value, pages, printed_pages)
+                    if shown:
+                        out[key] = shown
+                elif _is_structural(value) or key in kept:
+                    out[key] = value if _is_structural(value) else kept[key]
+            return out
         return kept
     if isinstance(node, list):
         keys = _row_identifiers(node, path, lob=lob, common_model=common_model)
         rows = []
         for i, item in enumerate(node):
             row = _within(item, f"{path}[{i}]", pages, plan, report,
-                          lob=lob, common_model=common_model)
+                          lob=lob, common_model=common_model, printed_pages=printed_pages)
             if row in (None, {}, []):
                 continue
             # A fragment that kept none of its row's identifiers in this window
@@ -516,9 +539,40 @@ def _on_pages(
     return {**node, "page_ref": sorted(seen)} if seen else None
 
 
+def _printed_here(value: Any, pages: set[int], printed_pages: Callable[[Any], set[int]] | None) -> Any:
+    """The items of a printed string list that this window may be taught: those
+    printed on its pages. An item the document's text shows on none of its pages
+    stays - OCR misreads form numbers on scans, and dropping one the image shows
+    would teach skipping it - as does every item when there is no text at all."""
+    if printed_pages is None or not isinstance(value, list):
+        return value
+    return [item for item in value if not printed_pages(item) or printed_pages(item) & pages]
+
+
+def printed_pages_in(page_texts: Mapping[int, str | None] | Sequence[str | None]) -> Callable[[Any], set[int]]:
+    """``value -> the pages whose text prints it``, looked up once per value: the
+    lookup :func:`window_target` narrows a coverage's form numbers with. Takes a
+    document's page texts by page number, or in page order from page 1."""
+    from common import grounding
+
+    items = page_texts.items() if isinstance(page_texts, Mapping) else enumerate(page_texts, start=1)
+    texts = {int(number): grounding.PageText(text) for number, text in items}
+    found: dict[str, set[int]] = {}
+
+    def lookup(value: Any) -> set[int]:
+        key = str(value)
+        if key not in found:
+            found[key] = ({number for number, text in texts.items() if grounding.on_page(value, text)}
+                          if grounding.checkable(value) else set())
+        return found[key]
+
+    return lookup
+
+
 def _additional_within(
     node: Any, path: str, pages: set[int], plan: PolicyWindowPlan, report: TargetReport | None,
     *, lob: str | list[str] | None = None, common_model: bool = False,
+    printed_pages: Callable[[Any], set[int]] | None = None,
 ) -> list[Any]:
     """The ``additional_fields`` entries printed on this window's pages, page_ref trimmed."""
     if not isinstance(node, list):

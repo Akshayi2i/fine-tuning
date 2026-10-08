@@ -32,6 +32,7 @@ from data_pipeline.dataset_builder.policy_windows import (
     TargetReport,
     multi_window_sections,
     plan_windows,
+    printed_pages_in,
     routed_pages,
     unread_values,
     window_target,
@@ -273,6 +274,11 @@ def _policy_window_rows(
     # that records no page as it is (policy_windows.with_inferred_pages).
     label = with_inferred_pages(label, document.ocr_pages, report,
                                 sections=multi_window_sections(document.lob, plans))
+    # Where the clean text prints a coverage's form numbers, which carry no page
+    # of their own: they are taught on the windows that show them.
+    printed = getattr(document, "_printed_pages", None)
+    if printed is None and document.ocr_pages:
+        printed = document._printed_pages = printed_pages_in(document.ocr_pages)
     unprinted = _unprinted_values(label, document.unprinted_values)
     rows: list[dict[str, Any]] = []
     for plan in plans:
@@ -285,7 +291,7 @@ def _policy_window_rows(
             details.append(f"window {mode}: {plan.group}:{plan.window_index} left out, it holds "
                            f"{len(held)} value(s) no page prints ({held[0]})")
             continue
-        target = window_target(label, document.lob, plan, report)
+        target = window_target(label, document.lob, plan, report, printed_pages=printed)
         indices = [page - 1 for page in plan.pages]
         window_ocr = None if ocr_pages is None else [ocr_pages[i] for i in indices]
         if window_ocr is not None and mode == "noisy_ocr_image":

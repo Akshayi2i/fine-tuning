@@ -207,6 +207,13 @@ def unit_keys(lob: str | list[str] | None = None) -> dict[str, tuple[Any, ...]]:
     return {k: tuple(v) for k, v in (_profile(lob).get("unit_keys") or {}).items()}
 
 
+def run_overlap(lob: str | list[str] | None = None) -> int:
+    """How many pages two windows of one split page run share (``run_overlap_pages``):
+    a row printed across their boundary is then whole in one of them. 0 for a
+    line whose map sets none."""
+    return int(_profile(lob).get("run_overlap_pages") or 0)
+
+
 def assert_sections_cover_the_schema(lob: str | list[str] | None = None) -> None:
     """Every top-level section is asked for by exactly one group.
 

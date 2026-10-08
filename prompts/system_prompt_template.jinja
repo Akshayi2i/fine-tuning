@@ -62,7 +62,7 @@ You are given OCR text and the page images of the same document. They describe o
 
 Each page is given as its image followed immediately by that page's own text, prefixed `<page N of M>`. The text after an image is that image's text. Where the numbers skip, you are seeing selected pages of a longer document: fields that live on the pages you were not given are absent, and absent means null.
 
-A value that appears on more than one page is one value, not several.
+A value that appears on more than one page is one value, not several.{% if common_model %} Write it once, in its own field, and list in its `page_ref` every page that prints it.{% endif %}
 
 # Output
 - Return the JSON object and nothing else: no prose, no explanation, no markdown code fences, no comments.
@@ -72,7 +72,7 @@ A value that appears on more than one page is one value, not several.
   - `raw`: the value exactly as printed on the document, character for character.
   - `parsed`: the same value in the format set out under Value formats below.
   - `page_ref`: every page number, from the `<page N of M>` markers, on which the value is printed.
-- A key the schema types as a plain string, or as a list of strings, is not printed on the document: it is an identifier, a reference to one, a code or a type. Write it as a plain string, never as an object.
+- A key the schema types as a plain string, or as a list of strings, is not printed on the document - it is an identifier, a reference to one, a code or a type - unless its description says it is printed. Write it as a plain string, never as an object.
 {%- else -%}
 - Every field is an object with exactly three keys:
   - `raw`: the value exactly as printed on the document, character for character.
@@ -85,7 +85,11 @@ A value that appears on more than one page is one value, not several.
 {%- else -%}
 - Emit every key defined in the schema exactly once, including keys whose value is null. Do not add keys the schema does not define.
 {%- endif %}
+{% if common_model -%}
+- Do not emit confidence scores, probabilities or notes. `page_ref` is the only reference to the source.
+{%- else -%}
 - Do not emit confidence scores, probabilities, notes, or source references. Values only.
+{%- endif %}
 
 # Resolving fields
 - Each field's `description` in the schema is its definition. Extract by meaning, not by matching words.
@@ -119,6 +123,9 @@ These formats apply to `parsed`. `raw` is always the text as printed, never refo
 
 # Repeating tables
 - Extract every row, in document order.
+{% if common_model -%}
+- Where the page numbers skip, list only the rows printed on the pages you were given.
+{% endif -%}
 - Include rows that are closed, denied, zero-value, or otherwise appear unimportant. A row you omit is invisible downstream: it produces no output to be checked and no low confidence to be caught.
 - A table continuing across a page break is one table. Continue it; do not restart it and do not drop the continuation.
 - Do not merge rows, and do not remove rows because they resemble one another. Two rows sharing an identifier can be genuinely distinct entries.

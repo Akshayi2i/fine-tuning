@@ -61,6 +61,15 @@ CODE_FIELDS: dict[str, tuple[str, ...]] = {
 }
 CODE_LIST_FIELDS: dict[str, tuple[str, ...]] = {"Deductible": ("applies_to_coverages",)}
 
+#: Plain strings that ARE printed, per definition: a coverage's form numbers,
+#: copied as printed. Typed like the ids and codes, they rode with every window
+#: that showed any of their row - teaching form numbers to windows that do not
+#: show them - and the prompt called every plain string unprinted. The window
+#: target places them by where they are printed
+#: (data_pipeline.dataset_builder.policy_windows), and their description says
+#: they are printed (configs/model_view.yaml).
+PRINTED_STRING_FIELDS: dict[str, tuple[str, ...]] = {"Coverage": ("form_refs",)}
+
 #: A table that gets its own copy of a shared definition: (definition, field)
 #: -> (shared definition, the copy). An underlying policy's limits are the
 #: client's Limit, but a percentage limit there is a percentage of the

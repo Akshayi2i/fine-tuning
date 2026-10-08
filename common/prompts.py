@@ -40,7 +40,7 @@ PROMPT_DIR = Path(__file__).resolve().parent.parent / "prompts"
 #: Bumped whenever the template's rendered output changes in any way.
 #: Recorded in the corpus manifest; a change forces a corpus rebuild and a new
 #: training cycle, exactly like a schema change (arch §7).
-PROMPT_TEMPLATE_VERSION = "7.0.0"
+PROMPT_TEMPLATE_VERSION = "7.1.0"
 
 _SYSTEM_TEMPLATE = "system_prompt_template.jinja"
 _CLASSIFIER_TEMPLATE = "doc_type_classifier_prompt.jinja"
@@ -228,6 +228,7 @@ def render_system_prompt(
         # lines render exactly as before.
         common_model=doc_type.lower() == "policy" and is_common_model(doc_type, acord_form, lob),
         required_keys=_prose_list(required_fields(doc_type, acord_form, lob, sections)),
+        read_elsewhere=_read_elsewhere(doc_type, acord_form, lob, sections),
         output_shape=output_shape_for_prompt(doc_type, acord_form, lob, sections),
         doc_type_label=doc_type_label(doc_type, acord_form),
         modality_mode=mode,
@@ -239,6 +240,27 @@ def render_system_prompt(
         date_format=OUTPUT_DATE_LABEL,
         schema_json=schema_json_for_prompt(doc_type, acord_form, lob, sections),
     ).strip()
+
+
+def _read_elsewhere(
+    doc_type: str, acord_form: str | None, lob: str | list[str] | None, sections: str | None,
+) -> str:
+    """The top-level keys other windows read, for a common-model window whose
+    slice holds the additional fields - else "".
+
+    The window that decides what has no field is shown only its own slice: a
+    policy number printed on its pages has no field THERE, and by the rule for
+    values with no field it went under the additional fields - in every window
+    of every page that prints one, against labels that hold it in its field.
+    Derived from the schema, like the outline, so it names no key the line lacks.
+    """
+    if sections is None or doc_type.lower() != "policy" or not is_common_model(doc_type, acord_form, lob):
+        return ""
+    here = resolved_schema(doc_type, acord_form, lob, sections).get("properties") or {}
+    if "additional_fields" not in here:
+        return ""
+    whole = resolved_schema(doc_type, acord_form, lob).get("properties") or {}
+    return _prose_list([name for name in whole if name not in here])
 
 
 def _prose_list(names: list[str]) -> str:

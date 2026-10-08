@@ -64,10 +64,32 @@ def reference_targets() -> list[tuple[str, str | None, str | None]]:
     return targets
 
 
-def stem(doc_type: str, acord_form: str | None, lob: str | None = None) -> str:
+def window_targets() -> list[tuple[str, str]]:
+    """Every ``(lob, group)`` window prompt of a common-model line: what training
+    rows and serving actually send - a section group's slice of the schema, its
+    outline and its rules - where the files above show the whole schema. In the
+    primary mode only: the image-only text differs from it in the evidence
+    paragraph alone, which the whole-schema image-only file shows."""
+    from common.schema_sections import groups_for
+    from common.schemas import is_common_model
+
+    return [(lob, group) for lob in lobs_in_family(CANONICAL_FAMILY)
+            if is_common_model("policy", None, lob) for group in groups_for(lob)]
+
+
+def _reference_files() -> list[tuple[str, str, str | None, str | None, str | None]]:
+    """``(doc_type, mode, acord_form, lob, sections)`` of every reference file."""
+    files = [(doc_type, mode, form, lob, None)
+             for doc_type, form, lob in reference_targets() for mode in REFERENCE_MODES]
+    files += [("policy", REFERENCE_MODES[0], None, lob, group) for lob, group in window_targets()]
+    return files
+
+
+def stem(doc_type: str, acord_form: str | None, lob: str | None = None, sections: str | None = None) -> str:
     if acord_form:
         return f"{doc_type}_{acord_form}"
-    return f"{doc_type}_{lob}" if lob else doc_type
+    base = f"{doc_type}_{lob}" if lob else doc_type
+    return f"{base}.{sections}" if sections else base
 
 
 def header(doc_type: str, modality_mode: str) -> str:
@@ -90,25 +112,28 @@ def prompt_path(
     acord_form: str | None = None,
     root: Path = PROMPTS_DIR,
     lob: str | None = None,
+    sections: str | None = None,
 ) -> Path:
     suffix = "" if modality_mode == "ocr_plus_image" else f".{modality_mode}"
-    return root / f"{stem(doc_type, acord_form, lob)}{suffix}.prompt.txt"
+    return root / f"{stem(doc_type, acord_form, lob, sections)}{suffix}.prompt.txt"
 
 
 def render(
-    doc_type: str, modality_mode: str, acord_form: str | None = None, lob: str | None = None
+    doc_type: str, modality_mode: str, acord_form: str | None = None, lob: str | None = None,
+    sections: str | None = None,
 ) -> str:
     """The prompt body exactly as ``common.prompts`` renders it."""
-    return render_system_prompt(doc_type, modality_mode, acord_form=acord_form, lob=lob)
+    return render_system_prompt(doc_type, modality_mode, acord_form=acord_form, lob=lob, sections=sections)
 
 
 def file_contents(
-    doc_type: str, modality_mode: str, acord_form: str | None = None, lob: str | None = None
+    doc_type: str, modality_mode: str, acord_form: str | None = None, lob: str | None = None,
+    sections: str | None = None,
 ) -> str:
     return (
-        header(stem(doc_type, acord_form, lob), modality_mode)
+        header(stem(doc_type, acord_form, lob, sections), modality_mode)
         + "\n"
-        + render(doc_type, modality_mode, acord_form, lob)
+        + render(doc_type, modality_mode, acord_form, lob, sections)
     )
 
 
@@ -126,11 +151,10 @@ def write_all(root: Path = PROMPTS_DIR) -> list[Path]:
     """Regenerate every reference prompt file."""
     root.mkdir(parents=True, exist_ok=True)
     written = []
-    for doc_type, form, lob in reference_targets():
-        for mode in REFERENCE_MODES:
-            path = prompt_path(doc_type, mode, form, root, lob)
-            path.write_text(file_contents(doc_type, mode, form, lob), encoding="utf-8")
-            written.append(path)
+    for doc_type, mode, form, lob, sections in _reference_files():
+        path = prompt_path(doc_type, mode, form, root, lob, sections)
+        path.write_text(file_contents(doc_type, mode, form, lob, sections), encoding="utf-8")
+        written.append(path)
 
     # A file left over from a renamed target is a reference nothing regenerates,
     # and the drift check would never look at it.
@@ -152,15 +176,14 @@ def drifted(root: Path = PROMPTS_DIR) -> list[str]:
     """
     problems = []
     expected: set[str] = set()
-    for doc_type, form, lob in reference_targets():
-        for mode in REFERENCE_MODES:
-            path = prompt_path(doc_type, mode, form, root, lob)
-            expected.add(path.name)
-            if not path.exists():
-                problems.append(f"{path.name}: missing")
-                continue
-            if body_of(path.read_text(encoding="utf-8")) != render(doc_type, mode, form, lob):
-                problems.append(f"{path.name}: differs from common.prompts")
+    for doc_type, mode, form, lob, sections in _reference_files():
+        path = prompt_path(doc_type, mode, form, root, lob, sections)
+        expected.add(path.name)
+        if not path.exists():
+            problems.append(f"{path.name}: missing")
+            continue
+        if body_of(path.read_text(encoding="utf-8")) != render(doc_type, mode, form, lob, sections):
+            problems.append(f"{path.name}: differs from common.prompts")
 
     problems += [
         f"{path.name}: stale, nothing regenerates it"
