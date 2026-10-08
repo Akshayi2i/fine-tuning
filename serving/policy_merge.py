@@ -476,7 +476,7 @@ _REFERRING_TABLES = ("coverages", "deductibles", "interested_parties", "rating_m
 _Join = Callable[[dict[str, Any], dict[str, Any]], None]
 
 
-def _drop_shared_page_rows(ordered: list[PolicyWindow]) -> int:
+def _drop_shared_page_rows(ordered: list[PolicyWindow], units: frozenset[str]) -> int:
     """Rows read twice because two windows of a group share a page (a split
     run overlaps, ``run_overlap_pages``), dropped from one of them; the number
     dropped.
@@ -490,6 +490,11 @@ def _drop_shared_page_rows(ordered: list[PolicyWindow]) -> int:
     applies to, read in the other window - and the merge cannot tell which
     unit's row it is: two boats' identical coverage lines stayed unmatched.
     Spans were taken from the windows already; dropping a row moves no other.
+
+    Never a unit's row (``units``: a vehicle, a building): other rows of its
+    window refer to it by id, and dropped it left them pointing at nothing.
+    Units are joined on their own keys (:func:`_merge_units`), before this
+    runs, so the links compared here name merged units.
     """
     dropped = 0
     groups: dict[str, list[PolicyWindow]] = {}
@@ -499,14 +504,15 @@ def _drop_shared_page_rows(ordered: list[PolicyWindow]) -> int:
         for earlier, later in zip(windows, windows[1:], strict=False):
             shared = {int(p) for p in earlier.pages} & {int(p) for p in later.pages}
             if shared:
-                dropped += _drop_read_again(later, earlier, shared) + _drop_read_again(earlier, later, shared)
+                dropped += (_drop_read_again(later, earlier, shared, units)
+                            + _drop_read_again(earlier, later, shared, units))
     return dropped
 
 
-def _drop_read_again(window: PolicyWindow, other: PolicyWindow, shared: set[int]) -> int:
+def _drop_read_again(window: PolicyWindow, other: PolicyWindow, shared: set[int], units: frozenset[str]) -> int:
     dropped = 0
     for table, rows in list(window.extraction.items()):
-        if not isinstance(rows, list):
+        if not isinstance(rows, list) or table in units:
             continue
         others = [row for row in other.extraction.get(table) or [] if isinstance(row, dict)]
         # Compared with what the other row reads on the shared pages only: a
@@ -514,11 +520,20 @@ def _drop_read_again(window: PolicyWindow, other: PolicyWindow, shared: set[int]
         # is not this row.
         theirs = [_row_values(row, within=shared) for row in others]
         kept = []
+        used: set[int] = set()
         for row in rows:
             mine = _row_values(row) if isinstance(row, dict) else None
-            match = (next((o for o, their in zip(others, theirs, strict=True) if not (mine - their)), None)
-                     if mine and _cited_within(row, shared) else None)
+            match = None
+            if mine and _cited_within(row, shared):
+                # One copy per row of the other window, and only a row whose
+                # links agree - veh_3's and veh_4's identical coverage lines are
+                # two rows - preferring the one that names the same units.
+                fits = [(_link_fit(row, o), -i, o) for i, (o, their) in enumerate(zip(others, theirs, strict=True))
+                        if id(o) not in used and not (mine - their)]
+                fits = [fit for fit in fits if fit[0] is not None]
+                match = max(fits, key=lambda fit: fit[:2])[2] if fits else None
             if match is not None:
+                used.add(id(match))
                 # The copy dropped may be the one that names the row's unit -
                 # the window that shows the vehicle - which the kept copy could
                 # not: its links go to the kept row.
@@ -532,6 +547,26 @@ def _drop_read_again(window: PolicyWindow, other: PolicyWindow, shared: set[int]
         if len(kept) != len(rows):
             window.extraction[table] = kept
     return dropped
+
+
+def _link_fit(row: dict[str, Any], other: dict[str, Any]) -> int | None:
+    """How many links ``row`` and ``other`` both state alike; ``None`` when one
+    they both state differs (they are rows of different units)."""
+    same = 0
+    for key, value in row.items():
+        theirs = other.get(key)
+        if key.endswith("_id") or not _is_link(value) or not _is_link(theirs) or value in (None, "", []) \
+                or theirs in (None, "", []):
+            continue                      # a row's own id is its window's numbering
+        if value != theirs:
+            return None
+        same += 1
+    return same
+
+
+def _is_link(value: Any) -> bool:
+    """A structural value: an id, a code or a list of them, never a printed one."""
+    return isinstance(value, str) or (isinstance(value, list) and all(isinstance(v, str) for v in value))
 
 
 def _row_values(row: Any, path: str = "", *, within: set[int] | None = None) -> Counter:
@@ -585,7 +620,6 @@ def _merge_common_model(windows: list[PolicyWindow], lob: str | list[str]) -> Me
         # Ids are numbered within a window: veh_1 of one window is not veh_1 of
         # the next. Namespaced, they cannot be mistaken for each other.
         _namespace(window.extraction, f"w{index}", ids, refs)
-    report.duplicates_collapsed += _drop_shared_page_rows(ordered)
 
     # Units first, in the section map's order: a table referred to (lob_parts,
     # locations) is merged before the tables that refer to it.
@@ -601,6 +635,10 @@ def _merge_common_model(windows: list[PolicyWindow], lob: str | list[str]) -> Me
 
     for window in ordered:
         _rewrite_references(window.extraction, aliases, refs)
+    # With every link now naming a merged unit, a row read twice through a
+    # shared page can be told from another unit's identical row.
+    report.duplicates_collapsed += _drop_shared_page_rows(ordered, frozenset(units))
+    for window in ordered:
         for key, value in window.extraction.items():
             if key in units:
                 continue

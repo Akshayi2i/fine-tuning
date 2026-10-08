@@ -301,7 +301,38 @@ def _unit_names(doc: dict[str, Any], lob: str | list[str] | None) -> dict[str, s
                         f"{table}:" + ",".join(f"{f}={v}" for f, v in zip(fields, values, strict=True)))
         if names == before:
             break
+    _name_by_parent(doc, lob, names)
     return names
+
+
+def _name_by_parent(doc: dict[str, Any], lob: str | list[str] | None, names: dict[str, str]) -> None:
+    """Name a row whose key is its parent's reference plus a number it does not
+    print - an unnumbered building - by its parent, when it is that parent's only
+    such row (``buildings:location_ref=locations:location_number=1``).
+
+    For comparison only. Unnamed, a link to it kept its writer's id, and a label
+    numbering ``bld_1`` never matched an answer numbering ``bldg_1``: every link
+    to an unnumbered building scored lost. The merge does not name rows this
+    way - two unnumbered buildings one window wrote stay two."""
+    from collections import Counter
+
+    from common.schema_sections import references, structural_ids, unit_keys
+
+    refs = references(lob)
+    for table, spec in structural_ids(lob).items():
+        for key in unit_keys(lob).get(table, ()):
+            fields = tuple(key) if isinstance(key, (list, tuple)) else (key,)
+            parents = [f for f in fields if f in refs]
+            if len(fields) < 2 or len(parents) != 1:
+                continue
+            parent = parents[0]
+            unnamed = [row for row in doc.get(table) or [] if isinstance(row, dict)
+                       and isinstance(row.get(spec["field"]), str) and row[spec["field"]] not in names
+                       and isinstance(row.get(parent), str) and row[parent] in names]
+            count = Counter(row[parent] for row in unnamed)
+            for row in unnamed:
+                if count[row[parent]] == 1:
+                    names[row[spec["field"]]] = f"{table}:{parent}={names[row[parent]]}"
 
 
 def _normalised(value: Any, path: str) -> Any:

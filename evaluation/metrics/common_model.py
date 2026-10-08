@@ -242,12 +242,14 @@ def _premises(target: str, units: dict, doc: dict, lob: Any) -> tuple[str, str] 
     buildings = [row for row in doc.get("buildings") or [] if isinstance(row, dict)]
     prefix = (structural_ids(lob).get("buildings") or {}).get("prefix")
     if unit and unit[0] == "buildings":
-        row = unit[1]
+        home = unit[1].get("location_ref")
     elif not unit and prefix and target.startswith(f"{prefix}_") and len(buildings) == 1:
-        row = buildings[0]
+        home = buildings[0].get("location_ref")
+    elif not unit and target.startswith("buildings:location_ref="):
+        # An unnumbered building named by its location (structural_ids._name_by_parent).
+        home = target.removeprefix("buildings:location_ref=")
     else:
         return None
-    home = row.get("location_ref")
     if not isinstance(home, str) or sum(b.get("location_ref") == home for b in buildings) != 1:
         return None
     return "buildings", home

@@ -155,3 +155,26 @@ def test_a_fragment_on_a_shared_page_keeps_its_vehicle_link():
                      ([3, 4, 5], {"coverages": rows}))
     linked = [c for c in merged["coverages"] if c.get("applies_to") == ["veh_1"]]
     assert len(linked) == 1 and linked[0]["premium"]["parsed"] == 12.0
+
+
+def test_a_unit_on_a_shared_page_keeps_the_links_of_both_windows():
+    # The vehicle is printed on page 7, which both windows read; each window's
+    # coverage refers to it by that window's own id.
+    vehicle = [{"unit_id": "veh_1", "vin": _v("1HGCM82633A004352", [7])}]
+    first = {**_coverage("Medical Payments", [6], "$12.00", 6, "veh_1"), "coverage_code": "X_MED_PAY"}
+    second = {**_coverage("Collision", [8], "$380.00", 8, "veh_1"), "coverage_code": "X_COLLISION"}
+    merged = _merged(([5, 6, 7], {"vehicles": vehicle, "coverages": [first]}),
+                     ([7, 8], {"vehicles": [dict(vehicle[0])], "coverages": [second]}))
+    assert len(merged["vehicles"]) == 1
+    assert [c.get("applies_to") for c in merged["coverages"]] == [["veh_1"], ["veh_1"]]
+
+
+def test_another_vehicles_identical_line_on_a_shared_page_is_not_a_copy():
+    # veh_2's line on page 7 matches veh_1's value for value; read in the next
+    # window, it still names veh_2, so it is a row of its own.
+    first = _coverage("Medical Payments", [7], "$12.00", 7, "veh_1")
+    second = _coverage("Medical Payments", [7], "$12.00", 7, "veh_2")
+    merged = _merged(([5, 6, 7], {"vehicles": _vehicles(5), "coverages": [first]}),
+                     ([7, 8], {"vehicles": [{"unit_id": "veh_1", "vin": _v("2T1BURHE0JC123456", [8])}],
+                               "coverages": [{**second, "applies_to": ["veh_1"]}]}))
+    assert sorted(c["applies_to"][0] for c in merged["coverages"]) == ["veh_1", "veh_2"]
