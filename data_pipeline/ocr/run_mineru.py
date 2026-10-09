@@ -125,10 +125,14 @@ class MinerUEngine:
             from mineru.utils.enum_class import MakeMode
             from mineru.utils.pdf_classify import classify
         except ImportError as exc:  # pragma: no cover - optional heavy dep
+            # The import's own error first: MinerU installed but one of the
+            # libraries it loads failing (OpenCV without the system's libGL) read
+            # as "not installed", and the cause was nowhere in the message.
             raise OcrError(
-                "MinerU 3.x (mineru) is not installed, or its API moved. Install the OCR group on "
-                "the pod: bash scripts/setup_pod.sh ocr (mineru[pipeline]), and download its pinned "
-                "model weights: bash scripts/download_mineru_models.sh"
+                f"MinerU 3.x could not be imported: {type(exc).__name__}: {exc}. If MinerU is not "
+                "installed, install the OCR group on the pod: bash scripts/setup_pod.sh ocr "
+                "(mineru[pipeline]), and download its pinned model weights: "
+                "bash scripts/download_mineru_models.sh"
             ) from exc
 
         from data_pipeline.ocr.modality import ModalityError, reads_by_ocr

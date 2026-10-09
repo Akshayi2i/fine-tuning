@@ -76,6 +76,9 @@ def test_the_stack_is_the_one_the_code_is_written_for():
     assert train["transformers"].startswith("4.57.")
     assert train["ms-swift"].startswith("3.")
     assert ocr["mineru"].startswith("3.4.")
+    # Imported by MinerU 3.4.5's OCR text system but not declared by it: without it
+    # the pipeline backend fails to import (a fresh pod, 2026-10-09).
+    assert "six" in ocr
 
 
 def test_setup_installs_through_the_lock_and_caps_flash_attn():

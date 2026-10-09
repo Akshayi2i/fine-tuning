@@ -45,7 +45,10 @@ data = [
 # (scripts/download_mineru_models.sh). torch pinned to the training stack's 2.8
 # (CUDA 12.8): unpinned it resolves to the newest torch, built for a newer CUDA
 # than the pod's driver may run - and OCR is GPU-only, so that fails outright.
-ocr = ["mineru[pipeline]>=3.4.5,<3.5", "torch>=2.8,<2.9", "torchvision>=0.23,<0.24"]
+# six: MinerU 3.4.5's OCR text system imports it (pytorchocr/data/imaug/operators.py)
+# without declaring it, so a lock built from its declared dependencies left it out and
+# the pipeline backend failed to import on a fresh pod (2026-10-09).
+ocr = ["mineru[pipeline]>=3.4.5,<3.5", "six>=1.16", "torch>=2.8,<2.9", "torchvision>=0.23,<0.24"]
 
 # RunPod training pod. torch is pinned to the minor version vLLM 0.11 pins,
 # because the finetune pipeline runs vLLM in the same process for checkpoint
