@@ -83,10 +83,25 @@ RELIABLE_PAGE_SHARE = 0.9
 _PAGE_COUNTER = re.compile(r"^page \d+( of \d+)?$")
 #: A label written about where a value was found, not printed before it: a figure
 #: of a form's standard wording ("Form boilerplate amount (context: ...)", "Bail
-#: Bond Cap (CG 00 01 boilerplate)") or text the page does not show ("Invisible
-#: text-layer remnant of ..."). Policy wording is never a value, and no image
-#: shows the text a PDF hides: taught, both are values to invent.
-_DRAFTING_LABEL = re.compile(r"boilerplate|\(context:|text-layer|invisible text", re.IGNORECASE)
+#: Bond Cap (CG 00 01 boilerplate)", "Form wording, page 15: ...", "Money printed
+#: on page 4") or text the page does not show ("Invisible text-layer remnant of
+#: ..."). Policy wording is never a value, and no image shows the text a PDF
+#: hides: taught, both are values to invent.
+_DRAFTING_LABEL = re.compile(r"boilerplate|\(context:|text-layer|invisible text|^form wording|money printed on page",
+                             re.IGNORECASE)
+#: A clause of policy wording filed as a label: a list marker and then a sentence
+#: ("b. Up to", "a. The act resulted in insured losses in excess of", "2. We do
+#: not cover"). A numbered declarations caption ("2. Policy Period From") is
+#: not one: what follows its marker is a caption, not a sentence.
+_CLAUSE_LABEL = re.compile(r"^\(?[a-zA-Z0-9]{1,2}\)?\.\s+(?:[a-z]|Up to\b|We\b|The act\b|All expenses\b"
+                           r"|Premium shown\b|The total of\b|The$)")
+#: Figures of standard wording and notices: supplementary-payment caps, the
+#: terrorism act's thresholds and shares, claims and service lines. A label
+#: naming a premium ("Terrorism Premium") is a declarations value, not wording.
+_WORDING_FIGURE = re.compile(
+    r"\bbail bonds?\b|loss of earnings|\bearnings up to\b|terrorism risk insurance act|\btria\b|federal share"
+    r"|program trigger|in excess of|act resulted|terrorist acts certified|toll[- ]?free|www\.|https?://|\bthreshold\b",
+    re.IGNORECASE)
 #: A form's number, printed in the header or footer of every page of the form.
 _FORM_NUMBER = re.compile(r"^forms_and_endorsements\[\d+\]\.form_number$")
 #: Lines at each end of a page that are its header and footer.
@@ -96,6 +111,23 @@ _YEAR = re.compile(r"(?:19|20)\d\d")
 _PROTECTION_CLASS = {"protection class", "prot class", "fire protection class", "protection class code",
                      "public protection class", "ppc"}
 _PAYOR_LABELS = ("paid by", "payor", "bill to", "billed to", "premium paid by")
+#: Extra-field labels (normalised) for a value with a field of its own on every
+#: common-model line: ``(block, field, labels)``. Moved only into an empty field,
+#: and only when one entry of the label names it.
+_FIELD_LABELS: tuple[tuple[str, str, frozenset[str]], ...] = (
+    ("named_insured", "business_description", frozenset({
+        "business description", "description of business", "description of operations", "operations description",
+        "nature of business", "business operations", "description of insured s business", "insured s business"})),
+    ("named_insured", "entity_type", frozenset({
+        "form of business", "business type", "type of business", "entity type", "legal entity", "legal entity type",
+        "business entity", "type of entity", "form of organization"})),
+    ("billing", "bill_type", frozenset({"billing type", "bill type", "billing method", "type of billing"})),
+    ("countersignature", "representative_name", frozenset({"authorized representative", "authorised representative"})),
+)
+#: A claims line: a label naming a phone for claims, and a value with a number.
+_CLAIMS_PHONE = re.compile(r"\bclaims?\b.*\b(phone|call line|telephone|hotline)\b|^report (a )?claims?\b")
+#: The premium kept on cancellation: an amount, or a percent of the premium.
+_MINIMUM_EARNED = re.compile(r"^min(imum)? earned( premium)?( percent(age)?)?$")
 
 #: How a location's or a building's own number is introduced on a page.
 _NUMBER_WORDS = {
@@ -343,6 +375,7 @@ def _extra_fields(gold: dict[str, Any], texts: dict[int, grounding.PageText], re
 
     kept: list[dict[str, Any]] = []
     by_pair: dict[tuple[str, str], dict[str, Any]] = {}
+    moves = _field_moves(gold, entries)
     for index, entry in enumerate(entries):
         where = f"additional_fields[{index}]"
         if not isinstance(entry, dict):
@@ -351,8 +384,13 @@ def _extra_fields(gold: dict[str, Any], texts: dict[int, grounding.PageText], re
         value = entry.get("value") if isinstance(entry.get("value"), dict) else {}
         printed = _printed(value) if value else None
         label_n, value_n = grounding.normalise(label), grounding.normalise(printed or "")
-        if _DRAFTING_LABEL.search(label):
+        if _is_wording(label):
             notes.append(("extra field from wording", f"{where} {label[:60]!r}"))
+            continue
+        if index in moves:
+            block, name = moves[index]
+            gold.setdefault(block, {})[name] = _moved_value(name, value)
+            notes.append(("extra field moved to its field", f"{where} {label!r} -> {block}.{name}"))
             continue
         if _not_a_value(label_n, value_n):
             notes.append(("extra field not a value", f"{where} {label!r}"))
@@ -400,6 +438,70 @@ def _not_a_value(label: str, value: str) -> bool:
     if _PAGE_COUNTER.match(label) or _PAGE_COUNTER.match(value):
         return True
     return (len(label) > 80 and not _has_digits(value)) or (label == value and len(label) > 40)
+
+
+def _is_wording(label: str) -> bool:
+    """Whether an extra field's label is policy wording or a drafting note, not a
+    printed caption: a note on where the value was found, a clause, a figure of
+    standard wording, or a sentence picked up mid-way - a label starting with a
+    lowercase letter ("for cost of bail bonds required", "policy premium or");
+    a camel-case name ("eBill") is a caption."""
+    if _DRAFTING_LABEL.search(label) or _CLAUSE_LABEL.search(label):
+        return True
+    if _WORDING_FIGURE.search(label) and "premium" not in label.lower():
+        return True
+    return bool(label[:1].islower() and not (len(label) > 1 and label[1].isupper()))
+
+
+def _field_moves(gold: dict[str, Any], entries: list[Any]) -> dict[int, tuple[str, str]]:
+    """``{entry index: (block, field)}``: extra fields holding a value that has a
+    field of its own, where that field is empty and no other entry names it.
+    Two entries naming one field (a percent and an amount of the same name, two
+    business descriptions) are left for a person to place. A block the gold
+    does not have is created only where every common-model line has it
+    (``premium``, ``billing``); a line block (``countersignature``) is filled
+    only where the gold has it, so a line without one never gains it."""
+    claims: dict[tuple[str, str], list[int]] = {}
+    for index, entry in enumerate(entries):
+        if not isinstance(entry, dict) or not isinstance(entry.get("value"), dict):
+            continue
+        label = str(entry.get("label") or "")
+        if _is_wording(label):
+            continue
+        label_n = grounding.normalise(label)
+        printed = _printed(entry["value"]) or ""
+        target = next(((block, name) for block, name, labels in _FIELD_LABELS if label_n in labels), None)
+        if target is None and _CLAIMS_PHONE.search(label_n) and len(re.sub(r"\D", "", printed)) >= 7:
+            target = ("carrier", "claims_phone")
+        if target is None and _MINIMUM_EARNED.match(label_n) and _number(printed) is not None:
+            percent = "%" in printed or "%" in label or "percent" in label_n
+            target = ("premium", "minimum_earned_percent" if percent else "minimum_earned")
+        if target is not None:
+            claims.setdefault(target, []).append(index)
+    moves = {}
+    for (block, name), indices in claims.items():
+        holder = gold.get(block)
+        if holder is None and block not in ("premium", "billing"):
+            continue
+        current = holder.get(name) if isinstance(holder, dict) else None
+        if len(indices) == 1 and (holder is None or isinstance(holder, dict)) and not (
+                isinstance(current, dict) and current.get("raw") not in (None, "")):
+            moves[indices[0]] = (block, name)
+    return moves
+
+
+def _number(text: str) -> float | None:
+    match = re.search(r"\d[\d,]*(?:\.\d+)?", text or "")
+    return float(match.group().replace(",", "")) if match else None
+
+
+def _moved_value(name: str, value: dict[str, Any]) -> dict[str, Any]:
+    """The extra field's value as its field holds it: a number for the minimum
+    earned premium (an amount, or a percent of the premium), as printed else."""
+    moved = dict(value)
+    if name in ("minimum_earned", "minimum_earned_percent"):
+        moved["parsed"] = _number(_printed(value) or "")
+    return moved
 
 
 def _move_to_field(gold: dict[str, Any], label: str, value: dict[str, Any], notes: list, where: str) -> bool:

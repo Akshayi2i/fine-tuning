@@ -172,6 +172,71 @@ def test_a_figure_of_policy_wording_or_hidden_text_is_not_an_extra_field():
     assert _kinds(notes).count("extra field from wording") == 3
 
 
+def test_wording_filed_as_an_extra_field_is_dropped_and_captions_stay():
+    """Clauses, figures of standard wording and sentences picked up mid-way are
+    no printed captions: taught, they are values to copy out of policy text."""
+    wording = [
+        "Form wording, page 15: limit of insurance", "Money printed on page 4",       # drafting notes
+        "b. Up to", "a. The act resulted in insured losses in excess of", "2. We do not cover",  # clauses
+        "for cost of bail bonds required", "policy premium or",                       # mid-sentence
+        "Supplementary Payments bail bond limit", "Federal share of terrorism losses",
+        "www.travelers.com, call our toll-free telephone number", "Deductible Liability Insurance threshold",
+    ]
+    captions = ["Terrorism Premium", "2. Policy Period From", "eBill", "Water Leak Detection"]
+    gold = _gold(additional_fields=[_extra(label, "No", [4]) for label in wording + captions])
+    notes = apply_label_rules(gold, PAGES)
+    assert [e["label"] for e in gold["additional_fields"]] == captions
+    assert _kinds(notes).count("extra field from wording") == len(wording)
+
+
+def test_an_extra_field_naming_an_empty_field_moves_into_it():
+    """A value with a field of its own goes in that field, never under the extra
+    fields: the prompt says so, and a label saying otherwise teaches the opposite."""
+    gold = _gold(carrier={"name": _v("Mercury Casualty Company", [1])}, additional_fields=[
+        _extra("Business Description", "Machine shop", [2]),
+        _extra("Form of Business", "Limited Liability Company", [2]),
+        _extra("Billing Type", "Direct Bill", [3]),
+        _extra("Claims Call Line", "1-800-555-0100", [4]),
+        _extra("Minimum Earned Premium", "25%", [3]),
+        _extra("Authorized Representative", "Pat Example", [4]),     # the gold has no countersignature
+    ])
+    notes = apply_label_rules(gold, PAGES)
+    assert gold["named_insured"]["business_description"]["raw"] == "Machine shop"
+    assert gold["named_insured"]["entity_type"]["raw"] == "Limited Liability Company"
+    assert gold["billing"]["bill_type"]["page_ref"] == [3]
+    assert gold["carrier"]["claims_phone"]["raw"] == "1-800-555-0100"
+    assert gold["premium"]["minimum_earned_percent"]["parsed"] == 25.0
+    assert "minimum_earned" not in gold["premium"]
+    # A line block the gold lacks is never created: the line may have none.
+    assert "countersignature" not in gold
+    assert [e["label"] for e in gold["additional_fields"]] == ["Authorized Representative"]
+    assert _kinds(notes).count("extra field moved to its field") == 5
+
+
+def test_a_minimum_earned_amount_and_a_representative_go_to_their_own_fields():
+    gold = _gold(countersignature={}, additional_fields=[
+        _extra("Minimum Earned Premium", "$500.00", [3]),
+        _extra("Authorized Representative", "Pat Example", [4]),
+    ])
+    apply_label_rules(gold, PAGES)
+    assert gold["premium"]["minimum_earned"]["parsed"] == 500.0
+    assert gold["countersignature"]["representative_name"]["raw"] == "Pat Example"
+    assert gold["additional_fields"] == []
+
+
+def test_an_extra_field_stays_when_its_field_is_filled_or_two_entries_name_it():
+    gold = _gold(additional_fields=[
+        _extra("Business Description", "Machine shop", [2]),
+        _extra("Billing Type", "Direct Bill", [3]),
+        _extra("Bill Type", "Agency Bill", [4]),
+    ])
+    gold["named_insured"]["business_description"] = _v("Welding and fabrication", [2])
+    apply_label_rules(gold, PAGES)
+    assert gold["named_insured"]["business_description"]["raw"] == "Welding and fabrication"
+    assert "billing" not in gold
+    assert [e["label"] for e in gold["additional_fields"]] == ["Business Description", "Billing Type", "Bill Type"]
+
+
 def test_a_form_number_cites_every_page_its_header_or_footer_prints_it_on():
     """A form prints its number at the head or foot of each of its pages: a window
     over its third page shows the form. Named in the body - an endorsement saying
