@@ -526,6 +526,7 @@ def load_labeled_documents(ctx: StageContext) -> list[Any]:
                 synthetic=bool(metadata.get("synthetic", False)),
                 delivered_split=metadata.get("split"),
                 template_id=metadata.get("template_id"),
+                delivered_held_out=bool(metadata.get("held_out_carrier", False)),
                 twin_index=metadata.get("twin_index") if metadata.get("synthetic") else None,
                 render_mode=metadata.get("render_mode"),
                 unprinted_values=list(metadata.get("unprinted_values") or []),
@@ -602,6 +603,18 @@ def delivered_split_of(documents: list[Any]) -> dict[str, str]:
                 f"{previous} and {split}: one source document and its twins must share a split"
             )
     return split_of
+
+
+def delivered_held_out_ids(documents: list[Any], assignment: Any) -> list[str]:
+    """Test documents the delivery marks as of a carrier no training document has
+    (metadata ``held_out_carrier``), not already held out here: recorded with the
+    split, so the frozen set marks them and the gate reports them apart."""
+    already = set(assignment.held_out_source_ids)
+    return sorted(
+        d.source_id for d in documents
+        if d.delivered_held_out and d.source_id not in already
+        and assignment.assignment.get(d.group_id or d.source_id) == "test"
+    )
 
 
 def _document_carrier(metadata: dict[str, Any], label: dict[str, Any]) -> str | None:
@@ -845,6 +858,7 @@ def plan_corpus(ctx: StageContext) -> CorpusPlan:
             )
         except SplitError as exc:
             raise PipelineError(str(exc)) from exc
+        assignment.held_out_source_ids.extend(delivered_held_out_ids(documents, assignment))
         log.info("using the delivered split: %s", assignment.counts_by_doc_type)
     else:
         assignment = assign_group_splits(by_type, seed=ctx.seed, with_test=not frozen)

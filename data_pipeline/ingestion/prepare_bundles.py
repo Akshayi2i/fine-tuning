@@ -281,11 +281,14 @@ def prepare_bundles(
 
 def delivery_line(lob: str) -> str:
     """A delivery's line name as this repository reads it: its misspellings put
-    right, and classic auto read as personal auto (common.lob.MERGED_LINES)."""
+    right, classic auto read as personal auto (common.lob.MERGED_LINES), and an
+    enum or L1 spelling read as the schema's name (``cgl`` is ``gl``)."""
     from common.lob import merge_line
+    from common.schemas import LOB_SCHEMA_ALIASES
 
     name = lob.strip().lower()
-    return str(merge_line(DELIVERY_SPELLINGS.get(name, name)))
+    line = str(merge_line(DELIVERY_SPELLINGS.get(name, name)))
+    return LOB_SCHEMA_ALIASES.get(line, line)
 
 
 def prepare_twin_bundles(
@@ -516,18 +519,30 @@ def _slug(text: str) -> str:
     return "_".join(re.findall(r"[a-z0-9]+", text.lower()))
 
 
+#: Words an insured's name is printed with or without: ``Rivera Fabrication, LLC``
+#: and ``RIVERA FABRICATION`` are one insured.
+_NAME_NOISE = frozenset({"the", "and", "llc", "l", "c", "inc", "incorporated", "corp", "corporation", "co",
+                         "company", "ltd", "limited", "lp", "llp", "pllc", "pc", "dba"})
+
+
+def _insured_key(name: str) -> str:
+    """An insured's name with case, punctuation and legal-form words left out."""
+    return "_".join(word for word in _slug(name).split("_") if word not in _NAME_NOISE)
+
+
 def _insured_family(gold: dict, line: str, fallback: str) -> str:
     """One insured's documents, as one family: ``<line>/<hash of the name>``.
 
     The declarations, the policy and its renewals print the same insured, and a
     model scored on one of them after training on another is scored on a
-    document it has as good as seen. Hashed so a family id names no one.
+    document it has as good as seen. Hashed so a family id does not spell the
+    name out.
     """
     import hashlib
 
     name = (gold.get("named_insured") or {}).get("primary_name")
     name = name.get("raw") if isinstance(name, dict) else name
-    key = _slug(str(name)) if name else ""
+    key = _insured_key(str(name)) if name else ""
     return f"{line}/{hashlib.sha256((key or fallback).encode()).hexdigest()[:10]}"
 
 
@@ -549,6 +564,7 @@ def prepare_original_bundles(
     exclusions: dict[str, str] | None = None,
     dry_run: bool = False,
     seed: int = 42,
+    frozen: bool = False,
 ) -> PrepareReport:
     """Bundles from real documents of one line with no twins and no split.
 
@@ -557,14 +573,24 @@ def prepare_original_bundles(
     one outside the line's schema, or a package policy, is left out with the
     reason. The split is drawn by insured family and written into each
     document's metadata, so the corpus build uses it as delivered.
+
+    A test document whose carrier no training document has is marked
+    ``held_out_carrier``: the gate reports those documents apart, as the model's
+    reading of carriers it never saw. ``frozen`` once the tenant's eval set is
+    frozen: the frozen set is the test set and takes no new document, so every
+    document is drawn into train or val.
+
+    Never ``move``: a re-run leaves out a document whose PDF is gone, and removes
+    its folder - the only copy of a moved PDF.
     """
     from data_pipeline.dataset_builder.split_groups import GroupRecord, assign_group_splits
 
     line = delivery_line(lob)
     if lines is not None and line not in lines:
         raise BundleError(f"{line} is outside the scope's lines {sorted(lines)}; pass that line's scope")
-    if mode not in ("link", "copy", "move"):
-        raise BundleError(f"mode {mode!r} is not link, copy or move")
+    if mode not in ("link", "copy"):
+        raise BundleError(f"mode {mode!r}: real documents are bundled by link or copy, never moved - "
+                          "a re-run would remove the folder holding the only copy of a moved PDF")
     pdf_root, gold_root = source / ORIGINAL_PDFS, source / ORIGINAL_GOLDS
     pdfs = {p.relative_to(pdf_root).with_suffix(""): p for p in pdf_root.rglob("*.pdf")}
     golds = {p.relative_to(gold_root).with_name(p.name[: -len(".gold.json")]): p
@@ -588,9 +614,12 @@ def prepare_original_bundles(
         if exclusions and name in exclusions:
             report.skipped[f"excluded: {exclusions[name]}"] += 1
             continue
+        # No carrier from the folder: a folder is not always one carrier (a
+        # broker's holds several), and a gold missing its carrier would be
+        # filled with the broker's name.
         gold, notes, problem = corrected_gold(
             json.loads(golds[key].read_text(encoding="utf-8")), line,
-            carrier=str(key.parent.name), text_pdf=pdfs[key], recodes=recodes)
+            carrier="", text_pdf=pdfs[key], recodes=recodes)
         if problem:
             report.skipped[f"gold left out: {problem.split(':', 1)[0]}"] += 1
             report.correction_rows.append((name, "left out", problem))
@@ -606,7 +635,14 @@ def prepare_original_bundles(
     records = [GroupRecord(group_id=group, doc_type="policy", source_ids=docs, line=line,
                            carrier=_printed_carrier_key(kept[docs[0]][1]))
                for group, docs in sorted(members.items())]
-    assignment = assign_group_splits({"policy": records}, seed=seed).assignment
+    assignment = assign_group_splits({"policy": records}, seed=seed, with_test=not frozen,
+                                     hold_out_carriers=not frozen).assignment
+    # Carriers the model trains on; a test document of any other is its reading
+    # of a carrier it never saw.
+    trained = {_printed_carrier_key(gold) for name, (_, gold, _, _) in kept.items()
+               if assignment[family[name]] == "train"}
+    unseen = {name for name, (_, gold, _, _) in kept.items()
+              if assignment[family[name]] == "test" and _printed_carrier_key(gold) not in trained}
 
     for name, (pdf, gold, notes, gold_path) in sorted(kept.items()):
         split = assignment[family[name]]
@@ -624,6 +660,7 @@ def prepare_original_bundles(
             "sample": None,
             "render_mode": None,
             "unprinted_values": _unprinted(notes),
+            "held_out_carrier": name in unseen,
         }
         report.written[(split, "real")] += 1
         if dry_run:
@@ -652,8 +689,9 @@ def prepare_original_bundles(
             writer.writerows(report.correction_rows)
         with (out / "split.csv").open("w", encoding="utf-8", newline="") as fh:
             writer = csv.writer(fh)
-            writer.writerow(["document", "family", "split"])
-            writer.writerows((name, family[name], assignment[family[name]]) for name in sorted(kept))
+            writer.writerow(["document", "family", "split", "held_out_carrier"])
+            writer.writerows((name, family[name], assignment[family[name]], name in unseen)
+                             for name in sorted(kept))
     return report
 
 
@@ -865,7 +903,8 @@ def main(argv: list[str] | None = None) -> int:
 
     parser = argparse.ArgumentParser(description="Turn a synthetic-data delivery into import bundles")
     parser.add_argument("--input", required=True, type=Path, help="the delivery: Train/Val/Test + manifest.csv")
-    parser.add_argument("--out", type=Path, default=DEFAULT_OUT)
+    parser.add_argument("--out", type=Path, default=None,
+                        help=f"where the bundles go (default {DEFAULT_OUT}; required for real documents alone)")
     parser.add_argument("--scope", default="personal_lines",
                         help="keep only this scope's lines ('none' keeps every line)")
     parser.add_argument("--mode", choices=("link", "copy", "move"), default="link",
@@ -879,6 +918,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--originals", type=Path, default=DEFAULT_ORIGINALS,
                         help="SPEC_21 delivery: the seed documents (pdfs/, gold json/); 'none' leaves them out")
     parser.add_argument("--lob", help="real documents alone (PDFs/ + Gold JSON/): the line every one is of")
+    parser.add_argument("--frozen", action="store_true",
+                        help="real documents alone: the tenant's eval set is frozen - draw train and val only")
     args = parser.parse_args(argv)
     # On the pod, run detached in tmux: a closed laptop must not stop this job.
     from orchestration.detach import detach_module_if_needed
@@ -893,10 +934,17 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"{args.input} holds real documents alone ({ORIGINAL_PDFS}/, {ORIGINAL_GOLDS}/): "
                       "pass --lob, the line they are all of", file=sys.stderr)
                 return 1
+            if args.out is None:
+                # The default is the personal-lines bundles: mixed in, these would
+                # be uploaded and trained with them, and its corrections.csv lost.
+                print(f"pass --out for real documents alone (e.g. data/cgl_bundles): the default, "
+                      f"{DEFAULT_OUT}, holds another delivery's bundles", file=sys.stderr)
+                return 1
             report = prepare_original_bundles(args.input, args.out, lob=args.lob, lines=lines,
                                               mode=args.mode, exclusions=read_exclusions(args.exclude),
-                                              dry_run=args.dry_run)
+                                              dry_run=args.dry_run, frozen=args.frozen)
         elif (args.input / TWIN_MANIFEST).is_file():
+            args.out = args.out or DEFAULT_OUT
             originals = None if str(args.originals).lower() == "none" else args.originals
             if originals is not None and not (originals / "pdfs").is_dir():
                 print(f"no seed documents at {originals} (pdfs/); pass --originals none to bundle the "
@@ -906,6 +954,7 @@ def main(argv: list[str] | None = None) -> int:
                                           exclusions=read_exclusions(args.exclude), dry_run=args.dry_run,
                                           originals=originals)
         else:
+            args.out = args.out or DEFAULT_OUT
             report = prepare_bundles(args.input, args.out, lines=lines, mode=args.mode,
                                      exclusions=read_exclusions(args.exclude),
                                      lob_overrides=read_lob_overrides(args.lob_overrides), dry_run=args.dry_run)

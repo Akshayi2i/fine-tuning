@@ -93,6 +93,9 @@ class SourceDocument:
     #: (metadata ``template_id``), the family that split was drawn by.
     delivered_split: str | None = None
     template_id: str | None = None
+    #: A delivered test document of a carrier no training document has (metadata
+    #: ``held_out_carrier``): reported apart, as a carrier the model never saw.
+    delivered_held_out: bool = False
     #: Which twin of its seed a synthetic document is (None for a real one), and
     #: the render mode it was generated in (digital / scanned twins, SPEC_21).
     twin_index: int | None = None

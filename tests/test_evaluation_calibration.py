@@ -1317,6 +1317,15 @@ def test_an_eval_set_with_no_scans_is_not_blocked_on_scanned_accuracy():
     assert "scanned_accuracy" not in result.failed_gates
 
 
+def test_scanned_accuracy_the_baseline_measured_is_required():
+    """The eval set is frozen, so its documents are the same: a metric the last
+    release produced and this one did not is something broken, not a set with
+    nothing to measure."""
+    result = promotion_gate(_without(_metrics(), "scanned_accuracy"), _metrics())
+    assert not result.passed
+    assert "scanned_accuracy" in result.failed_gates
+
+
 def test_scanned_accuracy_still_may_not_regress_when_measured():
     result = promotion_gate(_metrics(scanned_accuracy=0.80), _metrics(scanned_accuracy=0.90))
     assert not result.passed

@@ -819,8 +819,9 @@ def build_report(
         # far worse than saying it was not measured.
         log.warning(
             "eval set contains no %s document(s), so those subset metrics are absent. The "
-            "promotion gate treats an absent metric as not-passed, which is correct — but the "
-            "real fix is adding those documents to the frozen eval set (arch §8).",
+            "promotion gate blocks on an absent metric unless it is conditional (scanned "
+            "documents: some lines arrive digital only) and the baseline did not measure it "
+            "either (evaluation.gating.CONDITIONAL_METRICS).",
             sorted(missing),
         )
     return report

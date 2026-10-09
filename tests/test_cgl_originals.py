@@ -23,11 +23,14 @@ pymupdf = pytest.importorskip("pymupdf")
 EXAMPLE = Path("configs/canonical schema/common schema/examples/homeowners_minimal.json")
 
 
-def _gl_gold(insured: str = "TAYLOR SAMPLE", parts: tuple[str, ...] = ("gl",), code: str = "GL_BI_PD") -> dict:
+def _gl_gold(insured: str = "TAYLOR SAMPLE", parts: tuple[str, ...] = ("gl",), code: str = "GL_BI_PD",
+             carrier: str | None = None) -> dict:
     """The homeowners example's shared blocks, as a one-coverage general liability gold."""
     example = json.loads(EXAMPLE.read_text(encoding="utf-8"))
     gold = {key: copy.deepcopy(example[key]) for key in ("document", "carrier", "named_insured", "policy")}
     gold["named_insured"]["primary_name"].update(raw=insured, parsed=insured)
+    if carrier is not None:
+        gold["carrier"]["name"].update(raw=carrier, parsed=carrier)
     gold["lob_parts"] = [{**copy.deepcopy(example["lob_parts"][0]), "part_id": f"part_{n}", "lob": lob}
                          for n, lob in enumerate(parts, start=1)]
     coverage = copy.deepcopy(example["coverages"][0])
@@ -169,6 +172,118 @@ def test_the_command_line_needs_the_line_of_real_documents_alone(tmp_path, capsy
     assert main(["--input", str(root), "--out", str(tmp_path / "bundles"), "--scope", "casualty_fleet",
                  "--lob", "gl"]) == 0
     assert (tmp_path / "bundles" / "gl__utica_first__dec_01" / "metadata.json").is_file()
+
+
+def test_the_command_line_needs_an_out_folder_for_real_documents(tmp_path, capsys):
+    """The default --out is the personal-lines bundles: mixed in, these would be
+    uploaded and trained with them."""
+    from data_pipeline.ingestion.prepare_bundles import main
+
+    root = _source(tmp_path, {("Utica First", "dec_01"): _gl_gold()})
+    assert main(["--input", str(root), "--scope", "casualty_fleet", "--lob", "gl"]) == 1
+    assert "pass --out" in capsys.readouterr().err
+
+
+def test_the_cgl_code_bundles_as_general_liability(tmp_path):
+    root = _source(tmp_path, {("Utica First", "dec_01"): _gl_gold(code="GL_ADDITIONAL_INSURED")})
+    from common.scopes import get_scope
+
+    out = tmp_path / "bundles"
+    report = prepare_original_bundles(root, out, lob="CGL", lines=get_scope("casualty_fleet").lines)
+
+    assert report.documents == 1
+    meta = json.loads((out / "gl__utica_first__dec_01" / "metadata.json").read_text(encoding="utf-8"))
+    gold = json.loads((out / "gl__utica_first__dec_01" / "golden.json").read_text(encoding="utf-8"))
+    assert meta["lob"] == "gl" and meta["template_id"].startswith("gl/")
+    assert gold["coverages"][0]["coverage_code"] == "X_ADDITIONAL_INSURED"          # gl's recodes applied
+
+
+def test_a_part_named_by_another_spelling_of_the_line_is_the_line():
+    for spelling in ("cgl", "general_liability", "GL"):
+        _, _, problem = corrected_gold(_gl_gold(parts=(spelling,)), "gl", carrier="",
+                                       text_pdf=Path("none.pdf"), recodes={})
+        assert problem is None, spelling
+
+
+def test_real_documents_are_never_moved(tmp_path):
+    """A re-run leaves out a document whose PDF is gone and removes its folder:
+    after a move, that folder held the only copy."""
+    root = _source(tmp_path, {("Utica First", "dec_01"): _gl_gold()})
+    with pytest.raises(BundleError, match="never moved"):
+        prepare_original_bundles(root, tmp_path / "bundles", lob="gl", mode="move")
+    assert (root / "PDFs" / "Utica First" / "dec_01.pdf").is_file()
+
+
+def test_once_the_eval_set_is_frozen_documents_are_drawn_into_train_and_val_only(tmp_path):
+    """The frozen set is the test set: a new document delivered as test stops the
+    corpus build, so none is."""
+    docs = {(f"Carrier {n % 7}", f"policy_{n:02d}"): _gl_gold(f"INSURED {n}", carrier=f"Carrier {n % 7}")
+            for n in range(30)}
+    root = _source(tmp_path, docs)
+    report = prepare_original_bundles(root, tmp_path / "bundles", lob="gl", frozen=True)
+    assert {split for split, _ in report.written} == {"train", "val"}
+
+
+def test_a_gold_with_no_carrier_is_never_given_its_folder_s_name(tmp_path):
+    """A folder is not always one carrier - a broker's holds several - so a gold
+    missing its carrier is left out, not filled with the folder's name."""
+    gold = _gl_gold()
+    del gold["carrier"]
+    root = _source(tmp_path, {("Johnson & Johnson", "dec_01"): gold})
+    report = prepare_original_bundles(root, tmp_path / "bundles", lob="gl")
+    assert report.documents == 0 and report.skipped
+    assert not report.corrections.get("carrier missing")
+
+
+def test_one_insured_spelt_with_and_without_its_legal_form_is_one_family(tmp_path):
+    root = _source(tmp_path, {
+        ("Utica First", "dec_01"): _gl_gold("RIVERA FABRICATION LLC"),
+        ("Utica First", "renewal_01"): _gl_gold("The Rivera Fabrication Co."),
+        ("Utica First", "renewal_02"): _gl_gold("Rivera Fabrication & Welding, Inc."),
+    })
+    out = tmp_path / "bundles"
+    prepare_original_bundles(root, out, lob="gl")
+    family = {name: json.loads((out / name / "metadata.json").read_text(encoding="utf-8"))["template_id"]
+              for name in ("gl__utica_first__dec_01", "gl__utica_first__renewal_01", "gl__utica_first__renewal_02")}
+    assert family["gl__utica_first__dec_01"] == family["gl__utica_first__renewal_01"]
+    assert family["gl__utica_first__renewal_02"] != family["gl__utica_first__dec_01"]
+
+
+def test_a_test_document_of_a_carrier_training_never_sees_is_marked_held_out(tmp_path):
+    """The gate reports those documents apart: the model reading a carrier it never saw."""
+    docs = {(f"Carrier {n % 9}", f"policy_{n:02d}"): _gl_gold(f"INSURED {n}", carrier=f"Carrier {n % 9}")
+            for n in range(40)}
+    root = _source(tmp_path, docs)
+    out = tmp_path / "bundles"
+    prepare_original_bundles(root, out, lob="gl")
+
+    metas = {folder.name: json.loads((folder / "metadata.json").read_text(encoding="utf-8"))
+             for folder in out.iterdir() if folder.is_dir()}
+    carrier = {name: f"carrier {int(name.rsplit('_', 1)[1]) % 9}" for name in metas}
+    trained = {carrier[name] for name, meta in metas.items() if meta["split"] == "train"}
+    for name, meta in metas.items():
+        expected = meta["split"] == "test" and carrier[name] not in trained
+        assert meta["held_out_carrier"] is expected, name
+    assert any(meta["held_out_carrier"] for meta in metas.values())          # the draw holds two carriers out
+    with (out / "split.csv").open(encoding="utf-8", newline="") as fh:
+        assert {row["document"]: row["held_out_carrier"] == "True" for row in csv.DictReader(fh)} == {
+            name: meta["held_out_carrier"] for name, meta in metas.items()}
+
+
+def test_the_corpus_build_records_the_delivered_held_out_documents():
+    """So the frozen set marks them and the gate reports them apart."""
+    from types import SimpleNamespace
+
+    from orchestration.pipeline_dag import delivered_held_out_ids
+
+    def doc(source_id, held, group):
+        return SimpleNamespace(source_id=source_id, delivered_held_out=held, group_id=group)
+
+    documents = [doc("policy_0001", True, "g1"), doc("policy_0002", True, "g2"),
+                 doc("policy_0003", False, "g3"), doc("policy_0004", True, "g4")]
+    assignment = SimpleNamespace(assignment={"g1": "test", "g2": "val", "g3": "test", "g4": "test"},
+                                 held_out_source_ids=["policy_0004"])
+    assert delivered_held_out_ids(documents, assignment) == ["policy_0001"]
 
 
 # --------------------------------------------------------------------------

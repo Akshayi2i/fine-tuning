@@ -157,6 +157,49 @@ def test_a_long_label_printed_before_an_amount_is_a_value():
     assert [e["label"] for e in gold["additional_fields"]] == [label]
 
 
+def test_a_figure_of_policy_wording_or_hidden_text_is_not_an_extra_field():
+    """A label written about where a value was found - a form's standard wording,
+    or text the PDF hides - is no printed label: policy wording is never a value,
+    and no image shows hidden text."""
+    gold = _gold(additional_fields=[
+        _extra('Form boilerplate amount (context: "...bail bonds up to")', "$250", [3]),
+        _extra("Bail Bond Cap (CG 00 01 boilerplate)", "$250", [3]),
+        _extra("Invisible text-layer remnant of another finance agreement (not shown on the page)", "1,234.00", [4]),
+        _extra("Water Leak Detection", "No", [4]),
+    ])
+    notes = apply_label_rules(gold, PAGES)
+    assert [e["label"] for e in gold["additional_fields"]] == ["Water Leak Detection"]
+    assert _kinds(notes).count("extra field from wording") == 3
+
+
+def test_a_form_number_cites_every_page_its_header_or_footer_prints_it_on():
+    """A form prints its number at the head or foot of each of its pages: a window
+    over its third page shows the form. Named in the body - an endorsement saying
+    which form it amends - it is not that page's form."""
+    body = "\n".join(f"line {n} {FILLER}" for n in range(8))
+    pages = {
+        2: f"Forms schedule\nCG 00 01 Commercial General Liability Coverage Form\n{body}",
+        5: f"COMMERCIAL GENERAL LIABILITY\nCG 00 01 04 13\n{body}",
+        6: f"{body}\nCG 00 01 04 13 Insurance Services Office, Inc., 2012 Page 2 of 16",
+        9: f"{body}\nThis endorsement modifies insurance provided under CG 00 01 as amended.\n{body}",
+    }
+    gold = {"forms_and_endorsements": [{"form_number": _v("CG 00 01", [2])}]}
+    notes = apply_label_rules(gold, pages)
+    assert gold["forms_and_endorsements"][0]["form_number"]["page_ref"] == [2, 5, 6]
+    assert ("page list", "forms_and_endorsements[0].form_number [2] -> [2, 5, 6]") in notes
+
+
+def test_a_carrier_s_short_form_code_is_found_at_a_page_s_edge_and_a_short_word_is_not():
+    body = "\n".join(f"line {n} {FILLER}" for n in range(8))
+    pages = {2: f"Forms schedule\nUFR 1 Utica Forms Rider\nPRIV Privacy Notice\n{body}",
+             7: f"{body}\nUFR 1 (Ed. 01/10) Page 1 of 2",
+             8: f"PRIV\n{body}"}
+    gold = {"forms_and_endorsements": [{"form_number": _v("UFR 1", [2])}, {"form_number": _v("PRIV", [2])}]}
+    apply_label_rules(gold, pages)
+    assert gold["forms_and_endorsements"][0]["form_number"]["page_ref"] == [2, 7]
+    assert gold["forms_and_endorsements"][1]["form_number"]["page_ref"] == [2]
+
+
 def test_protection_class_and_a_paying_mortgagee_go_to_their_fields():
     gold = _gold(additional_fields=[_extra("Protection Class", "3", [2]), _extra("Paid By", "Mortgagee", [2])])
     notes = apply_label_rules(gold, PAGES)

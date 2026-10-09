@@ -81,6 +81,16 @@ _SYSTEM = {"document.page_count", "document.source_file_name", "document.doc_typ
 RELIABLE_PAGE_SHARE = 0.9
 
 _PAGE_COUNTER = re.compile(r"^page \d+( of \d+)?$")
+#: A label written about where a value was found, not printed before it: a figure
+#: of a form's standard wording ("Form boilerplate amount (context: ...)", "Bail
+#: Bond Cap (CG 00 01 boilerplate)") or text the page does not show ("Invisible
+#: text-layer remnant of ..."). Policy wording is never a value, and no image
+#: shows the text a PDF hides: taught, both are values to invent.
+_DRAFTING_LABEL = re.compile(r"boilerplate|\(context:|text-layer|invisible text", re.IGNORECASE)
+#: A form's number, printed in the header or footer of every page of the form.
+_FORM_NUMBER = re.compile(r"^forms_and_endorsements\[\d+\]\.form_number$")
+#: Lines at each end of a page that are its header and footer.
+_EDGE_LINES = 4
 _YEAR = re.compile(r"(?:19|20)\d\d")
 #: Extra-field labels for a value that has a field of its own.
 _PROTECTION_CLASS = {"protection class", "prot class", "fire protection class", "protection class code",
@@ -277,10 +287,36 @@ def _page_lists(gold: dict[str, Any], pages: dict[int, str], texts: dict[int, gr
         # label missing) keeps its place; so does every page a name or a phrase
         # cites - it may be printed in a logo or an image the text does not hold.
         new |= {page for page in cited if page not in reliable or not figures}
+        if _FORM_NUMBER.match(path) and _form_code(printed):
+            # A form prints its number at the head or foot of each of its pages;
+            # a window over its fourth page shows the form as surely as one over
+            # the forms schedule does. Cited there only, the window was taught to
+            # leave out a form it can see.
+            value = grounding.normalise(printed)
+            new |= {page for page, text in pages.items() if _on_page_edge(value, text or "")}
         new_pages = sorted(new)
         if new_pages and new_pages != cited:
             envelope["page_ref"] = new_pages
             notes.append(("page list", f"{path} {cited} -> {new_pages}"))
+
+
+def _form_code(text: Any) -> bool:
+    """Whether a form number is code enough to be taken for itself at a page's
+    edge: a carrier's own short codes (``UFR 1``, ``L-783``, ``XCNTR``) are, though
+    too short to be :func:`_distinctive` in a page's body; a short word
+    (``PRIV``, ``ACD``) is not."""
+    value = grounding.normalise(text)
+    compact = value.replace(" ", "")
+    return _distinctive(text) or (len(compact) >= 4 and any(c.isdigit() for c in compact)) or len(compact) >= 5
+
+
+def _on_page_edge(value: str, text: str) -> bool:
+    """Whether a normalised ``value`` stands as words in one of the first or last
+    :data:`_EDGE_LINES` lines of ``text`` - the page's header or footer, never
+    its body, where an endorsement may name another form it amends."""
+    lines = [line for line in text.splitlines() if line.strip()]
+    edge = lines[:_EDGE_LINES] + lines[-_EDGE_LINES:]
+    return any(f" {value} " in f" {grounding.normalise(line)} " for line in edge)
 
 
 def _heads_a_line(value: str, text: str) -> bool:
@@ -315,6 +351,9 @@ def _extra_fields(gold: dict[str, Any], texts: dict[int, grounding.PageText], re
         value = entry.get("value") if isinstance(entry.get("value"), dict) else {}
         printed = _printed(value) if value else None
         label_n, value_n = grounding.normalise(label), grounding.normalise(printed or "")
+        if _DRAFTING_LABEL.search(label):
+            notes.append(("extra field from wording", f"{where} {label[:60]!r}"))
+            continue
         if _not_a_value(label_n, value_n):
             notes.append(("extra field not a value", f"{where} {label!r}"))
             continue

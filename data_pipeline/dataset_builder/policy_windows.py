@@ -368,9 +368,13 @@ def with_own_part(label: dict[str, Any], lob: str | list[str] | None) -> dict[st
     line = line_of_key(schema_key("policy", None, lob))
     if line is None:
         return label                 # the fallback: a package policy lists every one of its lines
+    from common.schemas import LOB_SCHEMA_ALIASES
+
     named = [part.get("lob") if isinstance(part, dict) else None for part in parts]
-    foreign = [name for name in named
-               if name is not None and merge_line(str(name).strip().lower()) != line]
+    # A part named by its enum or L1 spelling (general_liability, cgl) is the line.
+    spelled = {name: str(merge_line(str(name).strip().lower())) for name in named if name is not None}
+    foreign = [name for name, spelling in spelled.items()
+               if LOB_SCHEMA_ALIASES.get(spelling, spelling) != line]
     if len(parts) > 1 or foreign:
         raise CanonicalLabelError(
             f"lob_parts lists {len(parts)} part(s) ({', '.join(map(str, named))}), but a {line} "

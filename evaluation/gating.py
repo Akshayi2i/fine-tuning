@@ -486,7 +486,12 @@ def promotion_gate(
             current=baseline.get(name),
             floor=floor_table.get(name),
             delta=NON_INFERIORITY_DELTA.get(name, DEFAULT_DELTA),
-            applicable=name not in not_applicable,
+            # A conditional metric the baseline measured is required: the eval
+            # set is frozen, so its documents are the same, and a metric the last
+            # release produced and this one did not is something broken (scan
+            # detection, a subset's scoring), not a set with nothing to measure.
+            applicable=name not in not_applicable
+            or (name in CONDITIONAL_METRICS and baseline.get(name) is not None),
         )
         if name in samples and verdict.current is not None:
             current_scores, candidate_scores = samples[name]
