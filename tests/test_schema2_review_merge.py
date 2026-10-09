@@ -215,10 +215,11 @@ def test_a_dependency_in_the_older_keyword_is_honoured_too():
 
 
 def test_no_other_schema_has_what_the_fill_now_leaves_out():
-    """Why the self-contained lines, the fallback, ACORD and loss runs fill
-    exactly as before: none of their schemas has a table that must hold rows
-    (a page reference inside an envelope aside - the fill never reaches it) or
-    a key that requires another."""
+    """Why the self-contained lines, ACORD and loss runs fill exactly as before:
+    none of their schemas has a table that must hold rows (a page reference
+    inside an envelope aside - the fill never reaches it) or a key that requires
+    another. The fallback composes the common model since 1.1.0, and is filled
+    as the common-model lines are."""
     def found(node, path=""):
         if isinstance(node, dict):
             if (node.get("minItems") or 0) > 0 and not path.endswith("/page_ref"):
@@ -238,14 +239,14 @@ def test_no_other_schema_has_what_the_fill_now_leaves_out():
             schema = load_schema("acord", key.split(":", 1)[1], None)
         elif key.startswith("policy"):
             lob = key.split(":", 1)[1] if ":" in key else None
-            if lob and is_common_model("policy", None, lob):
+            if is_common_model("policy", None, lob):
                 continue
             schema = load_schema("policy", None, lob)
         else:
             schema = load_schema(key, None, None)
         assert list(found(schema)) == [], key
         checked += 1
-    assert checked >= 29                     # 24 lines, the fallback, ACORD, loss runs
+    assert checked >= 27                     # 23 self-contained lines, ACORD, loss runs
 
 
 # --------------------------------------------------------------------------

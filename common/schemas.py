@@ -22,6 +22,7 @@ Field descriptions
 from __future__ import annotations
 
 import json
+import logging
 from collections.abc import Iterator
 from dataclasses import dataclass
 from functools import cache, lru_cache
@@ -33,6 +34,8 @@ from referencing import Registry, Resource
 from referencing.jsonschema import DRAFT202012
 
 from common.constants import ACORD_FORMS, ACTIVE_DOC_TYPES
+
+log = logging.getLogger(__name__)
 
 SCHEMA_DIR = Path(__file__).resolve().parent.parent / "schemas"
 
@@ -199,8 +202,10 @@ def _sources() -> dict[str, SchemaSource]:
         if path.stem in (CANONICAL_FALLBACK, *_CANONICAL_NOT_REGISTERED):
             continue
         sources[f"policy:{path.stem}"] = _canonical_source(path)
+    # The fallback (key `policy`) is no line, so it is in no layout family; it
+    # may compose the common model like the lines do.
     _check_overlay_families(
-        [key.split(":", 1)[1] for key, source in sources.items() if source.common_model]
+        [key.split(":", 1)[1] for key, source in sources.items() if source.common_model and ":" in key]
     )
     return sources
 
@@ -238,11 +243,31 @@ def _check_overlay_families(lines: list[str]) -> None:
     for family, migrated in sorted(by_family.items()):
         missing = sorted(set(lobs_in_family(family)) - migrated)
         if missing:
-            raise SchemaError(
-                f"layout family {family!r} is only partly on the common model: "
-                f"{', '.join(missing)} still use self-contained files. One adapter cannot "
-                "train on two output shapes; migrate the whole family together."
-            )
+            # Every schema still loads - the other families' work goes on - and
+            # no scope covering this family trains until the rest arrives
+            # (common.scopes.assert_one_output_shape).
+            log.warning(
+                "layout family %r is only partly on the common model: %s still use "
+                "self-contained files. No scope covering it can train until they move too.",
+                family, ", ".join(missing))
+
+
+def partly_migrated_families() -> dict[str, tuple[str, ...]]:
+    """Layout family -> its lines still on self-contained files, for each family
+    with some lines on the common model and some not. One adapter cannot train
+    on two output shapes: a scope covering such a family is refused
+    (:func:`common.scopes.assert_one_output_shape`)."""
+    from common.config import lob_to_layout_family, lobs_in_family
+
+    migrated: dict[str, set[str]] = {}
+    for key, source in _sources().items():
+        if source.common_model and ":" in key:
+            line = key.split(":", 1)[1]
+            family = lob_to_layout_family().get(line)
+            if family is not None:
+                migrated.setdefault(family, set()).add(line)
+    return {family: tuple(sorted(set(lobs_in_family(family)) - lines))
+            for family, lines in sorted(migrated.items()) if set(lobs_in_family(family)) - lines}
 
 
 def is_canonical(
@@ -476,6 +501,14 @@ def base_key(key: str) -> str:
     return key.split(SLICE_SEPARATOR, 1)[0]
 
 
+def line_of_key(key: str) -> str | None:
+    """``policy:homeowners#arrays`` -> ``homeowners``; ``None`` for a key that
+    names no line - the fallback (``policy``), which composes the common model
+    too since common model 1.1.0."""
+    base = base_key(key)
+    return base.split(":", 1)[1] if ":" in base else None
+
+
 def slice_of(key: str) -> str | None:
     """The slice name in a key, or ``None`` for a whole schema."""
     _, separator, name = key.partition(SLICE_SEPARATOR)
@@ -527,7 +560,7 @@ def _schema_for_key(key: str) -> dict[str, Any]:
     # A bundle carries the definitions of every block; a slice keeps only those
     # its own sections reach, or each window's prompt would describe the whole
     # common model. The self-contained files keep their $defs whole, as before.
-    lob = key.split(":", 1)[1].split(SLICE_SEPARATOR)[0]
+    lob = line_of_key(key)
     return _prune_definitions(_without_cross_group_references(sliced, lob, name))
 
 
@@ -620,7 +653,7 @@ def _slice_sections(schema: dict[str, Any], group: str, key: str) -> dict[str, A
     """
     from common.schema_sections import SectionMapError, sections_for
 
-    lob = key.split(":", 1)[1].split(SLICE_SEPARATOR)[0] if ":" in base_key(key) else None
+    lob = line_of_key(key)
     try:
         wanted = set(sections_for(group, lob))
     except SectionMapError as exc:

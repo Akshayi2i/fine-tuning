@@ -98,7 +98,7 @@ def test_a_definition_that_contains_itself_is_recorded_once_not_followed_forever
     assert paths == ["party", "party.name", "party.parent"]
 
 
-@pytest.mark.parametrize("stem", ["auto", "classic_auto", "_fallback"])
+@pytest.mark.parametrize("stem", ["auto", "classic_auto"])
 def test_old_style_files_are_read_as_they_lie_on_disk(monkeypatch, tmp_path, stem):
     """``classic_auto`` is personal auto to the loader, but its own file is
     self-contained: bundling it as personal auto's overlay would version it and
@@ -108,6 +108,19 @@ def test_old_style_files_are_read_as_they_lie_on_disk(monkeypatch, tmp_path, ste
     assert versions[stem] == raw["fideon:source"]["version"]
     line_block = raw["fideon:source"].get("line_specific_block")
     expected = {aliases.unify(path, line_block) for path, _, _ in aliases.walk(raw)}
+    got = {path for entry in fields.values() for path in entry["paths"]}
+    assert got == {p for p in expected if aliases.field_name(p)}
+
+
+def test_the_fallback_is_read_through_the_bundle_it_loads_as(monkeypatch, tmp_path):
+    """The fallback is no line's file, but since common model 1.1.0 it is an
+    overlay like the lines': read as it lies on disk it is versioned "unknown"
+    and gives the registry its block names as fields, none of its own."""
+    fields, versions = _collected(monkeypatch, tmp_path, "_fallback")
+    bundle = S.load_schema("policy", None, None)
+    assert bundle.get(S.COMMON_MODEL_VERSION_KEY)
+    assert versions["_fallback"] == bundle[S.BUNDLE_VERSION_KEY]
+    expected = {aliases.unify(path, None) for path, _, _ in aliases.walk_bundle(bundle)}
     got = {path for entry in fields.values() for path in entry["paths"]}
     assert got == {p for p in expected if aliases.field_name(p)}
 

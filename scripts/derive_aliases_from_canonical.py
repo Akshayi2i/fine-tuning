@@ -194,16 +194,21 @@ def unify(field_path: str, line_block: str | None) -> str:
 
 
 def common_model_bundle(line: str) -> dict[str, Any] | None:
-    """The bundle a SPEC_21 line overlay loads as, or ``None`` for any other file.
+    """The bundle a SPEC_21 overlay loads as, or ``None`` for any other file.
 
     Only a file the loader selects for its own line counts. ``classic_auto`` is
     read as personal auto, so the common-model switch answers for personal
     auto's overlay, while ``classic_auto.json`` is a self-contained file of its
-    own; ``_common`` and ``_fallback`` are no line's file. All three are read as
-    they are.
+    own; ``_common`` is no line's file. Both are read as they are.
+    ``_fallback`` is no line's file either, but the loader reads it for a policy
+    of no line, so it counts once it is an overlay (common model 1.1.0).
     """
     from common import schemas
 
+    if line == schemas.CANONICAL_FALLBACK:
+        if not schemas.is_common_model("policy", None, None):
+            return None
+        return schemas.load_schema("policy", None, None)
     if schemas.schema_key("policy", None, line) != f"policy:{line}":
         return None
     if not schemas.is_common_model("policy", None, line):

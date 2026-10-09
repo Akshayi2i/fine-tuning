@@ -1016,10 +1016,18 @@ def stage_training(ctx: StageContext) -> StageResult:
     unservable, not merely awkward. Per-type adapters return only through the
     §4.2 graduation gate, trained on the MERGED foundation and never stacked.
     """
+    from common.scopes import ScopeError, assert_one_output_shape
     from registry_utils.models import DataStats
     from training.train import count_examples, train
 
     corpus_manifest = ctx.client.read_json(paths.corpus_manifest(ctx.corpus, ctx.tenant_id))
+    try:
+        # A layout family part-way to the common model is two output shapes:
+        # no scope trains on documents of both until the family has moved.
+        assert_one_output_shape(ctx.scope, [line for line, count in
+                                            (corpus_manifest.get("policy_line_counts") or {}).items() if count])
+    except ScopeError as exc:
+        raise PipelineError(str(exc)) from exc
     counts = corpus_manifest.get("example_counts", {})
     data_stats = DataStats(
         train_examples=count_examples(counts.get("train")),

@@ -23,30 +23,6 @@
   "required": "9bd6d231f6983467cd5d628c84ca027e99a601731c9b386f6c4ba6482e0b02e9",
   "schema": "9ac9ed1ecb18a0ab9d68ffc6a6030b511e867fffa4ccab2c504a2766ee4c87c3"
  },
- "policy#arrays": {
-  "prompt.image_only": "a3f4f11c0ca72e43a74cdd35704fc6e5c8dc75e8480aa621dee9ae97e4f30dc8",
-  "prompt.ocr_plus_image": "d4c6b65364d703c372d069ed3f4d6c7740897563d0a6596a79b96363d90b43da",
-  "required": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
-  "schema": "f290a6791a21f8d30d343752a6d82c62011d1ffab8dc5045ce960646a9608508"
- },
- "policy#decl": {
-  "prompt.image_only": "83642c012ee38c391a1fab809cc2e5f7552b506244d29d1a83ca3942c1422a25",
-  "prompt.ocr_plus_image": "ce7301262ad0199912f8604df4c7a0de8db6d5d2e0c7da251475abd9676f6d5f",
-  "required": "12c3df5d7b0b2792a8943b6fa700e351c961ece5cb941fe2bfd90a20ffd59781",
-  "schema": "9fed017302bdce9a75ab42c6775b91061c2af42343627a34a7ec2469a189a47f"
- },
- "policy#lineblk": {
-  "prompt.image_only": "1f14d45455b68fa3d1b95525855189d62b055100a1378936436fe52147eee6b4",
-  "prompt.ocr_plus_image": "6f0a0a38797762bdf3421e914647f81bf7b99fcc8cadefb2b714597b93ae92d6",
-  "required": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
-  "schema": "896f488979271ffd6bf53d047844006184d03144822445dac7154ae652d8f072"
- },
- "policy#whole": {
-  "prompt.image_only": "90a93aca989c9830d68308169a12e8b4136a7ce2ec69da30c9835b87df8a0e28",
-  "prompt.ocr_plus_image": "8c427d6b32e50d2b30cb59bdda1d1e3bd8086f2a956d0da0efb87c9a9973927c",
-  "required": "12c3df5d7b0b2792a8943b6fa700e351c961ece5cb941fe2bfd90a20ffd59781",
-  "schema": "56beec60da7e293e2e69dcc63eae24496854399aa340ed32c21ee8751c6fbba2"
- },
  "policy_agriculture_farm#arrays": {
   "prompt.image_only": "c6b5d8bba75bd80857e68b0f54ae2fa6644657038f97c9dd9b01d1c6bf1dcf43",
   "prompt.ocr_plus_image": "42220db28118653ce999a323baf113adbb828130aa6d0a72bfea56ff59ea15b9",
@@ -406,30 +382,6 @@
   "prompt.ocr_plus_image": "8a1c8308a0a0804254391968f2f6651096101c1ec0eba97fcc1ea44229e728b6",
   "required": "12c3df5d7b0b2792a8943b6fa700e351c961ece5cb941fe2bfd90a20ffd59781",
   "schema": "c393bcdceff59ea07948f3f816ad01146070e2ae84639c99887330b69f398ecf"
- },
- "policy_gl#arrays": {
-  "prompt.image_only": "c6fd444b1a909537954581edc54fa37d5341fc65afb94f5f89491a29f993636b",
-  "prompt.ocr_plus_image": "282d336b8450a94b6d34f6e4513b5c39c79af2234d19d009850298e620d7f39c",
-  "required": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
-  "schema": "7deb5426c834db06085491ae159f5e433bfae7decc774f4df09d4b0476dd7210"
- },
- "policy_gl#decl": {
-  "prompt.image_only": "52042cbeb5861ecb08437869df7570aa5176b5973fa4acc6cabbced5581c1e61",
-  "prompt.ocr_plus_image": "217e08f21f7eacc195d0f4d60d9e8df898ec86f7014e2b86415f8a1986e37414",
-  "required": "12c3df5d7b0b2792a8943b6fa700e351c961ece5cb941fe2bfd90a20ffd59781",
-  "schema": "45ff4d012d3b1ce6ef8497b7c9d21e5afd28540e4bf43e5754bfc2d22656443a"
- },
- "policy_gl#lineblk": {
-  "prompt.image_only": "ae85c4f612d8e8128a283a5be87d772af62fc1401bca661e586888868c5164aa",
-  "prompt.ocr_plus_image": "64293afbdf9dbd71db60a18c9c1fe29bdb1632a743c6e2210d09ba1883d133ff",
-  "required": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
-  "schema": "c38f58ee46551a046efdae98e7c40091158ec1515427ece1f1708b48df6cbfcf"
- },
- "policy_gl#whole": {
-  "prompt.image_only": "8b74ded2ed8d15cfebfa9312a0dd2d2d4f0f441ed82e88ebc746adc50743be58",
-  "prompt.ocr_plus_image": "31aebc505d75229dc9e1a7978a272cc017849564b807b58d19306091e794d62e",
-  "required": "12c3df5d7b0b2792a8943b6fa700e351c961ece5cb941fe2bfd90a20ffd59781",
-  "schema": "32f7edb856afe01d2e0af01a57a5925c60c5dcca0a8068c2cf5bdd53b7eb5bd4"
  },
  "policy_group_accident_sickness#arrays": {
   "prompt.image_only": "cdc89e83cef7547d14f4e3a4911f571d530438d7ae5b106137a72ba53c6449cd",

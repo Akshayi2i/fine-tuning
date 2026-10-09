@@ -33,6 +33,12 @@ GOLDEN = json.loads(
     .read_text(encoding="utf-8")
 )
 
+#: The line a bundle here is filed under unless a test says otherwise: one whose
+#: schema is still self-contained, the shape GOLDEN is written in. A bundle of no
+#: line is checked against the fallback, which composes the common model since
+#: common model 1.1.0, and GOLDEN is not that shape.
+LINE = "property"
+
 
 @pytest.fixture
 def client() -> BlobClient:
@@ -50,8 +56,8 @@ def prepared(tmp_path, name="policy_batch_001", *, pages=2, golden=None, metadat
     (directory / "golden.json").write_text(
         json.dumps(golden if golden is not None else GOLDEN), encoding="utf-8"
     )
-    if metadata is not None:
-        (directory / "metadata.json").write_text(json.dumps(metadata), encoding="utf-8")
+    metadata = {"lob": [LINE]} if metadata is None else metadata
+    (directory / "metadata.json").write_text(json.dumps(metadata), encoding="utf-8")
     return directory
 
 
@@ -215,6 +221,7 @@ def test_pages_are_stored_as_png_whatever_arrives(tmp_path, client):
         Image.new("RGB", (8, 8), (page * 10, 0, 0)).save(directory / f"page_{page}.jpg")
         (directory / f"page_{page}.md").write_text(f"# page {page}", encoding="utf-8")
     (directory / "golden.json").write_text(json.dumps(GOLDEN), encoding="utf-8")
+    (directory / "metadata.json").write_text(json.dumps({"lob": [LINE]}), encoding="utf-8")
 
     source_id = import_document(
         read_prepared(directory), "policy", client, mineru_version="2.0.0"

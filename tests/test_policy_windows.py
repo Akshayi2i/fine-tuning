@@ -45,6 +45,12 @@ PAGE_TEXT = {
 }
 TEXTS = [PAGE_TEXT.get(page, "Standard conditions and definitions.") for page in range(1, TOTAL + 1)]
 
+#: The line these windows are read for: a self-contained one, the shape LABEL
+#: is written in. Not the fallback (no line) and not general liability: both
+#: compose common model 1.1.0, whose windows tests/test_schema2_*.py pin. Not
+#: a line of casualty_fleet either, whose other lines are moving too.
+LOB = "property"
+
 
 def _fv(value, page):
     return {"raw": value, "parsed": value, "confidence": {"score": 1.0, "source": "audit"},
@@ -66,7 +72,7 @@ LABEL = {
 }
 
 
-def _plans(lob=None):
+def _plans(lob=LOB):
     routed, declarations = routed_pages(TEXTS, TOTAL)
     return routed, plan_windows(lob, routed, declarations)
 
@@ -106,7 +112,7 @@ def _plan(group, pages, *, single=False, index=0):
 
 
 def test_a_window_target_holds_only_its_sections_on_its_pages():
-    target = window_target(LABEL, None, _plan("arrays", [12]))
+    target = window_target(LABEL, LOB, _plan("arrays", [12]))
     assert set(target) == {"forms_and_endorsements"}
     assert "carrier" not in target, "another group's section leaked into the slice"
 
@@ -114,13 +120,13 @@ def test_a_window_target_holds_only_its_sections_on_its_pages():
 def test_page_ref_keeps_the_documents_page_numbers():
     """A window-relative number would train the model to emit 1..n per window,
     and every page_ref in production would be off by an offset nobody sees."""
-    target = window_target(LABEL, None, _plan("arrays", [12]))
+    target = window_target(LABEL, LOB, _plan("arrays", [12]))
     assert target["forms_and_endorsements"][0]["form_number"]["page_ref"] == [12]
 
 
 def test_a_row_across_a_window_boundary_is_in_both_with_what_each_can_see():
-    first = window_target(LABEL, None, _plan("arrays", [7]))
-    second = window_target(LABEL, None, _plan("arrays", [8], index=1))
+    first = window_target(LABEL, LOB, _plan("arrays", [7]))
+    second = window_target(LABEL, LOB, _plan("arrays", [8], index=1))
     rows_first = first["locations"]
     assert [r["location_number"]["raw"] for r in rows_first] == ["1", "2"]
     assert "address" not in rows_first[1], "page 8's city is not visible in the page-7 window"
@@ -129,7 +135,7 @@ def test_a_row_across_a_window_boundary_is_in_both_with_what_each_can_see():
 
 
 def test_the_decl_target_keeps_its_required_objects():
-    target = window_target(LABEL, None, _plan("decl", [1], single=True))
+    target = window_target(LABEL, LOB, _plan("decl", [1], single=True))
     assert {"carrier", "named_insured", "policy"} <= set(target)
     assert set(target["carrier"]["company_name"]) == {"raw", "parsed", "page_ref"}
 
@@ -137,11 +143,11 @@ def test_the_decl_target_keeps_its_required_objects():
 def test_a_value_with_no_page_is_placed_only_when_there_is_one_window():
     label = {"policy": {"policy_number": {**_fv("WC-1", 1), "page_ref": []}},
              "carrier": {}, "named_insured": {}}
-    single = window_target(label, None, _plan("decl", [1], single=True))
+    single = window_target(label, LOB, _plan("decl", [1], single=True))
     assert single["policy"]["policy_number"]["raw"] == "WC-1"
 
     report = TargetReport()
-    split = window_target(label, None, _plan("decl", [1], single=False), report)
+    split = window_target(label, LOB, _plan("decl", [1], single=False), report)
     assert "policy_number" not in split["policy"]
     assert report.unplaced == ["decl:policy.policy_number"]
 
@@ -150,14 +156,14 @@ def test_values_no_window_reads_are_reported():
     """The router did not route page 14, so the state notice is unreachable at
     serving too. Counting it is how a page rule that misses content shows up."""
     _routed, plans = _plans()
-    assert unread_values(LABEL, None, plans) == ["state_notices[0].state"]
+    assert unread_values(LABEL, LOB, plans) == ["state_notices[0].state"]
 
 
 # --------------------------------------------------------------------------
 # The corpus build
 # --------------------------------------------------------------------------
 
-def _document(source_id="policy_0001", lob=None, label=LABEL):
+def _document(source_id="policy_0001", lob=LOB, label=LABEL):
     return SourceDocument(
         source_id=source_id, doc_type="policy", golden_label=label, ocr_pages=list(TEXTS),
         image_paths=[f"processed/default/policy/{source_id}/page_{p}.png" for p in range(1, TOTAL + 1)],
@@ -275,10 +281,27 @@ def test_serving_asks_the_windows_training_built(client):
     assert served_prompts == trained_prompts, "a served prompt differs from its training row's"
 
 
-def test_serving_returns_one_canonical_document(client):
-    result, _ = _serve(client, _decl_response())
+def _fallback_response():
+    """The same declarations as the fallback's common-model view writes them
+    (the carrier's name is `name` there), and a coverage: its id is one the
+    pipeline supplies, never the model, and the client's schema requires it."""
+    response = _decl_response()
+    response["carrier"] = {"name": response["carrier"]["company_name"]}
+    response["coverages"] = [{"coverage_code": "X_TERRORISM",
+                              "coverage_name": {"raw": "Terrorism", "parsed": "Terrorism", "page_ref": [12]}}]
+    return response
+
+
+@pytest.mark.parametrize("lob,response,carrier_name", [
+    (LOB, _decl_response(), "company_name"),
+    # No line: the fallback, which composes common model 1.1.0. Every policy
+    # served without a line is read against it.
+    (None, _fallback_response(), "name"),
+], ids=["line", "fallback"])
+def test_serving_returns_one_canonical_document(client, lob, response, carrier_name):
+    result, _ = _serve(client, response, known_lob=lob)
     assert result.schema_valid
-    leaf = result.extraction["carrier"]["company_name"]
+    leaf = result.extraction["carrier"][carrier_name]
     assert set(leaf) == {"raw", "parsed", "confidence", "page_ref", "flagged"}
     assert result.pages_used == [1, 7, 8, 12]
     # Every window echoed the same declarations: one value, not several.
@@ -338,7 +361,7 @@ def _serve_with(client, backend):
             image_paths=[f"processed/default/policy/policy_0001/page_{p}.png"
                          for p in range(1, TOTAL + 1)],
             page_texts={p: t for p, t in enumerate(TEXTS, start=1)},
-            known_doc_type="policy",
+            known_doc_type="policy", known_lob=LOB,
         ),
         model, StaticClassifier("policy"),
         CalibrationParams(method="temperature", doc_type="policy",

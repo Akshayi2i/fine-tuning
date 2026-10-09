@@ -30,7 +30,8 @@ def _keys(node, path=""):
 
 
 # A self-contained line: the common-model lines have their own case (Phase 6).
-SCHEMA = load_schema("policy", None, "gl")
+LINE = "property"
+SCHEMA = load_schema("policy", None, LINE)
 
 
 def test_two_different_answers_get_the_same_keys():
@@ -66,7 +67,7 @@ def test_keys_follow_schema_order():
 
 def test_the_filled_output_is_valid_against_the_full_schema():
     out = with_all_keys({"policy": {"policy_number": _env("HO-1")}}, SCHEMA)
-    assert is_valid(out, "policy", None, "gl")
+    assert is_valid(out, "policy", None, LINE)
 
 
 def test_serving_returns_every_key_for_a_canonical_policy():
@@ -80,7 +81,7 @@ def test_serving_returns_every_key_for_a_canonical_policy():
     client = BlobClient(backend=InMemoryBackend(), container="main", raw_container="raw")
     model = load_model("base", client, backend_impl=EchoBackend(answer))
     request = ExtractionRequest(source_id="p1", image_paths=["d/page_1.png"], page_texts={1: "HO-1"},
-                                known_doc_type="policy", known_lob="gl")
+                                known_doc_type="policy", known_lob=LINE)
     result = extract(request, model, StaticClassifier("policy"), CALIBRATION, strict_schema=False)
     keys = _keys(result.extraction)
     assert "policy.effective_date" in keys and "carrier.company_name" in keys

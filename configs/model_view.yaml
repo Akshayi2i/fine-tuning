@@ -34,6 +34,9 @@ descriptions:
   AdditionalField: A printed value that no field of the schema is defined for.
   AdditionalField.value: The value the label introduces, as printed.
   additional_fields: Every printed value that no field of the schema is defined for.
+  # The client's text sends a blank signature line to text_sections, which the
+  # model is never asked for.
+  countersignature: Countersignature, when a name or date is actually printed. A blank signature line is not one.
   Coverage.form_refs: >-
     Form numbers printed with this coverage that grant or modify it. Printed
     values: each exactly as printed, as a plain string.

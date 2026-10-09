@@ -7,6 +7,7 @@ overlay at load time. These tests pin what the bundle is and what it refuses.
 """
 
 import json
+import logging
 import re
 
 import pytest
@@ -30,8 +31,19 @@ def test_an_overlay_is_registered_as_a_common_model_line(lob):
 
 
 def test_the_self_contained_lines_are_not_common_model_lines():
-    assert not S.is_common_model("policy", lob="gl")
-    assert not S.is_common_model("policy")  # the fallback
+    # General liability's family-mates still use self-contained files, as do
+    # the lines of the families not yet moved.
+    for lob in ("auto", "wc", "umbrella", "property", "cyber"):
+        assert not S.is_common_model("policy", lob=lob), lob
+
+
+def test_general_liability_and_the_fallback_compose_the_common_model():
+    """gl.json is a SPEC_21 overlay since its 3.0.0, and _fallback.json - the
+    schema of a policy of no known line - composes common model 1.1.0 too."""
+    assert S.is_common_model("policy", lob="gl")
+    assert S.is_common_model("policy")  # the fallback
+    assert S.schema_version("policy", lob="gl") == "3.0.0+common.1.1.0"
+    assert S.schema_version("policy") == "1.1.0+common.1.1.0"
 
 
 @pytest.mark.parametrize("lob", OVERLAY_LINES)
@@ -45,7 +57,7 @@ def test_a_bundle_has_no_reference_outside_its_own_definitions(lob):
 
 @pytest.mark.parametrize("lob", OVERLAY_LINES)
 def test_a_bundle_version_names_the_overlay_and_the_common_model(lob):
-    assert S.schema_version("policy", lob=lob) == "1.0.0+common.1.0.0"
+    assert S.schema_version("policy", lob=lob) == "1.0.0+common.1.1.0"
 
 
 def test_the_spec21_example_gold_validates_against_its_bundle():
@@ -107,9 +119,52 @@ def test_a_code_without_a_meaning_is_refused(tmp_path):
         S._bundle(overlay, tmp_path / "personal_umbrella.json")
 
 
-def test_a_family_only_partly_on_the_common_model_is_refused():
-    with pytest.raises(S.SchemaError, match="only partly on the common model"):
+def test_a_family_only_partly_on_the_common_model_still_loads(caplog):
+    """A family moves line by line: general liability is on the common model
+    while auto, workers' comp and umbrella are not yet. Every schema still loads,
+    so the other families' work goes on, and the load says which lines lag."""
+    with caplog.at_level(logging.WARNING, logger=S.__name__):
         S._check_overlay_families(["homeowners", "personal_auto"])
+    assert "'personal_lines' is only partly on the common model" in caplog.text
+    assert "dwelling_fire" in caplog.text
+
+    caplog.clear()
+    with caplog.at_level(logging.WARNING, logger=S.__name__):
+        S._sources.cache_clear()
+        sources = S._sources()
+    assert "'casualty_fleet' is only partly on the common model" in caplog.text
+    assert sources["policy:gl"].common_model
+    assert not any(sources[f"policy:{lob}"].common_model for lob in ("auto", "wc", "umbrella"))
+
+
+def test_the_partly_migrated_families_name_the_lines_still_behind():
+    assert S.partly_migrated_families() == {"casualty_fleet": ("auto", "umbrella", "wc")}
+
+
+def test_a_scope_whose_corpus_holds_both_shapes_of_one_family_is_refused():
+    """One adapter cannot train on two output shapes: general liability on the
+    common model and auto on a self-contained file, in one corpus."""
+    from common.scopes import ScopeError, assert_one_output_shape, get_scope
+
+    with pytest.raises(ScopeError, match="'casualty_fleet' on two output shapes"):
+        assert_one_output_shape(get_scope("unified"), ["gl", "auto"])
+    with pytest.raises(ScopeError, match="two output shapes"):
+        assert_one_output_shape(get_scope("policy"), ["homeowners", "gl", "wc"])
+    # Without the corpus's lines, covering both kinds of line is enough.
+    with pytest.raises(ScopeError, match="two output shapes"):
+        assert_one_output_shape(get_scope("unified"))
+
+
+def test_a_scope_whose_corpus_holds_one_shape_of_each_family_trains():
+    from common.scopes import assert_one_output_shape, get_scope
+
+    assert_one_output_shape(get_scope("unified"), ["homeowners", "gl"])
+    assert_one_output_shape(get_scope("unified"), ["auto", "wc", "umbrella"])
+    assert_one_output_shape(get_scope("personal_lines"))
+    # A line-scoped scope trains only its own lines, whatever else the corpus holds.
+    assert_one_output_shape(get_scope("personal_lines"), ["homeowners", "gl", "auto"])
+    # A scope that trains no policy has no line to train two ways.
+    assert_one_output_shape(get_scope("lossrun"), ["gl", "auto"])
 
 
 def test_an_overlay_in_no_family_is_refused():

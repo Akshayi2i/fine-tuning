@@ -34,6 +34,39 @@ def _policy_label(**over):
     return label
 
 
+def _envelope(raw, parsed=None):
+    return {"raw": raw, "parsed": raw if parsed is None else parsed,
+            "confidence": {"score": 1.0, "source": "audit"}, "page_ref": [1], "flagged": False}
+
+
+def _common_model_label(line: str | None = None) -> dict:
+    """The canonical policy label in the common model's shape (SPEC_21): dates
+    parsed MM/DD/YYYY, the carrier named, the address and the premium under the
+    common model's names. The fallback - a policy of no single line - composes
+    the common model since common model 1.1.0, so this is its shape; a line on
+    the common model adds the blocks its overlay requires: the document, the
+    one part of a single-line policy, and its coverages."""
+    label = {
+        "carrier": {"name": _envelope("Granite Mutual Insurance Company")},
+        "producer": {"agency_name": _envelope("Hanover Risk Partners")},
+        "policy": {
+            "policy_number": _envelope("WC-8842317-01"),
+            "effective_date": _envelope("04/01/2026"),
+            "expiration_date": _envelope("04/01/2027"),
+        },
+        "named_insured": {
+            "primary_name": _envelope("Rivera Fabrication LLC"),
+            "mailing_address": {"street": _envelope("1420 Foundry Road"), "city": _envelope("Toledo"),
+                                "state": _envelope("OH"), "postal_code": _envelope("43604")},
+        },
+        "premium": {"total": _envelope("$47,250.00", 47250.0)},
+    }
+    if line is None:
+        return label
+    return {"document": {"doc_type": "policy_check"}, **label,
+            "lob_parts": [{"part_id": "part_1", "lob": line}], "coverages": []}
+
+
 def _with_insured(name: str) -> dict:
     """The canonical policy label with its named insured replaced."""
     label = _policy_label()
@@ -125,7 +158,10 @@ def test_a_canonical_policy_label_needs_no_top_level_line_of_business():
     label = _policy_label()
     assert "line_of_business" not in label
     validate_golden_label(label, "policy", lob="workers_comp")
-    validate_golden_label(label, "policy")   # an unknown line: the fallback schema
+    # An unknown line: the fallback schema, on the common model since 1.1.0.
+    fallback = _common_model_label()
+    assert "line_of_business" not in fallback
+    validate_golden_label(fallback, "policy")
 
 
 def test_a_canonical_policy_label_with_a_line_that_has_no_schema_is_rejected():
@@ -133,11 +169,18 @@ def test_a_canonical_policy_label_with_a_line_that_has_no_schema_is_rejected():
         validate_golden_label(_policy_label(), "policy", lob="marine_cargo")
 
 
-@pytest.mark.parametrize("lob", ["flood", "gl", "cyber", "workers_comp", ["homeowners", "personal_auto"]])
-def test_a_policy_line_is_any_line_with_a_canonical_schema(lob):
+@pytest.mark.parametrize("lob,label", [
+    ("flood", _policy_label()),
+    ("gl", _common_model_label("gl")),                  # a common-model overlay since 1.1.0
+    ("cyber", _policy_label()),
+    ("workers_comp", _policy_label()),
+    (["homeowners", "personal_auto"], _common_model_label()),  # several lines: the fallback
+], ids=["flood", "gl", "cyber", "workers_comp", "homeowners+personal_auto"])
+def test_a_policy_line_is_any_line_with_a_canonical_schema(lob, label):
     """A policy's line names its schema. The LOB enum (13 values) rejected flood,
-    cyber and the schema spellings (gl, wc), so real labels failed export."""
-    validate_golden_label(_policy_label(), "policy", lob=lob)
+    cyber and the schema spellings (gl, wc), so real labels failed export. Each
+    label is in its schema's shape: gl and the fallback compose the common model."""
+    validate_golden_label(label, "policy", lob=lob)
 
 
 def test_a_flat_label_under_a_canonical_policy_is_rejected():
@@ -233,7 +276,8 @@ def test_export_writes_label_and_provenance(client):
 
 def test_labeled_source_ids_are_listed(client):
     for source_id in ("policy_0001", "policy_0002"):
-        export_golden_label(_policy_label(), source_id, "policy", client, reviewer_id="alice")
+        export_golden_label(_policy_label(), source_id, "policy", client, reviewer_id="alice",
+                            lob="property")
     assert list_labeled_source_ids(client, "policy") == ["policy_0001", "policy_0002"]
 
 

@@ -70,25 +70,28 @@ def test_a_group_with_nothing_to_ask_for_is_not_a_window():
     document_type_detail is carried by a few self-contained lines only, and the
     fallback schema has no line-specific block at all.
     """
-    assert "dtd" in group_names()
+    assert "dtd" in group_names("property")
     assert "dtd" in groups_for("flood")
-    assert "dtd" not in groups_for("gl")
-    # The fallback has no line block; its remainder window reads only the coverage
-    # and overflow lists the delivered files added to every self-contained schema.
-    assert sections_for("lineblk", None) == ("coverages", "text_sections", "additional_fields")
+    assert "dtd" not in groups_for("property")
+    # The fallback composes the common model (1.1.0) and has no line block: its
+    # remainder window reads only the forms list, as a personal line's does.
+    assert sections_for("lineblk", None) == ("forms_and_endorsements",)
 
 
 def test_the_remainder_group_claims_a_section_the_map_never_names():
     """`lineblk` is defined as the remainder, not as a list.
 
-    commercial auto's line block is called `auto`, general liability's
-    `general_liability`, and the delivered files added sections this file has
+    commercial auto's line block is called `auto`, commercial property's
+    `commercial_property`, and the delivered files added sections this file has
     never heard of. Naming them would mean the first unlisted one was silently
     dropped — which is the failure the whole map exists to prevent.
     """
     added = ("coverages", "text_sections", "additional_fields")
     assert sections_for("lineblk", "commercial_auto") == ("auto", *added)
-    assert sections_for("lineblk", "gl") == ("general_liability", *added)
+    assert sections_for("lineblk", "property") == ("commercial_property", *added)
+    # The common-model profile's remainder as well: general liability's own
+    # blocks are named nowhere in it.
+    assert {"claims_made_terms", "countersignature"} <= set(sections_for("lineblk", "gl"))
 
 
 def test_a_slice_narrows_required_rather_than_keeping_it_whole():
@@ -96,15 +99,15 @@ def test_a_slice_narrows_required_rather_than_keeping_it_whole():
     carrier, named_insured and policy as `{}`. Two windows would then both own
     carrier, and on the training side every schedule target would teach the
     model to emit an empty one."""
-    whole = schemas.load_schema("policy", None, "gl")["required"]
+    whole = schemas.load_schema("policy", None, "property")["required"]
     assert set(whole) == {"carrier", "named_insured", "policy"}
 
-    decl = schemas.load_schema("policy", None, "gl", "decl")
+    decl = schemas.load_schema("policy", None, "property", "decl")
     assert set(decl["required"]) == set(whole), "all three are declarations sections"
 
-    arrays = schemas.load_schema("policy", None, "gl", "arrays")
+    arrays = schemas.load_schema("policy", None, "property", "arrays")
     assert "required" not in arrays, "no required section survives into arrays"
-    assert set(arrays["properties"]) == set(sections_for("arrays", "gl"))
+    assert set(arrays["properties"]) == set(sections_for("arrays", "property"))
 
 
 def test_a_sliced_key_resolves_its_file_on_the_base():
@@ -119,9 +122,11 @@ def test_a_sliced_key_resolves_its_file_on_the_base():
     assert schemas.slice_of("policy:gl#arrays") == "arrays"
     assert schemas.slice_of("policy:gl") is None
 
-    for group in groups_for("gl"):
-        assert schemas.schema_version("policy", None, "gl", group) == "1.5.0"
-        assert schemas.is_canonical("policy", None, "gl")
+    # A self-contained file's version, and a common-model bundle's.
+    for lob, version in (("property", "1.5.0"), ("gl", "3.0.0+common.1.1.0")):
+        for group in groups_for(lob):
+            assert schemas.schema_version("policy", None, lob, group) == version
+            assert schemas.is_canonical("policy", None, lob)
 
 
 def test_every_slice_still_carries_the_fieldvalue_definition():
@@ -223,8 +228,8 @@ def test_every_shared_array_has_an_identifying_key():
     """An array is asked over several page windows, so a table spanning a
     boundary comes back twice. De-duplication is load-bearing, not tidying, and
     it needs a key per array."""
-    for section in sections_for("arrays", "gl"):
-        assert array_key(section), f"{section} has no identifying key to de-duplicate on"
+    for section in sections_for("arrays", "property"):
+        assert array_key(section, "property"), f"{section} has no identifying key to de-duplicate on"
 
 
 # --------------------------------------------------------------------------
@@ -307,7 +312,20 @@ def test_a_common_model_group_keeps_its_task_and_page_rule():
     assert task_for("decl") == "policy_declarations" and reads_declarations("decl")
     assert task_for("arrays") == "policy_schedule" and not reads_declarations("arrays")
     assert group_names("homeowners") == ("decl", "arrays", "lineblk")
-    assert group_names("gl") == group_names()
+    # No line is the fallback, which composes the common model since 1.1.0.
+    assert group_names() == group_names("homeowners")
+    assert group_names("property") == ("decl", "arrays", "lineblk", "dtd")
+
+
+def test_a_group_off_the_common_model_profile_keeps_its_task_and_page_rule():
+    """`dtd` is in no common-model profile, and the fallback is read with one:
+    a self-contained line's `dtd` window still has its task and its pages."""
+    from common.schema_sections import pages_for, reads_declarations, task_for
+
+    assert "dtd" not in group_names()
+    assert task_for("dtd") == "policy_endorsements" and reads_declarations("dtd")
+    routed = [1, 2, 3, 4, 5, 6, 7, 8]
+    assert pages_for("dtd", routed, declarations_page=7) == pages_for("decl", routed, declarations_page=7)
 
 
 def test_the_common_model_keys_are_their_own():
@@ -315,4 +333,16 @@ def test_the_common_model_keys_are_their_own():
     # so the units it names are not part of its key (the merge unites them).
     assert array_key("interested_parties", "homeowners") == ("role", "name")
     assert array_key("rating_modifiers", "personal_auto") == ("modifier_type", "description")
-    assert array_key("interested_parties", "gl") == ("name", "party_type")
+    assert array_key("interested_parties", "property") == ("name", "party_type")
+
+
+def test_a_classification_is_read_with_the_locations_it_rates():
+    """General liability's classifications name their location by id, and an id
+    means something only next to the row it names: they are read in the units'
+    window, so the location reference is not cut from it."""
+    from common.schemas import cross_group_references
+
+    assert "rating_exposures" in sections_for("arrays", "gl")
+    assert "locations" in sections_for("arrays", "gl")
+    assert "location_ref" not in cross_group_references("gl", "arrays")
+    assert array_key("rating_exposures", "gl") == ("class_code", "location_ref", "rating_component")

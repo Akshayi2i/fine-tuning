@@ -28,6 +28,10 @@ from inference_core.model_runner import EchoBackend, load_model
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
 GOLDEN = json.loads((FIXTURES / "golden" / "policy_0001.golden.json").read_text(encoding="utf-8"))
 OCR = (FIXTURES / "ocr" / "policy_0001_page_1.md").read_text(encoding="utf-8")
+#: The line GOLDEN is valid for: a self-contained one. With no line it would be
+#: read against the fallback, which composes common model 1.1.0: GOLDEN is
+#: the old shape there, and a bare value is bookkeeping, never a field to calibrate.
+LOB = "property"
 
 
 @pytest.fixture
@@ -40,7 +44,7 @@ def _val_rows(n: int = 4) -> list[dict]:
     for i in range(1, n + 1):
         row = build_training_row(
             "policy", f"policy_{i:04d}", [f"processed/default/policy/policy_{i:04d}/page_1.png"],
-            [OCR], "ocr_plus_image", json.dumps(GOLDEN), split="val",
+            [OCR], "ocr_plus_image", json.dumps(GOLDEN), lob=LOB, split="val",
         )
         row["val_half"] = "calibration" if i % 2 else "threshold"
         rows.append(row)

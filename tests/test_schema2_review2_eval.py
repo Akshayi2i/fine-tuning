@@ -20,6 +20,7 @@ from pathlib import Path
 import pytest
 
 from evaluation.run_eval import build_report
+from tests.test_schema2_review_eval import SELF_CONTAINED
 from tests.test_schema2_serving import AUTO, _compact_auto, _serve_replay
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures" / "schema2"
@@ -270,7 +271,7 @@ def test_a_self_contained_line_is_calibrated_on_its_old_labels(monkeypatch):
     monkeypatch.setattr(field_accuracy, "aligned_for_scoring", refuse)
     value = {"raw": "GL-1", "parsed": "GL-1", "page_ref": [1]}
     extraction = {"policy": {"policy_number": value}}
-    row = {"doc_type": "policy", "lob": "gl", "val_half": "calibration"}
+    row = {"doc_type": "policy", "lob": SELF_CONTAINED, "val_half": "calibration"}
     [(_features, correct)] = calibration_samples(
         [ValidationGeneration(row=row, golden=extraction, extraction=extraction)])["calibration"]
     assert correct
@@ -322,11 +323,11 @@ def test_without_a_verdict_a_common_model_answer_is_validated_as_before():
 
 
 def test_a_self_contained_line_is_validated_whatever_its_metadata_says():
-    from tests.test_schema2_review_eval import _coverage, _gl, _location
+    from tests.test_schema2_review_eval import _coverage, _location, _old_style
 
-    doc = _gl([_location("1", "Akron", [_coverage("PREM", "Location 1", "1000000")])])
+    doc = _old_style([_location("1", "Akron", [_coverage("PREM", "Location 1", "1000000")])])
     for verdict in (True, False):
-        metrics = _full(doc, copy.deepcopy(doc), lob="gl", schema_valid=verdict).metrics
+        metrics = _full(doc, copy.deepcopy(doc), lob=SELF_CONTAINED, schema_valid=verdict).metrics
         assert metrics["schema_validity_rate"] == 0.0
 
 

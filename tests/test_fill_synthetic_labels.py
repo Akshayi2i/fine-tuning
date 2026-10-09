@@ -134,20 +134,24 @@ def test_what_counts_as_a_replaced_identity(path, identifying):
 
 
 def test_the_delivery_is_completed_in_place_only_with_apply(tmp_path):
+    # A line still on a self-contained schema: a common-model line's twins are
+    # complete and never filled (tests/test_schema2_targets.py), and gl is one
+    # since common model 1.1.0.
     delivery, reviewed = tmp_path / "delivery", tmp_path / "reviewed"
     (delivery / "Train/gold json").mkdir(parents=True)
-    (reviewed / "Acme/gl").mkdir(parents=True)
-    (reviewed / "Acme/gl/ho_1.json").write_text(json.dumps(_source()), encoding="utf-8")
-    gold = delivery / "Train/gold json/gl__ho_1__synth_001.json"
+    (reviewed / "Acme/property").mkdir(parents=True)
+    (reviewed / "Acme/property/ho_1.json").write_text(json.dumps(_source()), encoding="utf-8")
+    gold = delivery / "Train/gold json/property__ho_1__synth_001.json"
     gold.write_text(json.dumps(_twin()), encoding="utf-8")
     with (delivery / "manifest.csv").open("w", newline="", encoding="utf-8") as fh:
         w = csv.DictWriter(fh, fieldnames=["split", "lob", "source", "kind", "gold", "pages"])
         w.writeheader()
-        w.writerow({"split": "Train", "lob": "gl", "source": "Acme/gl/ho_1.pdf",
-                    "kind": "synthetic", "gold": "Train/gold json/gl__ho_1__synth_001.json", "pages": 3})
-    dry = fill_delivery(delivery, reviewed, lines=frozenset({"gl"}))
+        w.writerow({"split": "Train", "lob": "property", "source": "Acme/property/ho_1.pdf",
+                    "kind": "synthetic", "gold": "Train/gold json/property__ho_1__synth_001.json",
+                    "pages": 3})
+    dry = fill_delivery(delivery, reviewed, lines=frozenset({"property"}))
     assert dry.filled == 1 and dry.fields_after > dry.fields_before
     assert json.loads(gold.read_text(encoding="utf-8")) == _twin()             # a dry run writes nothing
-    fill_delivery(delivery, reviewed, lines=frozenset({"gl"}), apply=True)
+    fill_delivery(delivery, reviewed, lines=frozenset({"property"}), apply=True)
     assert "general_aggregate_limit" in json.loads(gold.read_text(encoding="utf-8"))["general_liability"][
         "limits_of_insurance"]

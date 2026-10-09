@@ -22,6 +22,10 @@ GOLD = json.loads((FIXTURES / "personal_auto_6page.json").read_text(encoding="ut
 META = {"source_id": "pa", "doc_type": "policy", "lob": "personal_auto",
         "modality_mode": "ocr_plus_image"}
 
+#: A line whose schema is still self-contained, in a layout family none of whose
+#: lines has moved yet. gl was this file's until it moved (common model 1.1.0).
+SELF_CONTAINED = "property"
+
 
 def _full(got, *, gold=GOLD, **meta):
     [full] = build_report("t", [(gold, got, {**META, **meta})]).full_set()
@@ -210,7 +214,7 @@ def test_the_harness_scores_a_self_contained_line_as_before():
             "locations": [{"location_number": _env("1"), "occupancy_description": _env("Office")}]}
     got = copy.deepcopy(gold)
     got["locations"][0]["occupancy_description"] = _env("Warehouse")
-    scores = _harness_scores(got, lob="gl", gold=gold)
+    scores = _harness_scores(got, lob=SELF_CONTAINED, gold=gold)
     # Table paths are scored by list recall there, never by field match.
     assert scores["field_normalized_match_rate"] == 1.0 and scores["failures"] == []
     assert scores["list_field_recall"] == {"locations": 1.0}
@@ -337,7 +341,7 @@ def test_serving_calibrates_with_the_lines_types():
     assert seen == {False: "free_text", True: "money"}
 
 
-@pytest.mark.parametrize("lob,kind", [("personal_auto", "money"), ("gl", "free_text")])
+@pytest.mark.parametrize("lob,kind", [("personal_auto", "money"), (SELF_CONTAINED, "free_text")])
 def test_calibrators_are_fitted_under_the_types_serving_uses(lob, kind):
     from evaluation.validation_generation import ValidationGeneration, calibration_samples
 
@@ -361,7 +365,7 @@ def _flagged(value, flagged=False):
             "confidence": {"score": 0.9, "source": "vlm"}}
 
 
-def _gl(locations, amount="$500.00"):
+def _old_style(locations, amount="$500.00"):
     return {
         "policy": {"policy_number": _flagged("GL-77"), "rating_state": _flagged("OH")},
         "billing": {"amount_due": _flagged(amount)},
@@ -380,22 +384,22 @@ def _coverage(code, applies_to, limit):
 
 
 def test_a_self_contained_report_scores_as_before():
-    """Every number of an old-style gl report with a wrong value, a reordered
+    """Every number of an old-style report with a wrong value, a reordered
     table, a missing row and an invented one, as it scored before the
     common-model fixes above."""
-    gold = _gl([
+    gold = _old_style([
         _location("1", "Akron", [_coverage("PREM", "Location 1", "1000000"),
                                  _coverage("PRODCO", "All locations", "2000000")]),
         _location("2", "Dayton", [_coverage("PREM", "Location 2", "1000000")]),
         _location("3", "Toledo", []),
     ])
-    got = _gl([
+    got = _old_style([
         _location("2", "Dayton", [_coverage("PREM", "Location 2", "1000000")]),
         _location("1", "Akron", [_coverage("PREM", "Location 1", "1000000"),
                                  _coverage("PRODCO", "All locations", "3000000")]),
         _location("9", "Canton", []),
     ], amount="$550.00")
-    metadata = {"source_id": "gl-1", "doc_type": "policy", "lob": "gl",
+    metadata = {"source_id": "gl-1", "doc_type": "policy", "lob": SELF_CONTAINED,
                 "modality_mode": "ocr_plus_image",
                 "ocr_text": "GL-77 OH $500.00 Akron Dayton Toledo Location 1 Location 2 PREM"}
     [full] = build_report("t", [(gold, got, metadata)]).full_set()
@@ -407,10 +411,12 @@ def test_a_self_contained_report_scores_as_before():
 #: The report above as the scoring produced it before those fixes - except
 #: hallucination_rate, redefined on purpose (common.grounding): a value too short
 #: to look for ("OH", "1") is no longer counted as grounded (0.3333 before); and
-#: the page-list measures added since (accuracy plan, stage 0.3).
+#: the page-list measures added since (accuracy plan, stage 0.3); and the line
+#: it is filed under, gl until gl moved to the common model (1.1.0), every
+#: number unchanged by the move.
 PINNED_OLD_STYLE = {
     "auto_accept_error_rate": 0.2222, "confusable_misattribution_rate": 0.0,
-    "false_null_rate": 0.1667, "field_accuracy_by_lob": {"gl": 0.6667},
+    "false_null_rate": 0.1667, "field_accuracy_by_lob": {SELF_CONTAINED: 0.6667},
     "field_exact_match": 0.6667, "field_f1": 0.6667, "field_f1_list_fields": 0.6667,
     "field_normalized_match": 0.6667, "field_precision": 0.6667, "field_recall": 0.6667,
     "hallucination_rate": 0.3571, "list_field_precision": 0.6667, "list_field_recall": 0.6667,

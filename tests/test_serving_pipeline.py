@@ -48,6 +48,12 @@ CALIBRATION = CalibrationParams(
     method="temperature", doc_type="policy", model_version="v1", temperature=1.0
 )
 
+#: The line GOLDEN is read as. GOLDEN is in the self-contained shape
+#: (carrier.company_name); the fallback and general liability compose the
+#: common model since 1.1.0, so the pipeline's generic behaviour is checked on a
+#: line still self-contained, and in no family part-way through that move.
+LINE = "property"
+
 
 @pytest.fixture
 def client() -> BlobClient:
@@ -65,6 +71,7 @@ def _request(**over) -> ExtractionRequest:
         image_paths=["processed/default/policy/policy_0001/page_1.png"],
         ocr_text="**Applicant** Rivera Fabrication LLC",
         known_doc_type="policy",
+        known_lob=LINE,
     )
     base.update(over)
     return ExtractionRequest(**base)
@@ -332,7 +339,7 @@ def test_a_flat_document_type_also_returns_mm_dd_yyyy(client):
         "claims": [{"claim_number": "C1", "loss_date": "2024-01-01", "status": "open"}],
     })
     result = extract(
-        _request(source_id="lossrun_0001", known_doc_type="lossrun"),
+        _request(source_id="lossrun_0001", known_doc_type="lossrun", known_lob=None),
         load_model("base", client, backend_impl=EchoBackend(response)),
         StaticClassifier("lossrun"),
         CalibrationParams(method="temperature", doc_type="lossrun",
@@ -349,29 +356,45 @@ def test_a_known_lob_selects_its_canonical_schema(client):
     from common.schemas import resolved_schema, with_page_bounds
     from inference_core.input_builder import page_total
 
+    # A line other than the default request's, so it is the caller's line that
+    # selects the schema; self-contained like LINE, so GOLDEN is valid for it.
     backend = EchoBackend(RESPONSE)
     extract(
-        _request(known_lob="gl"), load_model("base", client, backend_impl=backend),
+        _request(known_lob="cyber"), load_model("base", client, backend_impl=backend),
         StaticClassifier("policy"), CALIBRATION,
     )
     from common.schema_sections import groups_for
 
     # A policy is read in windows, each constrained to its slice of the LINE's
-    # schema — so the general-liability block reaches the model through `lineblk`.
+    # schema — so the cyber block reaches the model through `lineblk`.
     schemas = [call["json_schema"] for call in backend.calls]
     assert schemas == [
-        with_page_bounds(resolved_schema("policy", None, "gl", group),
+        with_page_bounds(resolved_schema("policy", None, "cyber", group),
                          page_total(call["messages"]))
-        for group, call in zip(groups_for("gl"), backend.calls, strict=True)
+        for group, call in zip(groups_for("cyber"), backend.calls, strict=True)
     ]
-    assert any("general_liability" in schema["properties"] for schema in schemas)
+    assert any("cyber" in schema["properties"] for schema in schemas)
 
 
-def test_a_policy_with_no_known_lob_still_returns_canonical_json(model):
-    """No line means the client's canonical fallback, never the flat schema."""
-    result = extract(_request(), model, StaticClassifier("policy"), CALIBRATION)
+def test_a_policy_with_no_known_lob_still_returns_canonical_json(client):
+    """No line means the client's canonical fallback, never the flat schema. The
+    fallback composes the common model since 1.1.0: the carrier's name is
+    `name`, and the document's page count is a plain value the pipeline sets."""
+    fallback = json.dumps({
+        "carrier": {"name": _fv("Granite Mutual Insurance Co")},
+        "named_insured": {"primary_name": _fv("Rivera Fabrication LLC")},
+        "policy": {
+            "policy_number": _fv("WC-8842317-01"),
+            "effective_date": _fv("04/01/2026"),
+        },
+    })
+    result = extract(
+        _request(known_lob=None), load_model("base", client, backend_impl=EchoBackend(fallback)),
+        StaticClassifier("policy"), CALIBRATION,
+    )
     assert result.schema_valid
     assert "confidence" in result.extraction["policy"]["effective_date"]
+    assert result.extraction["document"]["page_count"] == 1
 
 
 def test_schema_invalid_output_is_rejected_not_returned(client):
@@ -416,7 +439,7 @@ def test_list_completeness_flags_reach_the_result(client):
     })
     lossrun_model = load_model("base", client, backend_impl=EchoBackend(response))
     result = extract(
-        _request(source_id="lossrun_0001", known_doc_type="lossrun"),
+        _request(source_id="lossrun_0001", known_doc_type="lossrun", known_lob=None),
         lossrun_model, StaticClassifier("lossrun"),
         CalibrationParams(method="temperature", doc_type="lossrun",
                           model_version="v1", temperature=1.0),
@@ -870,8 +893,8 @@ def test_serving_generation_is_constrained_to_the_routed_schema(client):
 
     # Every window is constrained — each to its own slice of the routed schema.
     assert [c["json_schema"] for c in backend.calls] == [
-        with_page_bounds(resolved_schema("policy", None, None, group), page_total(c["messages"]))
-        for group, c in zip(groups_for(None), backend.calls, strict=True)
+        with_page_bounds(resolved_schema("policy", None, LINE, group), page_total(c["messages"]))
+        for group, c in zip(groups_for(LINE), backend.calls, strict=True)
     ]
 
 

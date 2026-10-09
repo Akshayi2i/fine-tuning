@@ -133,7 +133,8 @@ def with_system_fields(
     """
     from common.schemas import is_common_model
 
-    if lob is not None and is_common_model("policy", None, lob):
+    # No line is the fallback, on the common model too since common model 1.1.0.
+    if is_common_model("policy", None, lob):
         return _with_common_model_system_fields(
             output, page_count=page_count, source_file_name=source_file_name, lob=lob,
             modality=modality)
@@ -160,9 +161,9 @@ DOCUMENT_MODALITIES = ("native_pdf", "scanned_pdf")
 
 def _with_common_model_system_fields(
     output: dict[str, Any], *, page_count: int | None, source_file_name: str | None,
-    lob: str | list[str], modality: str | None,
+    lob: str | list[str] | None, modality: str | None,
 ) -> dict[str, Any]:
-    from common.schemas import load_schema, schema_key
+    from common.schemas import line_of_key, load_schema, schema_key
 
     filled = dict(output)
     document = dict(filled.get("document") or {})
@@ -174,12 +175,13 @@ def _with_common_model_system_fields(
     if source_file_name:
         document["source_file_name"] = source_file_name
     filled["document"] = document
-    if not filled.get("lob_parts"):
+    line = line_of_key(schema_key("policy", None, lob))
+    if not filled.get("lob_parts") and line is not None:
         # A single-line policy has one part, and the model is never asked for it
-        # outside the declarations window. The schema requires at least one.
-        line = schema_key("policy", None, lob).split(":", 1)[1]
+        # outside the declarations window. The schema requires at least one. A
+        # policy of no known line (the fallback) has no part to state.
         filled["lob_parts"] = [{"part_id": "part_1", "lob": line}]
-    filled["policy"] = {**(filled.get("policy") or {}), "is_package": len(filled["lob_parts"]) > 1}
+    filled["policy"] = {**(filled.get("policy") or {}), "is_package": len(filled.get("lob_parts") or []) > 1}
     for name in load_schema("policy", None, lob).get("required") or []:
         if name not in filled:
             filled[name] = [] if name in ("lob_parts", "coverages") else {}
@@ -587,12 +589,14 @@ def _parts_as_line(
     schema's line written as that line; a copy when one is rewritten. A part
     of another line is left as it is (training refuses such a label)."""
     from common.lob import merge_line
-    from common.schemas import schema_key
+    from common.schemas import line_of_key, schema_key
 
     parts = label.get("lob_parts")
     if not isinstance(parts, list):
         return label
-    line = schema_key(doc_type, acord_form, lob).split(":", 1)[1]
+    line = line_of_key(schema_key(doc_type, acord_form, lob))
+    if line is None:
+        return label                 # the fallback: no line to own a part
 
     def own(part: Any) -> Any:
         name = part.get("lob") if isinstance(part, dict) else None

@@ -142,3 +142,38 @@ def test_sections_from_different_groups_combine_without_conflict():
     ])
     assert set(merged.extraction) == {"carrier", "locations", "homeowners"}
     assert not merged.conflicts
+
+
+def test_a_self_contained_line_keys_its_rows_on_its_own_map():
+    """No line is the fallback, read with the common-model profile since common
+    model 1.1.0; a self-contained line's merge names its line, so its rows are
+    keyed on its own map (a party is its name and type), not the common model's
+    (its role and name)."""
+    def party(kind, page):
+        return {"name": _fv("FIRST BANK", page), "party_type": _fv(kind, page)}
+
+    first = PolicyWindow("arrays", [3], {"interested_parties": [party("Mortgagee", 3)]})
+    second = PolicyWindow("arrays", [4], {"interested_parties": [party("Loss Payee", 4)]})
+
+    merged = merge_policy_windows([first, second], lob="property")
+
+    assert len(merged.extraction["interested_parties"]) == 2
+    assert not merged.conflicts
+
+
+def test_the_fallback_joins_a_coverage_with_no_unit_only_when_nothing_differs():
+    """The fallback has no units, so a coverage's key always lacks them: two
+    windows' rows of one code are one row only when no value both state differs,
+    as on a common-model line."""
+    def coverage(premium, page):
+        return {"coverage_code": "X_LIABILITY", "coverage_name": _fv("Liability", page),
+                "premium": _fv(premium, page)}
+
+    windows = [PolicyWindow("arrays", [3], {"coverages": [coverage("100", 3)]}),
+               PolicyWindow("arrays", [4], {"coverages": [coverage("250", 4)]}),
+               PolicyWindow("arrays", [5], {"coverages": [coverage("250", 5)]})]
+
+    rows = merge_policy_windows(windows).extraction["coverages"]
+
+    assert [row["premium"]["raw"] for row in rows] == ["100", "250"]
+    assert rows[1]["premium"]["page_ref"] == [4, 5]

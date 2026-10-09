@@ -1,0 +1,253 @@
+# SPEC_21 4.2.4 coverage codes of gl (schema 3.0.0, common model 1.1.0).
+# Built from the CGL documents of 10 seed carriers (Diamond State Insurance Company, Gemini Insurance Company, Great American Insurance Company, Security Mutual Insurance Company, Sutton National, Third Coast Insurance Company, Travelers, USLI, Utica First Insurance Company, Western World Insurance Group)
+# and, from 1.1.0, the CGL documents of 10 policy_CGL carrier folders (FORTEGRA, Great American, Hiscox, Indium, Johnson & Johnson, Liberty Mutual, McNeil & Company, Philadelphia Insurance Companies, Russell Bond, XS Broker),
+# and, from 1.2.0, six more CGL documents in 4 folders (The Main Street America Group, Scottsdale Insurance Company, USLI,
+# Utica First),
+# read in place (seed golds not signed off yet), and the pre-SPEC_21 gl.json 1.5.0.
+# aliases: coverage names AND limit captions as the documents print them (whitespace collapsed; a dash
+# the text layer has no Unicode for is written '-'). ISO declarations print a CGL's limits as captions
+# ('Each Occurrence Limit'), not as coverage names, so each caption is an alias of the coverage it
+# limits: L1 codes a printed row by its name (fideon/l1/spec21.py coverage_code_for). Codes are
+# LOB-prefixed (GL_); a coverage the common model shares across lines uses its X_ code
+# (common_model.json fideon:shared_coverage_codes); shared: true marks those.
+# carriers: how many of the 23 carrier folders (10 seed + 13 policy_CGL) print one of the code's names or
+# captions in their CGL documents (first 8 pages of a seed, first 20 of a policy_CGL document).
+# Endorsement-coverages (X_ADDITIONAL_INSURED, X_PRIMARY_NONCONTRIBUTORY, X_WAIVER_OF_SUBROGATION,
+# GL_COVERAGE_EXTENSION, GL_SNOW_PLOW_OPERATIONS) are coverages granted by an endorsement: one coverages[] entry
+# per endorsement form, coverage_name its printed title, form_refs its form number as printed in
+# forms_and_endorsements[].form_number; usually no limits.
+# replaces_codes: the gl 2.0.0 code of the same coverage, renamed to the common model 1.1.0 shared code in
+# 3.0.0 (CR-GL-03; gl.crosswalk.yaml). The aliases here are gl's carrier and ISO form titles; the shared
+# code's generic names are in common_model.json.
+# GL_DAMAGE_TO_PREMISES_RENTED: the default limit type stays per_location (L1 uses a default only when it is the
+# single one). A limit printed per fire ('Fire Damage (Any One Fire)') is per_occurrence in a gold; L1 does not yet
+# read 'any one fire' as a printed qualifier (CR-GL-20).
+lob: gl
+schema_version: 3.0.0
+common_model_version: 1.1.0
+code_prefix: GL_
+codes:
+- code: GL_BI_PD
+  name: 'Coverage A - Bodily injury and property damage liability (its limits: Each Occurrence Limit, General Aggregate
+    Limit)'
+  aliases:
+  - Coverage A Bodily Injury and Property Damage Liability
+  - Coverage A - Bodily Injury and Property Damage Liability
+  - Bodily Injury and Property Damage (Coverage L)
+  - Coverage L - Bodily Injury/Property Damage
+  - Each Occurrence Limit
+  - Each Occurrence
+  - General Aggregate Limit (Other Than Products-Completed Operations)
+  - General Aggregate Limit (Other Than Products Completed Operations)
+  - General Aggregate (except Products-Completed Operations Limit)
+  - General Aggregate Limit - other than Products/Completed Work
+  - General Aggregate Limit
+  - General Aggregate
+  - General Aggregate Limit (Other Than Products-Completed Ops)
+  - Designated Construction Project(s) General Aggregate Limit
+  - Independent Contractors/Subcontractors Sublimit
+  - Per Occurrence Limit
+  default_limit_types:
+  - per_occurrence
+  - aggregate
+  - sublimit
+  carriers: 21
+- code: GL_PRODUCTS_COMPLETED_OPS
+  name: Products-completed operations (Products-Completed Operations Aggregate Limit)
+  aliases:
+  - Products-Completed Operations Aggregate Limit
+  - Products/Completed Operations Aggregate Limit
+  - Products/Completed Operations (Coverage N)
+  - Coverage N - Products/Completed Work
+  - Aggregate Limit - Products/Completed Work
+  - Products - Completed Operations Aggregate Limit
+  - Products/Completed Operations Liability Coverage Part
+  - PRODUCTS - COMP/OP AGG
+  default_limit_types:
+  - products_completed_ops_aggregate
+  carriers: 18
+- code: GL_PERSONAL_ADVERTISING_INJURY
+  name: Coverage B - Personal and advertising injury liability (Personal and Advertising Injury Limit)
+  aliases:
+  - Personal and Advertising Injury Limit
+  - Personal & Advertising Injury Limit
+  - Personal/Advertising Injury Limit
+  - Coverage B Personal and Advertising Injury Liability
+  - Coverage P - Personal and Advertising Injury Liability
+  - Personal and Advertising Injury Liability
+  - Personal & Advertising Injury Limit (Any One Person/Organization)
+  - PERSONAL & ADV INJURY
+  default_limit_types:
+  - per_person
+  carriers: 19
+- code: X_MED_PAY
+  name: Medical payments - Coverage C (Medical Expense Limit)
+  aliases:
+  - Medical Expense Limit
+  - Medical Expenses Limit
+  - Medical Payments Limit
+  - Medical Payments Limit (any one person)
+  - Medical Payments (Coverage M)
+  - Coverage C Medical Payments
+  - Coverage M - Medical Payments
+  - Medical Expense (Any One Person)
+  - Medical Payments
+  - Medical Payments (limit per person)
+  - MED EXP (Any one person)
+  default_limit_types:
+  - per_person
+  shared: true
+  carriers: 19
+- code: GL_DAMAGE_TO_PREMISES_RENTED
+  name: Damage to premises rented to you, or fire legal liability (Damage To Premises Rented To You Limit, Fire
+    Damage Limit)
+  aliases:
+  - Damage to Premises Rented to You Limit
+  - Damage to Premises Rented to You
+  - Fire Damage Limit
+  - Fire Legal Liability Limit
+  - Fire Legal Liability
+  - Coverage O - Fire Legal Liability
+  - Fire Damage
+  - Fire Damage (Any One Fire)
+  - Damage to Premises Rented to You (limit per premises)
+  - Damages To Premises Rented To You (Any One Premises)
+  - DAMAGE TO RENTED PREMISES (Ea occurrence)
+  - Broadened Coverage for Damage to Premises Rented to You
+  default_limit_types:
+  - per_location
+  carriers: 18
+- code: GL_LIQUOR_LIABILITY
+  name: Liquor liability (Each Common Cause Limit, Liquor Aggregate Limit)
+  aliases:
+  - Liquor Liability Coverage Part
+  - Liquor Liability Coverage Form
+  - Liquor Each Common Cause Limit
+  - Each Common Cause Limit
+  - Liquor Aggregate Limit
+  default_limit_types:
+  - per_occurrence
+  carriers: 8
+- code: GL_ABUSE_MOLESTATION
+  name: Abuse or molestation liability
+  aliases:
+  - Abuse or Molestation Coverage Form
+  - Each Act of Abuse
+  default_limit_types:
+  - per_occurrence
+  carriers: 2
+- code: GL_PROFESSIONAL_LIABILITY
+  name: Professional liability written with the general liability
+  aliases:
+  - Professional Liability
+  - Professional Liability Coverage
+  - Professional Liability Coverage Part
+  - Each Act, Error or Omission
+  - Each Professional Incident Limit
+  - Each Claim Limit of Liability
+  default_limit_types:
+  - per_claim
+  carriers: 13
+- code: X_HIRED_NONOWNED_AUTO
+  name: Hired and non-owned auto liability
+  aliases:
+  - Hired and Non-Owned Auto
+  - Nonowned Hired Auto Liability
+  - Non Owned Hired Auto Liability Coverage New York
+  - Hired and Non-Owned Auto
+  default_limit_types:
+  - per_occurrence
+  - combined_single
+  shared: true
+  carriers: 3
+- code: GL_CARE_CUSTODY_CONTROL
+  name: Care, custody or control (limited coverage)
+  aliases:
+  - Care, Custody, Control Limited Coverage
+  - Care, Custody or Control
+  default_limit_types:
+  - per_occurrence
+  carriers: 7
+- code: X_ADDITIONAL_INSURED
+  name: Additional insured
+  aliases:
+  - Blanket Additional Insured
+  - Additional Insured - Mortgagee, Assignee or Receiver
+  - Additional Insured - Owners, Lessees or Contractors - Completed Operations
+  - Additional Insured - Owners, Lessees or Contractors - Scheduled Person or Organization
+  default_limit_types: []
+  shared: true
+  carriers: 14
+  replaces_codes:
+  - GL_ADDITIONAL_INSURED
+- code: X_PRIMARY_NONCONTRIBUTORY
+  name: Primary and noncontributory
+  aliases:
+  - Primary and Noncontributory Endorsement
+  - Primary and Noncontributory - Other Insurance Condition
+  default_limit_types: []
+  shared: true
+  carriers: 5
+  replaces_codes:
+  - GL_PRIMARY_NONCONTRIBUTORY
+- code: X_WAIVER_OF_SUBROGATION
+  name: Waiver of subrogation
+  aliases:
+  - Blanket Waiver of Subrogation
+  - Waiver of Transfer of Rights of Recovery Against Others to Us
+  default_limit_types: []
+  shared: true
+  carriers: 6
+  replaces_codes:
+  - GL_WAIVER_OF_SUBROGATION
+- code: GL_EMPLOYEE_BENEFITS_LIABILITY
+  name: Employee benefits liability (Each Employee Limit, Aggregate Limit)
+  aliases:
+  - Employee Benefits Liability
+  - Employee Benefits Liability Coverage
+  default_limit_types:
+  - each_employee
+  - aggregate
+  carriers: 1
+- code: GL_POLLUTION_LIABILITY
+  name: Pollution liability written with the general liability
+  aliases:
+  - Pollution Liability Coverage Part
+  - Limited Pollution Coverage
+  - Pesticide or Herbicide Applicator - Limited Pollution Coverage
+  default_limit_types:
+  - per_occurrence
+  - aggregate
+  carriers: 5
+- code: GL_COVERAGE_EXTENSION
+  name: CGL coverage extension (broadening) endorsement
+  aliases:
+  - Commercial General Liability Extension
+  - General Liability Broadening Endorsement
+  - Contractors Extender
+  - Contractors Extender Endorsement Deluxe
+  - Contractors Custom Protector Coverages
+  - Fitness and Wellness Liability Insurance Extension
+  - Technology Services Extension Endorsement
+  - Contractors Extension Endorsement
+  default_limit_types: []
+  carriers: 8
+- code: GL_SNOW_PLOW_OPERATIONS
+  name: Snow plow or snow removal operations coverage
+  aliases:
+  - Snow Plow Operations Coverage
+  - Snow Removal Coverage
+  - Snow Removal Operations Coverage
+  default_limit_types: []
+  carriers: 3
+- code: X_TERRORISM
+  name: Terrorism (TRIA)
+  aliases:
+  - Terrorism Coverage
+  - Terrorism
+  - Terrorism Risk Insurance Act
+  - Certified Terrorism Loss
+  default_limit_types:
+  - other
+  shared: true
+  carriers: 20

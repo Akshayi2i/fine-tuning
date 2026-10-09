@@ -3,8 +3,8 @@
   "$id": "common_model.json",
   "title": "Fideon canonical common model",
   "description": "SPEC_21 §4.2. The shared envelope and building blocks every policy_check LOB schema composes by $ref ('../common/common_model.json#/$defs/<name>'). This file is a $defs library, not a schema a document is validated against directly. Field names here are fixed: a LOB schema never renames or adds to them; a missing concept is a change request to the common-model owner. Every limit lives in coverages[].limits[].",
-  "fideon:common_model_version": "1.0.0",
-  "fideon:status": "field list approved by the project owner, 3 October 2026",
+  "fideon:common_model_version": "1.1.0",
+  "fideon:status": "field list approved by the project owner, 3 October 2026; 1.1.0 (8 October 2026) adds change requests CR-GL-02, CR-GL-03, CR-GL-12 and CR-GL-17",
   "fideon:envelope_blocks": [
     "document",
     "carrier",
@@ -288,6 +288,30 @@
       "default_limit_types": [
         "other"
       ]
+    },
+    "X_ADDITIONAL_INSURED": {
+      "name": "Additional insured",
+      "aliases": [
+        "Additional Insured",
+        "Blanket Additional Insured"
+      ],
+      "default_limit_types": []
+    },
+    "X_PRIMARY_NONCONTRIBUTORY": {
+      "name": "Primary and noncontributory",
+      "aliases": [
+        "Primary and Noncontributory",
+        "Primary and Noncontributory Endorsement"
+      ],
+      "default_limit_types": []
+    },
+    "X_WAIVER_OF_SUBROGATION": {
+      "name": "Waiver of subrogation",
+      "aliases": [
+        "Waiver of Subrogation",
+        "Blanket Waiver of Subrogation"
+      ],
+      "default_limit_types": []
     }
   },
   "$defs": {
@@ -1948,6 +1972,14 @@
       ],
       "description": "What a premium item is charged for."
     },
+    "RatingComponent": {
+      "type": "string",
+      "enum": [
+        "premises_operations",
+        "products_completed_operations"
+      ],
+      "description": "Rating column of a classification: premises_operations is the premises-operations column ('All Other'); products_completed_operations is the products-completed operations column ('Pr/Co', 'Prod./Comp. Ops')."
+    },
     "Limit": {
       "type": "object",
       "description": "A limit. Always inside the coverage it limits. Split limits (auto 100/300/50) are three entries (per_person, per_accident, property_damage); sublimits are 'sublimit' entries with a description.",
@@ -2245,8 +2277,7 @@
             "Endorsement Effective Date",
             "Policy Change Effective Date",
             "Effective Date of Change",
-            "Change Effective",
-            "Effective Date/Transaction"
+            "Change Effective"
           ]
         },
         "transaction_reason": {
@@ -2416,6 +2447,15 @@
         "admitted_status": {
           "$ref": "#/$defs/AdmittedStatusValue",
           "description": "Whether the writing company is admitted or non-admitted in the state."
+        },
+        "financial_rating": {
+          "$ref": "#/$defs/FieldValue",
+          "fideon:aliases": [
+            "A.M. Best Rating",
+            "AM Best Rating",
+            "A.M Best Rated"
+          ],
+          "description": "Financial-strength rating of the writing company as printed, e.g. the A.M. Best rating and size class 'A+ XV'."
         }
       }
     },
@@ -2446,8 +2486,7 @@
             "Agent No.",
             "Agent ID",
             "Agent Number",
-            "Agency ID",
-            "Agency Number"
+            "Agency ID"
           ],
           "description": "Code the carrier assigns to the agency."
         },
@@ -3021,10 +3060,17 @@
         },
         "minimum_earned": {
           "$ref": "#/$defs/MoneyValue",
-          "description": "The least premium kept on cancellation; not the same as `minimum`.",
+          "description": "The least premium kept on cancellation, as an amount; not the same as `minimum`. A percentage goes to `minimum_earned_percent`.",
           "fideon:aliases": [
             "Minimum Earned Premium"
           ]
+        },
+        "minimum_earned_percent": {
+          "$ref": "#/$defs/PercentValue",
+          "fideon:aliases": [
+            "Minimum Earned Premium Percentage"
+          ],
+          "description": "The least premium kept on cancellation, printed as a percentage of the premium (e.g. 'Minimum Earned Premium: 25%'). An amount goes to `minimum_earned`."
         },
         "change": {
           "$ref": "#/$defs/MoneyValue",
@@ -3043,10 +3089,7 @@
           "items": {
             "$ref": "#/$defs/PremiumItem"
           },
-          "description": "Premium lines: per coverage, per unit or per part.",
-          "fideon:aliases": [
-            "Unit Premium"
-          ]
+          "description": "Premium lines: per coverage, per unit or per part."
         },
         "taxes_fees": {
           "type": "array",
@@ -3064,8 +3107,7 @@
             "Taxable Fees",
             "NY Fire Fee",
             "Fire Fee",
-            "Motor Vehicle Law Enforcement Fee",
-            "Policy Taxes/Fees"
+            "Motor Vehicle Law Enforcement Fee"
           ],
           "description": "Taxes and fees charged."
         },
@@ -3171,8 +3213,7 @@
           "$ref": "#/$defs/DateValue",
           "fideon:aliases": [
             "Due Date",
-            "Payment Due By",
-            "Due By"
+            "Payment Due By"
           ],
           "description": "Date payment is due."
         },
@@ -3206,7 +3247,8 @@
             "Edition",
             "Edition Date"
           ],
-          "description": "Edition date of the form as printed (often month and year only, e.g. '05 11')."
+          "description": "Edition date of the form as printed (often month and year only, e.g. '05 11').",
+          "fideon:code_parsed": "MM/YY"
         },
         "title": {
           "$ref": "#/$defs/FieldValue",
@@ -3235,11 +3277,7 @@
         },
         "premium": {
           "$ref": "#/$defs/MoneyValue",
-          "description": "Premium charged for the form or endorsement.",
-          "fideon:aliases": [
-            "Endorsement Premium",
-            "Endorsment Premium"
-          ]
+          "description": "Premium charged for the form or endorsement."
         },
         "page_range": {
           "type": "array",
@@ -3819,9 +3857,7 @@
           "fideon:aliases": [
             "HIN",
             "Hull ID",
-            "Hull Identification Number",
-            "Hull ID #",
-            "Hull Identification #"
+            "Hull Identification Number"
           ],
           "description": "Hull identification number."
         },
@@ -3869,8 +3905,7 @@
           "fideon:aliases": [
             "Hull Value",
             "Agreed Hull Value",
-            "Boat Value",
-            "Watercraft and Auxiliary Equipment Value"
+            "Boat Value"
           ],
           "description": "Insured value of the hull."
         },
@@ -3890,8 +3925,7 @@
           "fideon:aliases": [
             "Navigation Area",
             "Navigational Limits",
-            "Cruising Area",
-            "Navigation Limits"
+            "Cruising Area"
           ],
           "description": "Waters the watercraft may navigate under the policy."
         }
@@ -4039,6 +4073,10 @@
             "Estimated Annual Premium"
           ],
           "description": "Premium for the exposure line."
+        },
+        "rating_component": {
+          "$ref": "#/$defs/RatingComponent",
+          "description": "Which printed rating column this row holds, when the schedule prints a rate and premium per classification for premises-operations ('All Other') and for products-completed operations ('Pr/Co'): one row per column, with the same class_code, class_description and location_ref. Omitted when the classification has one rate."
         },
         "part": {
           "type": "string",
@@ -4450,8 +4488,7 @@
         "Schedule of Coverages",
         "Limits of Insurance",
         "Limits of Liability",
-        "Policy Coverages",
-        "Coverages/Endorsements"
+        "Policy Coverages"
       ]
     },
     "deductibles": {
@@ -4510,11 +4547,7 @@
       "type": "array",
       "items": {
         "$ref": "#/$defs/Driver"
-      },
-      "fideon:aliases": [
-        "Named Operators",
-        "Drivers and household residents"
-      ]
+      }
     },
     "watercraft": {
       "type": "array",

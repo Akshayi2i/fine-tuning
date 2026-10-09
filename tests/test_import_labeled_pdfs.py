@@ -33,6 +33,12 @@ GOLDEN = json.loads(
     .read_text(encoding="utf-8")
 )
 
+#: The line a bundle here is filed under unless a test says otherwise: one whose
+#: schema is still self-contained, the shape GOLDEN is written in. A bundle of no
+#: line is checked against the fallback, which composes the common model since
+#: common model 1.1.0, and GOLDEN is not that shape.
+LINE = "property"
+
 
 @pytest.fixture
 def client() -> BlobClient:
@@ -70,8 +76,8 @@ def bundle(tmp_path, name="acme-wc-2026", *, golden=None, metadata=None, pdf=b"%
     (directory / "golden.json").write_text(
         json.dumps(golden if golden is not None else GOLDEN), encoding="utf-8"
     )
-    if metadata is not None:
-        (directory / "metadata.json").write_text(json.dumps(metadata), encoding="utf-8")
+    metadata = {"lob": [LINE]} if metadata is None else metadata
+    (directory / "metadata.json").write_text(json.dumps(metadata), encoding="utf-8")
     return directory
 
 

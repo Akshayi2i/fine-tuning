@@ -159,7 +159,7 @@ def test_the_merge_joins_the_fragment_to_the_only_vehicle_and_says_so():
     first = window_target(VEHICLE, "commercial_auto", _plan([4, 5, 6], 0))
     second = window_target(VEHICLE, "commercial_auto", _plan([7, 8, 9], 1))
     merged = merge_policy_windows([PolicyWindow("lineblk", [4, 5, 6], first),
-                                   PolicyWindow("lineblk", [7, 8, 9], second)])
+                                   PolicyWindow("lineblk", [7, 8, 9], second)], lob="commercial_auto")
     (vehicle,) = merged.extraction["auto"]["vehicles"]
     assert vehicle["vin"]["raw"] == "1HGCM82633A004352" and len(vehicle["coverages"]) == 2
     assert "auto.vehicles:joined_without_identifier" in merged.review_flags
@@ -170,10 +170,11 @@ def test_a_fragment_is_not_joined_when_two_vehicles_could_own_it():
         return {"vin": _env(vin, 1)}
 
     fragment = {"coverages": [{"coverage_name": _env("Collision", 2)}]}
+    # The line named: no line is the common-model fallback, merged by its own rules.
     merged = merge_policy_windows([
         PolicyWindow("lineblk", [1], {"auto": {"vehicles": [vehicle("VIN-A"), vehicle("VIN-B")]}}),
         PolicyWindow("lineblk", [2], {"auto": {"vehicles": [fragment]}}),
-    ])
+    ], lob="commercial_auto")
     assert len(merged.extraction["auto"]["vehicles"]) == 3
     assert not merged.joined_unidentified
 
@@ -184,12 +185,14 @@ def test_a_single_window_group_keeps_a_value_that_records_no_page():
              "Notice to Jane Rivera"]
     label = {"named_insured": {"primary_name": {"raw": "Jane Rivera", "parsed": "Jane Rivera", "page_ref": []}},
              "policy": {}, "carrier": {}}
+    # A self-contained line: a common-model line's view requires every value to
+    # cite a page (general liability composes the common model since 1.1.0).
     decl = PolicyWindowPlan("decl", 0, (1, 2, 3), single=True)
-    sections = multi_window_sections("gl", [decl])
+    sections = multi_window_sections("property", [decl])
     assert "named_insured" not in sections
     placed = with_inferred_pages(label, pages, sections=sections)
     assert placed is label
-    assert window_target(placed, "gl", decl)["named_insured"]["primary_name"]["raw"] == "Jane Rivera"
+    assert window_target(placed, "property", decl)["named_insured"]["primary_name"]["raw"] == "Jane Rivera"
 
 
 def test_a_multi_window_group_still_gets_its_pages_inferred():

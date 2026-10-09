@@ -61,7 +61,9 @@ def _common_model_profile() -> dict[str, Any]:
 
 def _profile(lob: str | list[str] | None) -> dict[str, Any]:
     """The section map ``lob`` is read with: the common-model profile for a
-    line whose schema composes the common model, the map above otherwise."""
+    line whose schema composes the common model, the map above otherwise. No
+    line is the fallback, which composes the common model since common model
+    1.1.0."""
     from common.schemas import is_common_model
 
     return _common_model_profile() if is_common_model("policy", None, lob) else _map()
@@ -79,7 +81,20 @@ def group_names(lob: str | list[str] | None = None) -> tuple[str, ...]:
 
 
 def task_for(group: str) -> str:
-    return str(_declared(group)["task"])
+    return str(_rule(group)["task"])
+
+
+def _rule(group: str) -> dict[str, Any]:
+    """A group's title, task and page rule. They are declared once, for every
+    line - a common-model profile carries them unchanged - so they are read
+    from the map whatever line the group is asked on (``dtd`` has no place in
+    the common-model profile, and the fallback is read with it)."""
+    try:
+        return _map()["groups"][group]
+    except KeyError:
+        raise SectionMapError(
+            f"no section group {group!r}; declared groups: {list(_map()['groups'])}"
+        ) from None
 
 
 def _declared(group: str, lob: str | list[str] | None = None) -> dict[str, Any]:
@@ -143,7 +158,7 @@ def groups_for(lob: str | list[str] | None = None) -> tuple[str, ...]:
 
 def reads_declarations(group: str) -> bool:
     """Whether ``group`` reads the declarations pages rather than the routed set."""
-    return str(_declared(group)["pages"]) == "declarations"
+    return str(_rule(group)["pages"]) == "declarations"
 
 
 def pages_for(
@@ -164,7 +179,7 @@ def pages_for(
     for the policy-level fields, and every one of them would come back null on
     exactly the documents most likely to be messy.
     """
-    rule = str(_declared(group)["pages"])
+    rule = str(_rule(group)["pages"])
     if rule == "routed":
         return sorted(set(routed_pages))
     if rule != "declarations":

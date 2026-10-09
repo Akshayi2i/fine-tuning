@@ -17,7 +17,12 @@ LABEL = {"policy": {"policy_number": _env("HO-1"), "effective_date": _env("01/01
          "forms_and_endorsements": [{"form_number": _env("HO 00 03")}, {"form_number": _env("HO 04 90")}]}
 
 
-def _meta(source="p1", lob="gl", ocr="HO-1 01/01/2026 01/01/2027 1200", mode="ocr_plus_image"):
+#: A self-contained line, scored on the label above as it is: a common-model
+#: line's report narrows it to the common model's shape first.
+LINE = "cyber"
+
+
+def _meta(source="p1", lob=LINE, ocr="HO-1 01/01/2026 01/01/2027 1200", mode="ocr_plus_image"):
     return {"source_id": source, "doc_type": "policy", "lob": lob, "modality_mode": mode,
             "ocr_text": ocr}
 
@@ -47,10 +52,10 @@ def test_table_precision_counts_only_rows_the_model_wrote():
 def test_accuracy_is_broken_down_by_line_and_by_field():
     perfect = {"policy": dict(LABEL["policy"])}
     no_premium = {"policy": {k: v for k, v in LABEL["policy"].items() if k != "account_id"}}
-    m = _metrics([(LABEL, perfect, _meta("p1", "gl")),
-                  (LABEL, no_premium, _meta("p2", "gl")),
+    m = _metrics([(LABEL, perfect, _meta("p1", LINE)),
+                  (LABEL, no_premium, _meta("p2", LINE)),
                   (LABEL, {}, _meta("p3", "property"))])
-    assert m["field_accuracy_by_lob"] == {"gl": 0.875, "property": 0.0}
+    assert m["field_accuracy_by_lob"] == {LINE: 0.875, "property": 0.0}
     weakest = m["weakest_fields"]
     assert weakest[0]["field"] == "policy.account_id"          # right once in 3
     assert weakest[0]["accuracy"] == pytest.approx(1 / 3, abs=1e-4) and weakest[0]["scored"] == 3

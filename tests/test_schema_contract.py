@@ -688,17 +688,21 @@ def test_no_fideon_key_survives_into_the_schema_the_model_sees():
 def test_a_canonical_schema_version_comes_from_fideon_source():
     """The self-contained files carry no top-level `version`; theirs is under
     `fideon:source`. A common-model overlay's is the pair: its own and the common
-    model's, written onto the bundle.
+    model's, written onto the bundle. General liability and the fallback are
+    overlays since common model 1.1.0.
 
     `schema_version` is called for every registered schema when a corpus manifest
     is written, so reading the wrong path fails the whole build.
     """
     from common.schemas import schema_version
 
-    assert schema_version("policy", None, ["gl"]) == "1.5.0"
+    assert schema_version("policy", None, ["property"]) == "1.5.0"
     assert schema_version("policy", None, ["management_liability"]) == "3.1.0"
-    assert schema_version("policy", None, ["homeowners"]) == "1.0.0+common.1.0.0"
-    assert schema_version("policy") == schema_version("policy", None, ["commercial_auto"])
+    assert schema_version("policy", None, ["homeowners"]) == "1.0.0+common.1.1.0"
+    assert schema_version("policy", None, ["gl"]) == "3.0.0+common.1.1.0"
+    assert schema_version("policy") == "1.1.0+common.1.1.0"
+    # A line with no file of its own reads the fallback's.
+    assert schema_version("policy", None, ["a_line_with_no_file"]) == schema_version("policy")
 
 
 def test_a_canonical_schema_validates_the_fieldvalue_envelope():
@@ -717,8 +721,8 @@ def test_a_canonical_schema_validates_the_fieldvalue_envelope():
         "named_insured": {"primary_name": fv},
         "policy": {"policy_number": fv},
     }
-    assert is_valid(whole, "policy", None, ["gl"])
-    assert required_fields("policy", None, ["gl"]) == [
+    assert is_valid(whole, "policy", None, ["property"])
+    assert required_fields("policy", None, ["property"]) == [
         "carrier", "named_insured", "policy",
     ]
 
@@ -728,7 +732,7 @@ def test_a_canonical_schema_validates_the_fieldvalue_envelope():
     from common.schemas import iter_validation_errors
 
     bare = {**whole, "carrier": {"company_name": {"raw": "X"}}}
-    errors = list(iter_validation_errors(bare, "policy", None, ["gl"]))
+    errors = list(iter_validation_errors(bare, "policy", None, ["property"]))
     assert any("'confidence' is a required property" in e for e in errors), (
         f"validation did not enforce the FieldValue envelope; got: {errors[:3]}"
     )
@@ -815,9 +819,9 @@ def test_the_corpus_drift_check_reads_the_key_the_manifest_writes():
     from inference_core.input_builder import InputBuilderError, build_messages
 
     built = build_messages("policy", ["p1.png"], ["text"], "ocr_plus_image", lob="homeowners")
-    assert built.schema_version == "1.0.0+common.1.0.0"
+    assert built.schema_version == "1.0.0+common.1.1.0"
 
-    built.assert_matches_corpus({"schema_versions": {"policy:homeowners": "1.0.0+common.1.0.0"}})
+    built.assert_matches_corpus({"schema_versions": {"policy:homeowners": "1.0.0+common.1.1.0"}})
     with pytest.raises(InputBuilderError, match="drift"):
         built.assert_matches_corpus({"schema_versions": {"policy:homeowners": "0.0.1"}})
     # A pin for a different line says nothing about this row.

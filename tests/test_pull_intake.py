@@ -16,7 +16,7 @@ from artifact_registry import paths
 from artifact_registry.blob_client import AccessDeniedError, BlobClient, InMemoryBackend
 from data_pipeline.ingestion import pull_intake as intake
 from data_pipeline.ingestion.import_labeled_pdfs import import_batch
-from tests.test_import_labeled_pdfs import GOLDEN
+from tests.test_import_labeled_pdfs import GOLDEN, LINE
 
 
 @pytest.fixture
@@ -34,7 +34,7 @@ def _stage(backend, batch="personal-v1", docs=("doc-a", "doc-b")):
         base = f"intake/{batch}/{name}"
         backend.write("raw", f"{base}/policy.pdf", f"%PDF-1.7 {name}".encode())
         backend.write("raw", f"{base}/golden.json", json.dumps(GOLDEN).encode())
-        backend.write("raw", f"{base}/metadata.json", json.dumps({"lob": "gl"}).encode())
+        backend.write("raw", f"{base}/metadata.json", json.dumps({"lob": LINE}).encode())
 
 
 # --------------------------------------------------------------------------

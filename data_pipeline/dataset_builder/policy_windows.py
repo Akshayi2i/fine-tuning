@@ -360,12 +360,14 @@ def _with_own_part(label: dict[str, Any], lob: str | list[str] | None) -> dict[s
     rewritten; ``label`` itself otherwise.
     """
     from common.lob import merge_line
-    from common.schemas import schema_key
+    from common.schemas import line_of_key, schema_key
 
     parts = label.get("lob_parts")
     if not isinstance(parts, list) or not parts:
         return label
-    line = schema_key("policy", None, lob).split(":", 1)[1]
+    line = line_of_key(schema_key("policy", None, lob))
+    if line is None:
+        return label                 # the fallback: a package policy lists every one of its lines
     named = [part.get("lob") if isinstance(part, dict) else None for part in parts]
     foreign = [name for name in named
                if name is not None and merge_line(str(name).strip().lower()) != line]
@@ -413,9 +415,9 @@ def _check_writable(target: dict[str, Any], lob: str | list[str] | None, plan: P
     value invented. So it is raised, never taught around: the label, or the
     view, is wrong. The first failing path is named.
     """
-    from common.schemas import schema_key
+    from common.schemas import line_of_key, schema_key
 
-    line = schema_key("policy", None, lob).split(":", 1)[1]
+    line = line_of_key(schema_key("policy", None, lob))
     errors = list(_view_validator(line, plan.group).iter_errors(target))
     if not errors:
         return
@@ -429,7 +431,7 @@ def _check_writable(target: dict[str, Any], lob: str | list[str] | None, plan: P
 
 
 @cache
-def _view_validator(line: str, group: str) -> Draft202012Validator:
+def _view_validator(line: str | None, group: str) -> Draft202012Validator:
     """A common-model line's slice of the model view, as a validator: the schema
     a window of ``group`` is decoded against (common.schemas.resolved_schema).
     Cached: every window of every document of the line asks for it."""

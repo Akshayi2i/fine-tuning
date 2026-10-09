@@ -28,6 +28,7 @@ that rule, "configure a scope" would become "waive a gate".
 from __future__ import annotations
 
 import re
+from collections.abc import Collection
 from dataclasses import dataclass, field
 from functools import lru_cache
 from typing import Any
@@ -345,6 +346,36 @@ def _build(name: str, body: dict[str, Any]) -> Scope:
             "(arch v2.1 §15.2)."
         )
     return scope
+
+
+def assert_one_output_shape(scope: Scope, lines_present: Collection[str] | None = None) -> None:
+    """Refuse a scope that would train on two output shapes: documents of a
+    layout family's lines already on the common model and of its lines still on
+    self-contained files (:func:`common.schemas.partly_migrated_families`).
+
+    ``lines_present`` - the lines the corpus holds documents of (the corpus
+    manifest's ``policy_line_counts``) - narrows it to the shapes actually there:
+    a scope covering general liability trains while the corpus holds no
+    general-liability documents, or none of its family's other lines. Without
+    it, covering both kinds of line is enough to refuse.
+    """
+    from common.config import lobs_in_family
+    from common.schemas import partly_migrated_families
+
+    if "policy" not in scope.doc_types:
+        return
+    for family, still_old in partly_migrated_families().items():
+        lines = set(lobs_in_family(family))
+        covered = lines & set(scope.lines) if scope.lines else lines
+        if lines_present is not None:
+            covered &= set(lines_present)
+        old, new = covered & set(still_old), covered - set(still_old)
+        if old and new:
+            raise ScopeError(
+                f"scope {scope.name!r} would train layout family {family!r} on two output shapes: "
+                f"{', '.join(sorted(new))} on the common model and {', '.join(sorted(old))} on "
+                "self-contained files. Train it once the whole family has moved, or narrow its lines."
+            )
 
 
 @lru_cache(maxsize=1)

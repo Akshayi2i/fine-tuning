@@ -153,8 +153,8 @@ common_model:
   groups:
     decl: [document, carrier, producer, named_insured, policy, lob_parts, premium, billing]
     arrays: [coverages, deductibles, interested_parties, locations, buildings, vehicles,
-             drivers, watercraft, scheduled_items, rating_modifiers, underlying_insurance,
-             additional_fields]
+             drivers, watercraft, scheduled_items, rating_exposures, rating_modifiers,
+             underlying_insurance, additional_fields]
     lineblk: remainder
 
   # Never asked for: the full-text tier is the text path's, not the model's.
@@ -196,6 +196,9 @@ common_model:
     # with two loan numbers, one discount at two percents stays two rows).
     interested_parties: [role, name]
     rating_modifiers: [modifier_type, description]
+    # A classification row: one class code at one location, per rating column
+    # (premises-operations and products-completed operations are two rows).
+    rating_exposures: [class_code, location_ref, rating_component]
     underlying_insurance: [coverage_code, policy_number]
     forms_and_endorsements: [form_number, edition_date]
     additional_fields: [label, value]

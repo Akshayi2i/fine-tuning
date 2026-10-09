@@ -401,7 +401,7 @@ def field_report(answer: dict[str, Any] | None, gold: dict[str, Any] | None = No
     graded = gold is not None
     declared, unasked = _field_sets(doc_type, acord_form, lob)
     system = {f"{section}.{name}" for section, name in SYSTEM_SUPPLIED_FIELDS}
-    ids = {spec["field"] for spec in structural_ids(lob).values()} if lob else set()
+    ids = {spec["field"] for spec in structural_ids(lob).values()}
 
     def not_graded(name: str, value: Any, status: str = "system") -> dict[str, Any]:
         entry = {"value": value, "status": status}

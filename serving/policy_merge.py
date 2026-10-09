@@ -257,6 +257,7 @@ def _dedupe(
     *, lob: str | list[str] | None = None,
 ) -> list[Any]:
     from common.schema_sections import array_key
+    from common.schemas import is_common_model
 
     # A list of envelopes is a set of values, not a table: one entry per value.
     if rows and all(is_field_value(r) for r in rows):
@@ -279,6 +280,7 @@ def _dedupe(
     # windows as two half-rows. Rows sharing an identifier join only when no
     # field they both state disagrees; otherwise they are different rows.
     inferred = () if key_fields else _identifiers(rows)
+    common_model = bool(key_fields) and is_common_model("policy", None, lob)
     out: list[Any] = []
     # Every row an identity names, not only the first: two real rows can share
     # an inferred identifier (two "Liability" coverages with different limits),
@@ -304,7 +306,7 @@ def _dedupe(
         # A common-model party or modifier is keyed without the units it stands
         # on (a window links only those it sees), so its key is as weak: the
         # rows join, their links united, unless a value both state differs.
-        weak = bool(lob) and (any(part is None for part in identity) or section in _UNIT_SPANNING)
+        weak = common_model and (any(part is None for part in identity) or section in _UNIT_SPANNING)
         position = next(
             (i for i in candidates if not ((inferred or weak) and _disagree(out[i], row, path))), None
         )
@@ -416,10 +418,13 @@ def merge_policy_windows(
     from common.schema_sections import group_names
     from common.schemas import is_common_model
 
-    if lob is not None and is_common_model("policy", None, lob):
+    # No line is the fallback, which composes the common model too.
+    if is_common_model("policy", None, lob):
         return _merge_common_model(windows, lob)
 
-    rank = {name: index for index, name in enumerate(group_names())}
+    # The line named throughout: no line is the fallback, read with the
+    # common-model profile, whose groups and row keys are not this line's.
+    rank = {name: index for index, name in enumerate(group_names(lob))}
     ordered = sorted(
         windows, key=lambda w: (rank.get(w.group, len(rank)), min(w.pages or [0]))
     )
@@ -431,11 +436,11 @@ def merge_policy_windows(
         for key, value in window.extraction.items():
             if key in report.extraction:
                 report.extraction[key] = _merge_into(
-                    report.extraction[key], value, key, report, top=True
+                    report.extraction[key], value, key, report, top=True, lob=lob
                 )
             else:
                 report.extraction[key] = (
-                    _dedupe(value, key, key, report) if isinstance(value, list) else value
+                    _dedupe(value, key, key, report, lob=lob) if isinstance(value, list) else value
                 )
 
     # Once, on the finished document: only then is it known how many rows a
@@ -451,9 +456,9 @@ def merge_policy_windows(
     report.unkeyed_rows = sum(
         1
         for section, rows in report.extraction.items()
-        if isinstance(rows, list) and array_key(section)
+        if isinstance(rows, list) and array_key(section, lob)
         for row in rows
-        if _row_key(row, array_key(section), section) is None
+        if _row_key(row, array_key(section, lob), section) is None
     )
     if report.conflicts:
         log.info("merged %d policy windows with %d conflict(s)", len(windows), len(report.conflicts))
@@ -468,8 +473,8 @@ def merge_policy_windows(
 #: Tables whose rows refer to units and are joined on the line's keys once every
 #: reference names a merged unit. A row whose reference its window could not
 #: write (the unit was read elsewhere) still joins the one row it matches.
-_REFERRING_TABLES = ("coverages", "deductibles", "interested_parties", "rating_modifiers",
-                     "underlying_insurance")
+_REFERRING_TABLES = ("coverages", "deductibles", "interested_parties", "rating_exposures",
+                     "rating_modifiers", "underlying_insurance")
 
 
 #: Joins one unit row into another, recording what the joined row held.

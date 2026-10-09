@@ -186,7 +186,7 @@ def common_model_field_types() -> dict[str, str]:
 
     out: dict[str, str] = {}
     for doc_type, form, lob in schema_selectors():
-        if doc_type == "policy" and lob and is_common_model(doc_type, form, lob):
+        if doc_type == "policy" and is_common_model(doc_type, form, lob):
             view = resolved_schema(doc_type, form, lob)
             _collect_typed(view, view.get("$defs") or {}, "", out, frozenset())
     return out

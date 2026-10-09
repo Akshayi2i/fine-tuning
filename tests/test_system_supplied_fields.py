@@ -42,18 +42,25 @@ def test_they_are_not_scored_on_either_side():
     assert full.metrics["false_null_rate"] == 0.0
 
 
+#: A line still on a self-contained schema, which declares these two as
+#: envelopes. A common-model line - general liability and the fallback among
+#: them since common model 1.1.0 - declares them as plain values
+#: (tests/test_schema2_serving.py).
+SELF_CONTAINED = "property"
+
+
 def test_serving_fills_them_from_the_request_into_a_valid_canonical_output():
     required = {"carrier": {}, "named_insured": {}, "policy": {}}      # the schema's required objects
     output = with_system_fields({"document": {}, **required}, page_count=85,
-                                source_file_name="1- HOME_redacted.pdf")
+                                source_file_name="1- HOME_redacted.pdf", lob=SELF_CONTAINED)
     page_count = output["document"]["page_count"]
     assert page_count["parsed"] == 85 and page_count["confidence"] == {"score": 1.0, "source": "deterministic"}
     assert output["document"]["source_file_name"]["raw"] == "1- HOME_redacted.pdf"
-    assert is_valid(output, "policy", None, "gl")
+    assert is_valid(output, "policy", None, SELF_CONTAINED)
 
 
 def test_an_unknown_file_name_is_left_out():
-    output = with_system_fields({}, page_count=3, source_file_name=None)
+    output = with_system_fields({}, page_count=3, source_file_name=None, lob=SELF_CONTAINED)
     assert "source_file_name" not in output["document"] and output["document"]["page_count"]["parsed"] == 3
 
 
