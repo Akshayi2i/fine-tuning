@@ -113,6 +113,10 @@ class TargetReport:
     #: lines), as ``group:path=id``. Expected across windows; counted so a line
     #: whose links mostly cross windows shows up at corpus build.
     dangling: list[str] = field(default_factory=list)
+    #: Common-model rows left out of a window that shows none of their home
+    #: pages - where their name or a figure of theirs is printed - and only a
+    #: caption or a word the policy wording prints too (:data:`HOME_FIELDS`).
+    away: list[str] = field(default_factory=list)
 
 
 def routed_pages(
@@ -487,11 +491,23 @@ def _within(
         return kept
     if isinstance(node, list):
         keys = _row_identifiers(node, path, lob=lob, common_model=common_model)
+        home_fields = HOME_FIELDS.get(path) if common_model and not plan.single else None
         rows = []
         for i, item in enumerate(node):
             row = _within(item, f"{path}[{i}]", pages, plan, report,
                           lob=lob, common_model=common_model, printed_pages=printed_pages)
             if row in (None, {}, []):
+                continue
+            # A row whose name or figures are printed elsewhere, reaching this
+            # window only by a caption ("Each Occurrence Limit") or a word
+            # ("Included") the policy wording prints too: a label lists every
+            # page that prints a value, so those pages carry the row's caption
+            # and nothing of the row. Taught here, the model writes coverages
+            # from wording. It is taught on the windows that show its home.
+            home = _home_pages(item, home_fields) if home_fields else set()
+            if home and not home & pages:
+                if report is not None:
+                    report.away.append(f"{plan.group}:{path}[{i}]")
                 continue
             # A fragment that kept none of its row's identifiers in this window
             # is an orphan: labels record a short value such as a premium of
@@ -682,6 +698,33 @@ def _printed_identifiers(rows: list[dict[str, Any]], declared: list[str]) -> lis
             break
     return [*named, *(k for k in declared
                       if k not in named and any(is_field_value(r.get(k)) for r in rows))]
+
+
+#: What places a common-model table's row on a page: its printed name, or a
+#: figure of its own - a limit's or a deductible's amount or percentage, a
+#: premium. Its other printed values are captions and words policy wording
+#: prints too, so they do not say the row is on a page (:func:`_within`).
+HOME_FIELDS: dict[str, frozenset[str]] = {
+    "coverages": frozenset({"coverage_name", "amount", "percentage", "premium", "coinsurance_percent"}),
+}
+
+
+def _home_pages(node: Any, fields: frozenset[str]) -> set[int]:
+    """The pages that print a row's :data:`HOME_FIELDS` values, its nested rows'
+    included. Empty when it states none: a row of captions alone has no home,
+    and stays wherever its values are cited."""
+    pages: set[int] = set()
+    if isinstance(node, dict):
+        for key, value in node.items():
+            if is_field_value(value):
+                if key in fields and (value.get("raw") is not None or value.get("parsed") is not None):
+                    pages.update(int(p) for p in value.get("page_ref") or [])
+            else:
+                pages |= _home_pages(value, fields)
+    elif isinstance(node, list):
+        for value in node:
+            pages |= _home_pages(value, fields)
+    return pages
 
 
 def _holds_rows(row: Any) -> bool:

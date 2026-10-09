@@ -336,6 +336,9 @@ def _policy_window_rows(
     # Row fragments left out because their window shows none of the row's
     # identifiers and no table of their own: not taught, so said.
     notes += [f"window {mode}: orphaned {path}" for path in sorted(set(report.orphaned))]
+    # Rows left out of a window that shows only their caption, away from the
+    # pages that print their name or figures: taught on those, so said.
+    notes += [f"window {mode}: away from home {path}" for path in sorted(set(report.away))]
     if report.dangling:
         # A common-model row's link to a row another window reads: left out of
         # the window that cannot see the row it names, by design. Counted, not
