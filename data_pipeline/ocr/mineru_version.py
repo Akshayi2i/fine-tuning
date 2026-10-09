@@ -75,12 +75,14 @@ def get_mineru_version() -> str:
     try:
         from importlib.metadata import version
 
-        return version("magic-pdf")
+        # MinerU 3.x; 1.x was published as magic-pdf, and a corpus read by it
+        # records a 1.x version - another distribution from 3.x's.
+        return version("mineru")
     except Exception:
         pass
     try:
         out = subprocess.run(
-            [sys.executable, "-m", "magic_pdf.cli.magicpdf", "--version"],
+            [sys.executable, "-c", "import mineru.version as v; print(v.__version__)"],
             capture_output=True, text=True, timeout=15, check=True,
         )
         return out.stdout.strip().split()[-1] or UNKNOWN

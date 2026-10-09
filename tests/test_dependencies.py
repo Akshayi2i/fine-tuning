@@ -18,7 +18,7 @@ PYPROJECT = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
 
 #: Import name -> the distribution that provides it, where they differ.
 DISTRIBUTION = {
-    "PIL": "pillow", "fitz": "pymupdf", "yaml": "pyyaml", "magic_pdf": "magic-pdf",
+    "PIL": "pillow", "fitz": "pymupdf", "yaml": "pyyaml",
     "swift": "ms-swift", "llmcompressor": "llmcompressor", "azure": "azure-storage-blob",
     "flash_attn": "flash-attn", "sklearn": "scikit-learn", "jinja2": "jinja2",
     "dotenv": "python-dotenv", "qwen_vl_utils": "qwen-vl-utils",

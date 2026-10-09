@@ -385,6 +385,30 @@ def test_find_unprocessed_lists_only_documents_without_ocr_meta(ocr_client, monk
     assert run_mineru.find_unprocessed(ocr_client, "policy") == ["policy_0002"]
 
 
+def test_a_document_another_mineru_read_is_unprocessed_for_this_one(ocr_client, monkeypatch):
+    """The model learns how MinerU formats its output: a tenant read partly by
+    MinerU 1.x and partly by 3.x is two distributions, so --all-unprocessed reads
+    the 1.x documents again."""
+    monkeypatch.setattr(run_mineru, "current_environment",
+                        lambda device=None, strict=True: mv.OcrEnvironment("1.3.12", "cuda"))
+    _seed_raw_document(ocr_client, source_id="policy_0001")
+    run_mineru.process_document("policy", "policy_0001", ocr_client, StubEngine())
+
+    assert run_mineru.find_unprocessed(ocr_client, "policy") == []
+    assert run_mineru.find_unprocessed(ocr_client, "policy", mineru_version="1.3.12") == []
+    assert run_mineru.find_unprocessed(ocr_client, "policy", mineru_version="3.4.5") == ["policy_0001"]
+
+
+def test_a_corpus_read_by_two_minerus_is_refused():
+    """The manifest records one MinerU version, taken from one document: a mix
+    would train on two input distributions and not even show."""
+    from orchestration.pipeline_dag import PipelineError, assert_one_mineru_version
+
+    assert_one_mineru_version({"3.4.5": 103})
+    with pytest.raises(PipelineError, match=r"1\.3\.12 \(40\), 3\.4\.5 \(63\).*--all-unprocessed"):
+        assert_one_mineru_version({"3.4.5": 63, "1.3.12": 40})
+
+
 def test_ocr_engine_protocol_is_satisfied_by_the_stub():
     """The swappable interface is what lets the pipeline be verified without
     MinerU, and what lets the Phase 0 spike replace the engine outright."""

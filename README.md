@@ -100,7 +100,7 @@ weights).
 | Environment | For | Why separate |
 |---|---|---|
 | `/workspace/venv` | training, `finetune`, `package`, serving (torch 2.8, ms-swift, vLLM 0.11, flash-attn) | |
-| `/workspace/venv-ocr` | OCR only (MinerU 1.x) | MinerU 1.x cannot share an environment with vLLM 0.11 / torch 2.8 |
+| `/workspace/venv-ocr` | OCR only (MinerU 3.4, pipeline backend) | MinerU's dependency set (its own transformers, onnxruntime, layout and OCR runtimes) is kept apart from the training stack |
 
 Everything is on `/workspace` because the container disk is wiped when the pod
 stops. Keep the Azure connection string in **double quotes** in `.env`: it is
@@ -125,7 +125,7 @@ that works and checks CUDA afterwards (the bootstrap calls it for `train` and
 
 | Pod | Command | Installs |
 |---|---|---|
-| OCR (stage 2) | `bash scripts/setup_pod.sh ocr` | `requirements-ocr.txt`: MinerU 1.x (`magic-pdf[full]`); after downloading its weights, `python -m data_pipeline.ocr.mineru_config --cuda` (MinerU defaults to CPU) |
+| OCR (stage 2) | `bash scripts/setup_pod.sh ocr` | `requirements-ocr.txt`: MinerU 3.4 (`mineru[pipeline]`); then its pinned weights, `bash scripts/download_mineru_models.sh` (writes `mineru.json`; OCR refuses to run without it) |
 | Training | `bash scripts/setup_pod.sh train` | `requirements-train.txt`: ms-swift, torch 2.8, **and vLLM** (checkpoint selection and calibration generate with it), then flash-attn built against that torch |
 | Serving | `bash scripts/setup_pod.sh serve` | `requirements-serve.txt`: vLLM 0.11.0, the same build the training pod calibrates with |
 | Quantization (only once FP8 is verified) | `bash scripts/setup_pod.sh quantize` | `requirements-quantize.txt`: llmcompressor, in its own environment (its `datasets`/`transformers` ranges conflict with ms-swift and vLLM) |
@@ -142,7 +142,7 @@ Linux x86-64 / Python 3.11, so a pod set up next month runs the same stack.
 | Environment | torch | Key pins |
 |---|---|---|
 | train (`/workspace/venv`) | 2.8.0 (CUDA 12.8) | vLLM 0.11.0, transformers 4.57.6, ms-swift 3.12.6, flash-attn 2.x built on the pod |
-| ocr (`/workspace/venv-ocr`) | 2.8.0 | magic-pdf 1.3.12 |
+| ocr (`/workspace/venv-ocr`) | 2.8.0 | mineru 3.4.5 (pipeline backend; PDF-Extract-Kit-1.0 weights at a pinned revision) |
 | serve | 2.8.0 | identical to train for every package they share |
 | quantize | 2.8.0 | llmcompressor 0.9 |
 

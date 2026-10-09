@@ -31,21 +31,21 @@ data = [
     "pillow>=11,<12",
     # Page rasterisation for the image_only pathway. pypdf reads structure
     # but cannot render, so both are needed rather than either.
-    # Capped to the line MinerU 1.x allows, so the OCR environment and the
-    # training/serving one render pages with the same PyMuPDF: two renderers
-    # are two sets of pixels.
+    # One PyMuPDF in the OCR environment and the training/serving one: the
+    # shared renderer draws the page images in both, and two renderers are two
+    # sets of pixels. (MinerU 3.x reads PDFs with pypdfium2, not PyMuPDF.)
     "PyMuPDF>=1.24,<1.25",
 ]
 
-# MinerU, for stage 2 (OCR). The 1.x line: the code imports `magic_pdf` and reads
-# the `magic-pdf` version into every ocr_meta.json, and MinerU 2.x renamed the
-# package (`mineru`) and removed that module. [full] brings the layout and
-# table models' runtime, torch included. The model weights themselves are a
-# separate download (MinerU's own `magic-pdf.json` / models-download step).
-# torch pinned to the training stack's 2.8 (CUDA 12.8): unpinned, [full] resolves
-# to the newest torch, built for a newer CUDA than the pod's driver may run and
-# never tested with MinerU 1.x — and OCR is GPU-only, so that fails outright.
-ocr = ["magic-pdf[full]>=1.3,<2", "torch>=2.8,<2.9", "torchvision>=0.23,<0.24"]
+# MinerU, for stage 2 (OCR): the 3.4 line, its pipeline backend (layout, PP-OCRv6
+# OCR and table models; no vision-language model). The code imports `mineru` and
+# reads its version into every ocr_meta.json - the model learns how MinerU formats
+# its output, so the minor version is held. [pipeline] brings the models' runtime,
+# torch included; the weights are a separate, pinned download
+# (scripts/download_mineru_models.sh). torch pinned to the training stack's 2.8
+# (CUDA 12.8): unpinned it resolves to the newest torch, built for a newer CUDA
+# than the pod's driver may run - and OCR is GPU-only, so that fails outright.
+ocr = ["mineru[pipeline]>=3.4.5,<3.5", "torch>=2.8,<2.9", "torchvision>=0.23,<0.24"]
 
 # RunPod training pod. torch is pinned to the minor version vLLM 0.11 pins,
 # because the finetune pipeline runs vLLM in the same process for checkpoint

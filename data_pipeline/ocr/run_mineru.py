@@ -32,7 +32,7 @@ from artifact_registry import paths
 from artifact_registry.blob_client import BlobClient, for_ocr
 from common.config import resolution_cap_px
 from common.constants import ACTIVE_DOC_TYPES
-from data_pipeline.ocr.mineru_version import Device, current_environment
+from data_pipeline.ocr.mineru_version import Device, current_environment, get_mineru_version
 
 log = logging.getLogger(__name__)
 
@@ -70,8 +70,15 @@ class OcrEngine(Protocol):
         ...
 
 
+#: The OCR language MinerU reads scans in. ``ch`` is its PP-OCRv6 small model pair,
+#: which covers English (there is no separate English model since PP-OCRv5);
+#: pinned rather than left to MinerU's default, since the OCR text is model input.
+OCR_LANG = "ch"
+
+
 class MinerUEngine:
-    """Real MinerU 1.x (``magic-pdf``). Imported lazily so CI needs neither MinerU nor CUDA.
+    """Real MinerU 3.x (``mineru``, pipeline backend). Imported lazily so CI needs
+    neither MinerU nor CUDA.
 
     MinerU does the reading; this class does the two things around it that the
     corpus depends on:
@@ -85,7 +92,8 @@ class MinerUEngine:
       same pixels.
 
     Checked on the pod by the Phase 0 spike (``check_mineru_gpu``): the GPU path,
-    the model weights (``~/magic-pdf.json``) and the formatting of real documents.
+    the pinned model weights (``mineru.json``) and the formatting of real documents.
+    Formula recognition stays off: policies carry no equations.
     """
 
     def __init__(self, device: Device = "cuda") -> None:
@@ -99,25 +107,28 @@ class MinerUEngine:
         if device != "cuda":
             raise OcrError(f"MinerU runs on the GPU only; device {device!r} is refused")
         from common.gpu import GPUError, require_cuda
-        from data_pipeline.ocr.mineru_config import MinerUConfigError, assert_on_cuda
+        from data_pipeline.ocr.mineru_config import MinerUConfigError, apply_run_environment, assert_on_cuda
         from data_pipeline.ocr.render_only import render_pdf_pages
 
         try:
             require_cuda("MinerU OCR")
-            # The GPU existing is not MinerU using it: its config decides.
+            # The GPU existing is not MinerU using it, and MinerU left alone
+            # fetches the latest weights: both are set before it is imported.
+            apply_run_environment()
             assert_on_cuda()
         except (GPUError, MinerUConfigError) as exc:
             raise OcrError(str(exc)) from exc
         try:
-            from magic_pdf.config.enums import SupportedPdfParseMethod
-            from magic_pdf.data.data_reader_writer import FileBasedDataWriter
-            from magic_pdf.data.dataset import PymuDocDataset
-            from magic_pdf.model.doc_analyze_by_custom_model import doc_analyze
+            from mineru.backend.pipeline.pipeline_analyze import doc_analyze_streaming
+            from mineru.backend.pipeline.pipeline_middle_json_mkcontent import union_make
+            from mineru.data.data_reader_writer import FileBasedDataWriter
+            from mineru.utils.enum_class import MakeMode
+            from mineru.utils.pdf_classify import classify
         except ImportError as exc:  # pragma: no cover - optional heavy dep
             raise OcrError(
-                "MinerU 1.x (magic-pdf) is not installed, or its API moved. Install the OCR group "
-                "on the pod: bash scripts/setup_pod.sh ocr (magic-pdf[full]>=1.3,<2), and "
-                "download its model weights (MinerU's download_models_hf.py)."
+                "MinerU 3.x (mineru) is not installed, or its API moved. Install the OCR group on "
+                "the pod: bash scripts/setup_pod.sh ocr (mineru[pipeline]), and download its pinned "
+                "model weights: bash scripts/download_mineru_models.sh"
             ) from exc
 
         from data_pipeline.ocr.modality import ModalityError, reads_by_ocr
@@ -137,23 +148,28 @@ class MinerUEngine:
         import json
         import tempfile
 
+        # Text mode reads only a text layer. A MIXED document — typed
+        # declarations, scanned endorsements — classified as text left its
+        # scanned pages unread and unflagged, trained as blank. So any page
+        # without a text layer sends the whole document through OCR, and so
+        # does a native one whose figures are drawn (reads_by_ocr). Offline,
+        # MinerU's own classification is heard too; a caller's modality is not
+        # second-guessed.
+        scanned = ocr or (modality is None and classify(pdf_bytes) == "ocr")
+        read: dict[int, dict[str, Any]] = {}
+
+        def on_doc_ready(doc_index: int, _model_list: Any, middle_json: dict[str, Any], _ocr: bool) -> None:
+            read[doc_index] = middle_json
+
         with tempfile.TemporaryDirectory() as tmp:  # pragma: no cover - needs MinerU and a GPU
-            writer = FileBasedDataWriter(tmp)
-            dataset = PymuDocDataset(pdf_bytes)
-            # Text mode reads only a text layer. A MIXED document — typed
-            # declarations, scanned endorsements — classified as text left its
-            # scanned pages unread and unflagged, trained as blank. So any page
-            # without a text layer sends the whole document through OCR, and so
-            # does a native one whose figures are drawn (reads_by_ocr). Offline,
-            # MinerU's own classification is heard too; a caller's modality is not
-            # second-guessed.
-            scanned = ocr or (modality is None
-                              and dataset.classify() == SupportedPdfParseMethod.OCR)
-            if scanned:
-                piped = dataset.apply(doc_analyze, ocr=True).pipe_ocr_mode(writer)
-            else:
-                piped = dataset.apply(doc_analyze, ocr=False).pipe_txt_mode(writer)
-            content = piped.get_content_list(tmp)
+            # Figures MinerU crops are written here and dropped: the page image
+            # the model sees is the shared renderer's, not MinerU's crops.
+            doc_analyze_streaming([pdf_bytes], [FileBasedDataWriter(tmp)], [OCR_LANG], on_doc_ready,
+                                  parse_method="ocr" if scanned else "txt",
+                                  formula_enable=False, table_enable=True)
+            if 0 not in read:
+                raise OcrError("MinerU returned no reading of the document")
+            content = union_make(read[0]["pdf_info"], MakeMode.CONTENT_LIST, "images")
             if isinstance(content, str):
                 content = json.loads(content)
 
@@ -225,19 +241,37 @@ def text_layer_pages(pdf_bytes: bytes) -> list[bool]:
         ]
 
 
+#: Content-list blocks at a page's edges. MinerU 3.x lists them after the page's
+#: body; a page's header is put back at its head and the rest at its foot, so the
+#: text reads top to bottom. MinerU 1.x dropped them: a form's number, printed in
+#: its footer, was in no page's text.
+_PAGE_HEAD = ("header",)
+_PAGE_FOOT = ("footer", "page_number", "page_footnote", "aside_text")
+
+
 def pages_from_content_list(blocks: Iterable[dict[str, Any]], page_count: int) -> list[str]:
     """MinerU's content list as one markdown string per page, in reading order.
 
-    MinerU emits blocks (``text``, ``table``, ``image``, ``equation``) each tagged
-    with its 0-based ``page_idx``. Rendered here the same way for every document,
-    so training rows and serving requests see one formatting:
+    MinerU emits blocks each tagged with its 0-based ``page_idx``. Rendered here
+    the same way for every document, so training rows and serving requests see
+    one formatting:
 
     * text — a heading gets ``#`` per ``text_level``, body text as is;
+    * list — its items, one per line;
     * table — captions, then the table as MinerU gives it (HTML), then footnotes;
-    * image — its captions and footnotes only (the picture is in the page image);
-    * equation — its text (LaTeX).
+    * image, chart — captions and footnotes only (the picture is in the page image);
+    * code — captions, its text, footnotes;
+    * equation — its text (LaTeX);
+    * header — at the head of its page; footer, page number, page footnote and
+      margin text — at its foot.
     """
-    pages: list[list[str]] = [[] for _ in range(page_count)]
+    head: list[list[str]] = [[] for _ in range(page_count)]
+    body: list[list[str]] = [[] for _ in range(page_count)]
+    foot: list[list[str]] = [[] for _ in range(page_count)]
+
+    def texts(block: dict[str, Any], *keys: str) -> list[str]:
+        return [str(item).strip() for key in keys for item in block.get(key) or []]
+
     for block in blocks:
         index = block.get("page_idx")
         if not isinstance(index, int) or not 0 <= index < page_count:
@@ -250,17 +284,27 @@ def pages_from_content_list(blocks: Iterable[dict[str, Any]], page_count: int) -
             if text and isinstance(level, int) and level > 0:
                 text = "#" * min(level, 6) + " " + text
             parts.append(text)
+        elif kind == "list":
+            parts.append("\n".join(str(item).strip() for item in block.get("list_items") or []))
         elif kind == "table":
-            parts += [str(c).strip() for c in block.get("table_caption") or []]
+            parts += texts(block, "table_caption")
             parts.append(str(block.get("table_body") or "").strip())
-            parts += [str(f).strip() for f in block.get("table_footnote") or []]
+            parts += texts(block, "table_footnote")
         elif kind == "image":
-            parts += [str(c).strip() for c in block.get("img_caption") or []]
-            parts += [str(f).strip() for f in block.get("img_footnote") or []]
+            # image_caption in MinerU 3.x, img_caption in 1.x.
+            parts += texts(block, "image_caption", "img_caption")
+            parts += texts(block, "image_footnote", "img_footnote")
+        elif kind == "chart":
+            parts += texts(block, "chart_caption") + texts(block, "chart_footnote")
+        elif kind == "code":
+            parts += texts(block, "code_caption")
+            parts.append(str(block.get("code_body") or "").strip())
+            parts += texts(block, "code_footnote")
         else:
             parts.append(str(block.get("text") or "").strip())
-        pages[index] += [part for part in parts if part]
-    return ["\n\n".join(parts) for parts in pages]
+        target = head if kind in _PAGE_HEAD else foot if kind in _PAGE_FOOT else body
+        target[index] += [part for part in parts if part]
+    return ["\n\n".join(head[i] + body[i] + foot[i]) for i in range(page_count)]
 
 
 def count_table_rows(markdown: str) -> int:
@@ -270,8 +314,8 @@ def count_table_rows(markdown: str) -> int:
     six claims from a page MinerU saw eight rows on, that is a recall failure the
     per-field confidence cannot see, because the missing rows generate no tokens.
 
-    MinerU 1.x writes tables as HTML. Counting pipe tables alone read every
-    MinerU page as having no rows, and the row-completeness signal never fired.
+    MinerU writes tables as HTML. Counting pipe tables alone read every MinerU
+    page as having no rows, and the row-completeness signal never fired.
     """
     return _count_pipe_rows(markdown) + _count_html_rows(markdown)
 
@@ -518,8 +562,12 @@ def process_batch(
     return {"processed": processed, "skipped": skipped, "failed": failed}
 
 
-def find_unprocessed(client: BlobClient, doc_type: str, tenant_id: str | None = None) -> list[str]:
-    """Ingested documents with no ``ocr_meta.json`` yet."""
+def find_unprocessed(client: BlobClient, doc_type: str, tenant_id: str | None = None,
+                     mineru_version: str | None = None) -> list[str]:
+    """Ingested documents with no ``ocr_meta.json`` yet - and, given the running
+    ``mineru_version``, those read by another MinerU: the model learns how MinerU
+    formats its output, so a tenant read by two versions is two distributions,
+    and ``--all-unprocessed`` reads them again."""
     tenant = paths._tenant(tenant_id)
     ingested = {
         key.split("/")[3]
@@ -536,9 +584,12 @@ def find_unprocessed(client: BlobClient, doc_type: str, tenant_id: str | None = 
         if not key.endswith("ocr_meta.json"):
             continue
         try:
-            if client.read_json(key).get("render_only"):
-                continue
+            meta = client.read_json(key)
         except Exception:  # noqa: BLE001 - unreadable metadata is not "done"
+            continue
+        if meta.get("render_only"):
+            continue
+        if mineru_version and meta.get("mineru_version") != mineru_version:
             continue
         done.add(key.split("/")[3])
     return sorted(ingested - done)
@@ -623,7 +674,7 @@ def main(argv: Iterable[str] | None = None) -> int:  # pragma: no cover - thin C
     engine = MinerUEngine(device="cuda")
 
     source_ids = (
-        find_unprocessed(client, args.doc_type, args.tenant)
+        find_unprocessed(client, args.doc_type, args.tenant, mineru_version=get_mineru_version())
         if args.all_unprocessed else args.source_ids
     )
     if args.shard:

@@ -29,7 +29,7 @@ VENV="$WORKSPACE/venv"
 VENV_OCR="$WORKSPACE/venv-ocr"
 MODELS="$WORKSPACE/models"
 MIN_FREE_GB="${FIDEON_MIN_FREE_GB:-150}"
-MINERU_CONFIG="$WORKSPACE/magic-pdf.json"
+MINERU_CONFIG="$WORKSPACE/mineru.json"
 
 pdf=""
 while [ $# -gt 0 ]; do
@@ -133,7 +133,11 @@ ensure_env() {
 }
 ensure_env RUNPOD_VOLUME_MOUNT "$WORKSPACE" /runpod-volume
 ensure_env HF_HOME "$WORKSPACE/.cache/huggingface"
-ensure_env MINERU_TOOLS_CONFIG_JSON "$MINERU_CONFIG"
+# A pod set up for MinerU 1.x has magic-pdf.json here: replaced, as a template value is.
+ensure_env MINERU_TOOLS_CONFIG_JSON "$MINERU_CONFIG" "$WORKSPACE/magic-pdf.json"
+# MinerU 3.x on the GPU, on the pinned weights it was pointed at - never the latest.
+ensure_env MINERU_DEVICE_MODE cuda
+ensure_env MINERU_MODEL_SOURCE local
 ensure_env HF_HUB_ENABLE_HF_TRANSFER 0 1
 # .env is sourced by bash (here and by pod_run.sh): an unquoted connection string
 # is cut at its first ';' and every Blob call would fail with a confusing error.
@@ -145,7 +149,7 @@ case "$azure_value" in
 value in double quotes: bash would otherwise cut it at the first ';'." ;;
 esac
 set -a; . ./.env; set +a
-export HF_HOME MINERU_TOOLS_CONFIG_JSON RUNPOD_VOLUME_MOUNT
+export HF_HOME MINERU_TOOLS_CONFIG_JSON MINERU_DEVICE_MODE MINERU_MODEL_SOURCE RUNPOD_VOLUME_MOUNT
 # RunPod images turn on the hf_transfer downloader for every process; it is not
 # installed in our environments, and Hugging Face then refuses to download.
 export HF_HUB_ENABLE_HF_TRANSFER=0
@@ -181,22 +185,17 @@ make_venv "$VENV_OCR" ocr requirements-ocr.txt
 
 # --- 5. MinerU's config --------------------------------------------------------------
 step "5/7 MinerU config"
-# MinerU's model download writes ~/magic-pdf.json, on the container disk. Keep it
-# on the volume, where MINERU_TOOLS_CONFIG_JSON points, so a restart keeps it.
-if [ ! -f "$MINERU_CONFIG" ] && [ -f "$HOME/magic-pdf.json" ]; then
-  mv "$HOME/magic-pdf.json" "$MINERU_CONFIG"
-  echo "moved ~/magic-pdf.json to $MINERU_CONFIG"
-fi
+# The pinned pipeline weights and the config pointing at them, both on the volume
+# (download_mineru_models.sh) - fetched once, when the config does not name them.
 mineru_ready=0
-if [ ! -f "$MINERU_CONFIG" ]; then
-  # Weights and config from MinerU's own script, for the installed release.
+if ! "$VENV_OCR/bin/python" -m data_pipeline.ocr.mineru_config >/dev/null 2>&1; then
   bash scripts/download_mineru_models.sh || echo "MinerU model download failed (see above)"
 fi
-if [ -f "$MINERU_CONFIG" ]; then
-  "$VENV_OCR/bin/python" -m data_pipeline.ocr.mineru_config --cuda && mineru_ready=1
+if "$VENV_OCR/bin/python" -m data_pipeline.ocr.mineru_config; then
+  mineru_ready=1
 else
   PENDING+=("MinerU's model weights: bash scripts/download_mineru_models.sh, then re-run this script")
-  echo "no MinerU config yet (see the list at the end)"
+  echo "MinerU is not ready yet (see the list at the end)"
 fi
 
 # --- 6. the base model ---------------------------------------------------------------

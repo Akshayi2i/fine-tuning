@@ -361,7 +361,7 @@ def _assert_ocr_runnable(ctx: StageContext) -> None:
 
     from data_pipeline.ocr.run_mineru import find_unprocessed
 
-    if importlib.util.find_spec("magic_pdf") is not None:
+    if importlib.util.find_spec("mineru") is not None:
         return
     pending = {dt: len(find_unprocessed(ctx.raw, dt, ctx.tenant_id)) for dt in ctx.doc_types}
     pending = {dt: n for dt, n in pending.items() if n}
@@ -473,6 +473,7 @@ def load_labeled_documents(ctx: StageContext) -> list[Any]:
     from evaluation.freeze_eval_set import is_scanned
 
     documents = []
+    read_by: dict[str, int] = {}
     for doc_type in ctx.doc_types:
         for source_id in list_labeled_source_ids(ctx.client, doc_type, ctx.tenant_id):
             label, metadata = load_golden_label(source_id, doc_type, ctx.client, ctx.tenant_id)
@@ -499,6 +500,8 @@ def load_labeled_documents(ctx: StageContext) -> list[Any]:
                 )
                 continue
 
+            version = str(ocr_meta.get("mineru_version") or "unknown")
+            read_by[version] = read_by.get(version, 0) + 1
             documents.append(SourceDocument(
                 source_id=source_id,
                 doc_type=doc_type,
@@ -531,6 +534,7 @@ def load_labeled_documents(ctx: StageContext) -> list[Any]:
                 render_mode=metadata.get("render_mode"),
                 unprinted_values=list(metadata.get("unprinted_values") or []),
             ))
+    assert_one_mineru_version(read_by)
     ctx.grouping = assign_document_groups(ctx, documents)
     return documents
 
@@ -549,6 +553,21 @@ def split_policy(split: dict[str, Any]) -> dict[str, Any]:
         "twin_cap": split.get("twin_cap"),
         "twins_dropped": sum((split.get("twins_dropped") or {}).values()),
     }
+
+
+def assert_one_mineru_version(read_by: dict[str, int]) -> None:
+    """Refuse a corpus whose documents were read by more than one MinerU.
+
+    The model learns how MinerU formats its output, so two versions are two input
+    distributions - and the manifest records one, taken from a single document,
+    so the mix would not even show. ``read_by``: MinerU version -> documents.
+    """
+    if len(read_by) > 1:
+        counts = ", ".join(f"{version} ({n})" for version, n in sorted(read_by.items()))
+        raise PipelineError(
+            f"the documents were read by more than one MinerU: {counts}. Read them again with one: "
+            "run_mineru --all-unprocessed in the OCR environment re-reads those another MinerU read."
+        )
 
 
 def use_delivered_families(documents: list[Any]) -> bool:

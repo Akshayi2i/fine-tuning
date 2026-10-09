@@ -237,49 +237,53 @@ def test_a_scoped_merged_model_is_pulled_from_its_own_path(client, tmp_path):
 # ==========================================================================
 
 
-# #1 — MinerU's own device setting, not just a GPU being present
-def test_mineru_config_must_say_cuda(tmp_path, monkeypatch):
-    from data_pipeline.ocr.mineru_config import MinerUConfigError, assert_on_cuda, set_cuda
+# #1 — MinerU's own settings, not just a GPU being present: the GPU and the pinned weights
+def test_mineru_runs_only_on_the_pinned_weights(tmp_path, monkeypatch):
+    """Left to itself MinerU fetches the latest weights on first use: a pod set up
+    next month would read pages with other weights than this one."""
+    from data_pipeline.ocr.mineru_config import MinerUConfigError, assert_on_cuda, write_config
 
-    config = tmp_path / "magic-pdf.json"
+    config = tmp_path / "mineru.json"
     monkeypatch.setenv("MINERU_TOOLS_CONFIG_JSON", str(config))
+    monkeypatch.delenv("MINERU_DEVICE_MODE", raising=False)
+    monkeypatch.delenv("MINERU_MODEL_SOURCE", raising=False)
     with pytest.raises(MinerUConfigError, match="no MinerU config"):
         assert_on_cuda()
-    config.write_text(json.dumps({"device-mode": "cpu", "models-dir": "/m"}), encoding="utf-8")
-    with pytest.raises(MinerUConfigError, match="device-mode 'cpu'"):
+    config.write_text(json.dumps({"latex-delimiter-config": {}}), encoding="utf-8")
+    with pytest.raises(MinerUConfigError, match="names no pipeline model weights"):
         assert_on_cuda()
-    set_cuda()
+    weights = tmp_path / "weights"
+    weights.mkdir()
+    write_config(weights)
     assert_on_cuda()
     assert json.loads(config.read_text(encoding="utf-8")) == {
-        "device-mode": "cuda", "models-dir": "/m", "formula-config": {"enable": False}}
+        "latex-delimiter-config": {}, "models-dir": {"pipeline": str(weights)}, "model-source": "local"}
+    monkeypatch.setenv("MINERU_MODEL_SOURCE", "huggingface")
+    with pytest.raises(MinerUConfigError, match="latest weights"):
+        assert_on_cuda()
 
 
-def test_mineru_formula_recognition_must_be_off(tmp_path, monkeypatch):
-    """Policies carry no equations, and MinerU 1.3's UniMERNet fails under
-    transformers 4.57 on every page; the whole corpus is OCR'd with it off."""
-    from data_pipeline.ocr.mineru_config import MinerUConfigError, assert_on_cuda, set_cuda
+def test_a_mineru_1_config_is_refused_and_replaced(tmp_path, monkeypatch):
+    from data_pipeline.ocr.mineru_config import MinerUConfigError, assert_on_cuda, write_config
 
     config = tmp_path / "magic-pdf.json"
+    config.write_text(json.dumps({"device-mode": "cuda", "formula-config": {"enable": False}}), encoding="utf-8")
     monkeypatch.setenv("MINERU_TOOLS_CONFIG_JSON", str(config))
-    template = {"device-mode": "cuda", "formula-config": {"mfd_model": "yolo_v8_mfd",
-                                                          "mfr_model": "unimernet_small", "enable": True}}
-    config.write_text(json.dumps(template), encoding="utf-8")
-    with pytest.raises(MinerUConfigError, match="formula recognition on"):
+    monkeypatch.delenv("MINERU_DEVICE_MODE", raising=False)
+    monkeypatch.delenv("MINERU_MODEL_SOURCE", raising=False)
+    with pytest.raises(MinerUConfigError, match="MinerU 1.x config"):
         assert_on_cuda()
-    set_cuda()
-    assert_on_cuda()
-    kept = json.loads(config.read_text(encoding="utf-8"))["formula-config"]
-    assert kept == {"mfd_model": "yolo_v8_mfd", "mfr_model": "unimernet_small", "enable": False}
+    write_config(tmp_path)
+    assert json.loads(config.read_text(encoding="utf-8")) == {
+        "models-dir": {"pipeline": str(tmp_path)}, "model-source": "local"}
 
 
-def test_the_engine_refuses_a_mineru_configured_for_cpu(tmp_path, monkeypatch):
+def test_the_engine_refuses_a_mineru_sent_off_the_gpu(tmp_path, monkeypatch):
     from data_pipeline.ocr.run_mineru import MinerUEngine, OcrError
 
-    config = tmp_path / "magic-pdf.json"
-    config.write_text(json.dumps({"device-mode": "cpu"}), encoding="utf-8")
-    monkeypatch.setenv("MINERU_TOOLS_CONFIG_JSON", str(config))
+    monkeypatch.setenv("MINERU_DEVICE_MODE", "cpu")
     monkeypatch.setattr("common.gpu.require_cuda", lambda what: "NVIDIA H100")
-    with pytest.raises(OcrError, match="run on the CPU"):
+    with pytest.raises(OcrError, match="off the GPU"):
         MinerUEngine().process(b"%PDF", device="cuda", max_long_side_px=800)
 
 

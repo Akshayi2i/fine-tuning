@@ -77,7 +77,7 @@ import sys
 
 role = sys.argv[1]
 wanted = {
-    "ocr": ["magic-pdf", "torch", "azure-storage-blob"],
+    "ocr": ["mineru", "torch", "azure-storage-blob"],
     "train": ["torch", "transformers", "ms-swift", "peft", "vllm", "flash-attn",
               "deepspeed", "qwen-vl-utils", "azure-storage-blob"],
     "serve": ["vllm", "transformers", "azure-storage-blob"],
@@ -101,15 +101,11 @@ if role in ("ocr", "train", "serve", "quantize"):
 PY
 
 if [ "$role" = "ocr" ]; then
-  # MinerU takes its device from its own config, not from the GPU being there.
-  # Where MinerU reads it: ~/magic-pdf.json, or MINERU_TOOLS_CONFIG_JSON (a name
-  # under the home directory, or an absolute path such as /workspace/magic-pdf.json).
-  if [ -f "$(python -c 'from data_pipeline.ocr.mineru_config import config_path; print(config_path())')" ]; then
-    python -m data_pipeline.ocr.mineru_config --cuda
-  else
-    echo "Next: download MinerU's model weights (see the MinerU 1.x docs: download_models_hf.py),"
-    echo "which writes ~/magic-pdf.json, then run: python -m data_pipeline.ocr.mineru_config --cuda"
-    echo "(MinerU's default device-mode is cpu; OCR refuses to run until it is cuda)."
+  # MinerU reads its weights from the config (~/mineru.json, or MINERU_TOOLS_CONFIG_JSON),
+  # and left alone it fetches the latest: OCR runs only on the pinned ones.
+  if ! python -m data_pipeline.ocr.mineru_config; then
+    echo "Next: download MinerU's pinned pipeline weights: bash scripts/download_mineru_models.sh"
+    echo "(it writes the config; OCR refuses to run until then)."
   fi
 fi
 if [ "$role" = "train" ] || [ "$role" = "serve" ]; then

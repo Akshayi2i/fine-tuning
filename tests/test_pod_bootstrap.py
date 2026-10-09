@@ -31,7 +31,14 @@ def test_everything_it_builds_lives_on_the_volume():
     assert 'VENV_OCR="$WORKSPACE/venv-ocr"' in SCRIPT
     assert 'MODELS="$WORKSPACE/models"' in SCRIPT
     assert 'ensure_env HF_HOME "$WORKSPACE/.cache/huggingface"' in SCRIPT
-    assert 'MINERU_CONFIG="$WORKSPACE/magic-pdf.json"' in SCRIPT
+    assert 'MINERU_CONFIG="$WORKSPACE/mineru.json"' in SCRIPT
+
+
+def test_mineru_runs_on_the_gpu_on_its_pinned_weights_and_a_1x_config_path_is_replaced():
+    assert 'ensure_env MINERU_DEVICE_MODE cuda' in SCRIPT
+    assert 'ensure_env MINERU_MODEL_SOURCE local' in SCRIPT
+    # A pod set up for MinerU 1.x has magic-pdf.json in .env: replaced like a template value.
+    assert 'ensure_env MINERU_TOOLS_CONFIG_JSON "$MINERU_CONFIG" "$WORKSPACE/magic-pdf.json"' in SCRIPT
 
 
 def test_ocr_and_training_get_separate_environments():

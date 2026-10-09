@@ -75,7 +75,7 @@ def test_the_stack_is_the_one_the_code_is_written_for():
     assert train["vllm"] == "0.11.0"
     assert train["transformers"].startswith("4.57.")
     assert train["ms-swift"].startswith("3.")
-    assert ocr["magic-pdf"].startswith("1.")
+    assert ocr["mineru"].startswith("3.4.")
 
 
 def test_setup_installs_through_the_lock_and_caps_flash_attn():
