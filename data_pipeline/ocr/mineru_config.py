@@ -84,14 +84,18 @@ def assert_on_cuda(path: Path | None = None) -> None:
 
 def write_config(weights: Path, path: Path | None = None) -> Path:
     """Point MinerU's config at the pipeline weights in ``weights``, keeping every
-    other key; ``model-source`` local, so nothing is fetched at OCR time."""
+    other key. Reading them, rather than fetching, is ``MINERU_MODEL_SOURCE=local``
+    (:data:`RUN_ENVIRONMENT`): MinerU 3.4's config file takes only huggingface or
+    modelscope as its ``model-source`` (``local`` is ignored with a warning), and
+    either would send a run without the variable to fetch the latest - so the key
+    is removed."""
     path = path or config_path()
     body = json.loads(path.read_text(encoding="utf-8")) if path.is_file() else {}
     if "device-mode" in body and "models-dir" not in body:
         body = {}                                   # a MinerU 1.x config: nothing in it applies
     models = body.get("models-dir") if isinstance(body.get("models-dir"), dict) else {}
     body["models-dir"] = {**models, "pipeline": str(weights)}
-    body["model-source"] = "local"
+    body.pop("model-source", None)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(body, indent=4), encoding="utf-8")
     return path

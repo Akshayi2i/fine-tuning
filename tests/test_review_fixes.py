@@ -257,7 +257,11 @@ def test_mineru_runs_only_on_the_pinned_weights(tmp_path, monkeypatch):
     write_config(weights)
     assert_on_cuda()
     assert json.loads(config.read_text(encoding="utf-8")) == {
-        "latex-delimiter-config": {}, "models-dir": {"pipeline": str(weights)}, "model-source": "local"}
+        "latex-delimiter-config": {}, "models-dir": {"pipeline": str(weights)}}
+    config.write_text(json.dumps({**json.loads(config.read_text(encoding="utf-8")), "model-source": "huggingface"}),
+                      encoding="utf-8")
+    write_config(weights)
+    assert "model-source" not in json.loads(config.read_text(encoding="utf-8"))
     monkeypatch.setenv("MINERU_MODEL_SOURCE", "huggingface")
     with pytest.raises(MinerUConfigError, match="latest weights"):
         assert_on_cuda()
@@ -274,8 +278,7 @@ def test_a_mineru_1_config_is_refused_and_replaced(tmp_path, monkeypatch):
     with pytest.raises(MinerUConfigError, match="MinerU 1.x config"):
         assert_on_cuda()
     write_config(tmp_path)
-    assert json.loads(config.read_text(encoding="utf-8")) == {
-        "models-dir": {"pipeline": str(tmp_path)}, "model-source": "local"}
+    assert json.loads(config.read_text(encoding="utf-8")) == {"models-dir": {"pipeline": str(tmp_path)}}
 
 
 def test_the_engine_refuses_a_mineru_sent_off_the_gpu(tmp_path, monkeypatch):
