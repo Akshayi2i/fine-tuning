@@ -313,10 +313,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     freeze = sub.add_parser(
         "freeze-eval-set",
-        help="copy a corpus's test split into the frozen golden eval set (once)",
+        help="copy a corpus's test split into its tenant's frozen golden eval set (once per tenant)",
     )
     freeze.add_argument("--corpus", required=True, help="the corpus version whose test split to freeze")
-    freeze.add_argument("--tenant", default=None)
+    freeze.add_argument("--tenant", default=None,
+                        help="the tenant whose corpus is frozen into golden-eval-set/{tenant}/")
     freeze.add_argument(
         "--allow-small", dest="allow_small", action="store_true",
         help="freeze even when a document type has fewer than 150 test documents (a pilot)",

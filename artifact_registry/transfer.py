@@ -210,19 +210,24 @@ def pull_eval_report(
     return dict(client.read_json(key)) if client.exists(key) else None
 
 
-def push_golden_eval_set(local_dir: str | Path, *, client: BlobClient) -> str:
-    """Push the frozen eval set.
+def push_golden_eval_set(
+    local_dir: str | Path, *, client: BlobClient, tenant_id: str | None = None
+) -> str:
+    """Push one tenant's frozen eval set.
 
     Frozen and versioned separately from the corpus, and held constant across
     corpus versions — that constancy is the only reason model versions are
-    comparable over time (arch §8). Never trained on.
+    comparable over time (arch §8). Never trained on. Per tenant: each tenant
+    is gated on its own set, never on another's.
     """
-    prefix = paths.golden_eval_set_dir()
+    prefix = paths.golden_eval_set_dir(tenant_id)
     count = client.upload_dir(_require_dir(local_dir, "golden eval set"), prefix)
     log.info("pushed %d golden eval file(s) -> %s", count, prefix)
     return prefix
 
 
-def pull_golden_eval_set(local_dir: str | Path, *, client: BlobClient) -> Path:
-    client.download_dir(paths.golden_eval_set_dir(), local_dir)
+def pull_golden_eval_set(
+    local_dir: str | Path, *, client: BlobClient, tenant_id: str | None = None
+) -> Path:
+    client.download_dir(paths.golden_eval_set_dir(tenant_id), local_dir)
     return Path(local_dir)

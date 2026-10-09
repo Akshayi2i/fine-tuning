@@ -92,10 +92,23 @@ def test_the_golden_eval_set_has_its_own_prefix(client, artifact, tmp_path):
     """Frozen and versioned separately from the corpus — that constancy is the
     only reason model versions stay comparable over time."""
     prefix = transfer.push_golden_eval_set(artifact, client=client)
-    assert prefix == paths.golden_eval_set_dir()
+    assert prefix == paths.golden_eval_set_dir() == "golden-eval-set/default"
     assert "corpus" not in prefix
 
     out = transfer.pull_golden_eval_set(tmp_path / "eval", client=client)
+    assert (out / "adapter_config.json").exists()
+
+
+def test_each_tenant_pushes_and_pulls_only_its_own_golden_eval_set(client, artifact, tmp_path):
+    """Each tenant is gated on its own frozen set, never on another's."""
+    prefix = transfer.push_golden_eval_set(artifact, client=client, tenant_id="acme-2")
+    assert prefix == "golden-eval-set/acme-2"
+    assert paths.tenant_of(f"{prefix}/adapter_config.json") == "acme-2"
+
+    # `golden-eval-set/acme` is a prefix of `golden-eval-set/acme-2`.
+    transfer.pull_golden_eval_set(tmp_path / "acme", client=client, tenant_id="acme")
+    assert not (tmp_path / "acme").exists() or not any((tmp_path / "acme").rglob("*"))
+    out = transfer.pull_golden_eval_set(tmp_path / "acme-2", client=client, tenant_id="acme-2")
     assert (out / "adapter_config.json").exists()
 
 

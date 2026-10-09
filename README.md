@@ -196,12 +196,17 @@ What stays on the CPU has no GPU form: JSON, tokenizer counts, downloads.
 
 Train and val come from each corpus build. The promotion gate does NOT score the
 build's test split — that is re-drawn on every rebuild — but a frozen golden eval
-set at `golden-eval-set/` in Blob, the same documents for every model version.
-Create it once, from the first real corpus build:
+set at `golden-eval-set/{tenant}/` in Blob, the same documents for every model
+version. Each tenant has its own, frozen from its own corpus. Create it once per
+tenant, from that tenant's first real corpus build:
 
 ```bash
-python -m orchestration.run freeze-eval-set --corpus v1
+python -m orchestration.run freeze-eval-set --corpus v1 [--tenant T]
 ```
+
+A set frozen before sets were per tenant sits at `golden-eval-set/` itself and
+is refused until its files are moved under `golden-eval-set/{tenant}/` for the
+tenant it was frozen from (its `manifest.json` names it).
 
 It refuses fewer than 150 test documents per type (arch §15.4) unless `--allow-small`. It copies that corpus's test split (labels, metadata, page images, OCR) into the
 frozen set and records `manifest.json`. From then on every corpus build leaves the

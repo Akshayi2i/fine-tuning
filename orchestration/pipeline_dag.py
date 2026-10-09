@@ -745,17 +745,21 @@ def _is_corpus_built(ctx: StageContext) -> bool:
 
 
 def exclude_eval_families(
-    client: Any, documents: list[Any]
+    client: Any, documents: list[Any], *, tenant_id: str | None = None
 ) -> tuple[list[Any], list[str]]:
     """Drop the frozen eval documents, and every document sharing a family with one.
 
     Families are assigned over ALL loaded documents first (the frozen ones are
     still labeled and OCR'd, so they load), which is what lets a renewal or a
     same-template sibling of an eval document be recognised here.
+
+    ``documents`` are one tenant's, so they are matched against that tenant's
+    frozen set only: source ids are numbered per tenant, and another tenant's
+    frozen ``policy_0001`` is a different document.
     """
     from evaluation.run_eval import eval_set_source_ids
 
-    frozen = eval_set_source_ids(client)
+    frozen = eval_set_source_ids(client, tenant_id)
     families = {d.family for d in documents if d.source_id in frozen}
     kept = [d for d in documents if d.source_id not in frozen and d.family not in families]
     excluded = sorted(d.source_id for d in documents if d not in kept)
@@ -811,21 +815,23 @@ def plan_corpus(ctx: StageContext) -> CorpusPlan:
     if not documents:
         raise PipelineError("no labeled, OCR'd documents to build a corpus from")
 
-    # Once the golden eval set is frozen it IS the test set: its documents, and
-    # every document in the same family, stay out of the corpus — a renewal of an
-    # eval document would otherwise train the model on that document's answers —
-    # and the rest split into train and val only.
-    frozen = is_frozen(ctx.client)
+    # Once the tenant's golden eval set is frozen it IS the test set: its
+    # documents, and every document in the same family, stay out of the corpus —
+    # a renewal of an eval document would otherwise train the model on that
+    # document's answers — and the rest split into train and val only. Another
+    # tenant's frozen set changes nothing here: this tenant still draws its own
+    # test split until it freezes its own.
+    frozen = is_frozen(ctx.client, tenant_id=ctx.tenant_id)
     # Before the exclusion below: with a delivered split, "the family of an eval
     # document" is its source document's twins, not every document on its form.
     delivered = use_delivered_families(documents)
     if frozen:
-        documents, excluded = exclude_eval_families(ctx.client, documents)
+        documents, excluded = exclude_eval_families(ctx.client, documents, tenant_id=ctx.tenant_id)
         if excluded:
             log.info(
                 "excluded %d document(s) in the frozen eval set or its families", len(excluded)
             )
-        warn_on_held_out_carriers(frozen_manifest(ctx.client), documents)
+        warn_on_held_out_carriers(frozen_manifest(ctx.client, tenant_id=ctx.tenant_id), documents)
         if not documents:
             raise PipelineError("every labeled document is in the frozen eval set or its families")
 
@@ -845,7 +851,7 @@ def plan_corpus(ctx: StageContext) -> CorpusPlan:
     if frozen:
         # The test set is the frozen one; so are the carriers it holds out. Recorded
         # so the run manifest and model card say what the gate's documents hold out.
-        manifest = frozen_manifest(ctx.client)
+        manifest = frozen_manifest(ctx.client, tenant_id=ctx.tenant_id)
         assignment.frozen_eval_set = True
         assignment.held_out_carriers_by_line = dict(manifest.get("held_out_carriers_by_line") or {})
         assignment.held_out_carriers = dict(manifest.get("held_out_carriers") or {})

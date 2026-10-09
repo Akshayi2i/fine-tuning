@@ -266,7 +266,7 @@ def window_target(
     windows whose pages print them; without it they ride with their row.
 
     On a common-model line, raises :class:`CanonicalLabelError` for a label
-    with more than one part or a part of another line (:func:`_with_own_part`),
+    with more than one part or a part of another line (:func:`with_own_part`),
     and for a target the window's decoder could not write (:func:`_check_writable`).
     """
     from common.canonical import schema_label, within_schema
@@ -285,7 +285,7 @@ def window_target(
     # be taught (common.canonical.within_schema).
     label = schema_label(label, "policy", None, lob)
     if common_model:
-        label = _without_single_part(_with_own_part(label, lob))
+        label = _without_single_part(with_own_part(label, lob))
     pages = set(plan.pages)
     sliced = {
         name: (_additional_within if name == ADDITIONAL_FIELDS else _within)(
@@ -346,7 +346,7 @@ def _without_single_part(label: dict[str, Any]) -> dict[str, Any]:
     return strip(label)
 
 
-def _with_own_part(label: dict[str, Any], lob: str | list[str] | None) -> dict[str, Any]:
+def with_own_part(label: dict[str, Any], lob: str | list[str] | None) -> dict[str, Any]:
     """A common-model label whose one part is written as the line itself, or refused.
 
     A common-model line's schema holds one part, of that line: the model view

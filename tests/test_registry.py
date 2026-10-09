@@ -87,6 +87,18 @@ def test_tenant_prefix_applied_only_to_document_layers():
     # Shared artifacts carry no tenant data and must never be prefixed.
     assert not paths.is_tenant_scoped(paths.adapter_dir("foundation", "v2"))
     assert not paths.is_tenant_scoped(paths.registry_index())
+    assert not paths.TENANT_SCOPED & paths.SHARED
+
+
+def test_each_tenant_has_its_own_golden_eval_set():
+    """Copied from one tenant's test split, so it is that tenant's data; and
+    source ids are numbered per tenant, so one shared set would gate every
+    tenant on whichever froze first."""
+    assert "golden-eval-set" in paths.TENANT_SCOPED and "golden-eval-set" not in paths.SHARED
+    assert paths.golden_eval_set_dir("broker_a") == "golden-eval-set/broker_a"
+    assert paths.golden_eval_set_dir() == f"golden-eval-set/{paths.default_tenant()}"
+    assert paths.tenant_of(f"{paths.golden_eval_set_dir('broker_a')}/policy_0001/golden.json") == "broker_a"
+    assert paths.golden_eval_set_dir("broker_a") != paths.golden_eval_set_dir("broker_b")
 
 
 def test_tenant_defaults_but_is_still_extractable():

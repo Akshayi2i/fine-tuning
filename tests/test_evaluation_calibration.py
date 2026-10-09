@@ -1299,15 +1299,28 @@ def test_a_conditional_metric_still_faces_its_floor_when_present():
     assert "lossrun_totals_reconciliation_rate" in result.failed_gates
 
 
-def test_the_modality_metrics_are_not_conditional():
-    """They look like subset metrics, but §6 REQUIRES the eval set to cover all
-    three regimes — so a run that produced none of them has a defective eval set.
-    Exempting them would let it quietly stop covering the no-OCR production path
-    while the gate kept passing."""
+def test_the_reading_regime_metrics_are_not_conditional():
+    """They look like subset metrics, but every document is read in both regimes,
+    so a run that produced neither has a defective eval set. Exempting them would
+    let it quietly stop covering the no-OCR production path while the gate kept
+    passing."""
     from evaluation.gating import CONDITIONAL_METRICS
 
-    for metric in ("image_only_accuracy", "scanned_accuracy", "ocr_arbitration_accuracy"):
+    for metric in ("image_only_accuracy", "ocr_arbitration_accuracy"):
         assert metric not in CONDITIONAL_METRICS
+
+
+def test_an_eval_set_with_no_scans_is_not_blocked_on_scanned_accuracy():
+    """Scans are not always there to hold: a line whose documents all arrive
+    digital (the CGL originals) has no scanned document to measure."""
+    result = promotion_gate(_without(_metrics(), "scanned_accuracy"), None)
+    assert "scanned_accuracy" not in result.failed_gates
+
+
+def test_scanned_accuracy_still_may_not_regress_when_measured():
+    result = promotion_gate(_metrics(scanned_accuracy=0.80), _metrics(scanned_accuracy=0.90))
+    assert not result.passed
+    assert "scanned_accuracy" in result.failed_gates
 
 
 # --------------------------------------------------------------------------

@@ -7,13 +7,19 @@ merge, the same date post-process, the same calibrated confidence. Validation
 scoring reads the corpus rows' own prompts, which is right for checkpoint
 selection and wrong for a gate: the serving-only steps would be invisible to it.
 
-Layout of the frozen set in Blob (``paths.golden_eval_set_dir()``), one
-directory per document::
+Layout of the frozen set in Blob (``paths.golden_eval_set_dir(tenant_id)``), one
+set per tenant and one directory per document::
 
-    golden-eval-set/{source_id}/golden.json      the golden label
-    golden-eval-set/{source_id}/metadata.json    doc_type, acord_form, lob, is_scanned
-    golden-eval-set/{source_id}/page_N.png       page images, 1-based
-    golden-eval-set/{source_id}/page_N.md        OCR text per page (optional)
+    golden-eval-set/{tenant}/manifest.json                  what was frozen, from which corpus
+    golden-eval-set/{tenant}/{source_id}/golden.json        the golden label
+    golden-eval-set/{tenant}/{source_id}/metadata.json      doc_type, acord_form, lob, is_scanned
+    golden-eval-set/{tenant}/{source_id}/page_N.png         page images, 1-based
+    golden-eval-set/{tenant}/{source_id}/page_N.md          OCR text per page (optional)
+
+Per tenant because each tenant's releases are gated on its own documents, and
+because source ids are numbered per tenant: one shared set would gate every
+tenant on whichever froze first, and read another tenant's ``policy_0001`` as
+this one's.
 
 Each document is run in all three input modes. ``noisy_ocr_image`` uses the
 corpus build's own seeded corruption, and renders the same prompt serving sends
@@ -64,12 +70,14 @@ class GoldenDocument:
 
 
 def load_golden_set(
-    client: BlobClient, doc_types: Sequence[str] | None = None
+    client: BlobClient, doc_types: Sequence[str] | None = None, *, tenant_id: str | None = None
 ) -> list[GoldenDocument]:
-    """Every document in the frozen set, optionally narrowed to ``doc_types``."""
-    prefix = paths.golden_eval_set_dir()
+    """Every document in this tenant's frozen set, optionally narrowed to ``doc_types``."""
+    from evaluation.run_eval import eval_set_keys
+
+    prefix = paths.golden_eval_set_dir(tenant_id)
     by_source: dict[str, list[str]] = {}
-    for key in client.list(prefix):
+    for key in eval_set_keys(client, tenant_id):
         rest = key[len(prefix):].strip("/")
         if "/" in rest:
             by_source.setdefault(rest.split("/", 1)[0], []).append(key)
@@ -234,28 +242,33 @@ def evaluate_version(
     calibrators: Any = None,
     thresholds: Any = None,
 ) -> dict[str, Any]:
-    """Evaluate, write the eval report where the gate reads it, return its dict."""
+    """Evaluate on this tenant's frozen set, write the eval report where the gate
+    reads it, return its dict."""
     from evaluation.freeze_eval_set import is_frozen
-    from evaluation.run_eval import assert_eval_set_disjoint, build_report
+    from evaluation.run_eval import assert_eval_set_disjoint, build_report, eval_set_keys
 
-    if client.list(paths.golden_eval_set_dir()) and not is_frozen(client):
+    # is_frozen first, always: it is also what refuses a set still frozen at the
+    # root, which this tenant's empty prefix would otherwise let pass unnoticed.
+    if not is_frozen(client, tenant_id=tenant_id) and eval_set_keys(client, tenant_id):
         raise GoldenEvalError(
             "the golden eval set has documents but no manifest: a freeze was interrupted. Re-run "
             "freeze-eval-set from the same corpus to finish it before gating on it."
         )
     # Before anything is evaluated: a leaked eval set makes every number meaningless.
     assert_eval_set_disjoint(client, corpus_version, tenant_id)
-    documents = [d for d in load_golden_set(client, scope.doc_types) if scope.covers_lob(d.lob)]
+    documents = [d for d in load_golden_set(client, scope.doc_types, tenant_id=tenant_id)
+                 if scope.covers_lob(d.lob)]
     if not documents:
         raise GoldenEvalError(
-            f"the frozen eval set holds no {list(scope.doc_types)} documents, so there is "
-            "nothing to gate on"
+            f"the frozen eval set at {paths.golden_eval_set_dir(tenant_id)}/ holds no "
+            f"{list(scope.doc_types)} documents, so there is nothing to gate on"
         )
     from evaluation.release_measurements import GpuMemorySampler
 
     with GpuMemorySampler() as memory:
         triples = evaluate(
-            documents, model, client, paths.staging_train_images_dir(f"golden-{corpus_version}"),
+            documents, model, client,
+            paths.staging_train_images_dir(f"golden-{corpus_version}", tenant_id),
             calibrators=calibrators, thresholds=thresholds,
         )
     failed = sum(1 for _e, _g, meta in triples if meta.get("error"))

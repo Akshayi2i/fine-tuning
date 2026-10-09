@@ -443,7 +443,7 @@ def test_all_never_reaches_package_on_a_failed_gate(client, controller):
 def test_an_unmeasured_metric_blocks_rather_than_passing(client, controller):
     """A metric that was not measured has not passed."""
     seed_corpus(client)
-    partial = {k: v for k, v in PASSING_METRICS.items() if k != "scanned_accuracy"}
+    partial = {k: v for k, v in PASSING_METRICS.items() if k != "image_only_accuracy"}
     ctx = make_context(client, controller, baseline_metrics=dict(PASSING_METRICS),
                        metrics_provider=lambda _ctx: partial)
     report = run_stages(ctx, stages_for("all"), command="all")

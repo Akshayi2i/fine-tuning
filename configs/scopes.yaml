@@ -101,3 +101,19 @@ scopes:
     training_config: personal_lines
     long_doc_types: [policy]
     not_applicable_metrics: [lossrun_totals_reconciliation_rate, table_f1]
+
+  # Casualty and fleet (configs/layout_families.yaml): the family's adapter,
+  # trained for now on commercial general liability alone - its own tenant, from
+  # the CGL source documents. Its lines are what it trained on, because serving
+  # routes by them: auto, wc and umbrella join once they are on the common model
+  # and in the corpus. Listed before then, their policies would reach an adapter
+  # that never saw their layouts and was trained on another output shape.
+  casualty_fleet:
+    lineage: casualty_fleet
+    doc_types: [policy]
+    lines: [gl]
+    tasks: [classify, extract, policy_declarations, policy_schedule, policy_endorsements]
+    # No per-line data mix: one line, no synthetic copies.
+    training_config: unified
+    long_doc_types: [policy]
+    not_applicable_metrics: [lossrun_totals_reconciliation_rate, table_f1]

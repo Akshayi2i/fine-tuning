@@ -10,12 +10,13 @@ Four subsets are scored explicitly on top of the full set: ``image_only``,
 regressions that matter — image-only accuracy can fall ten points while the
 overall number moves two, because image-only is a third of the corpus.
 
-**The eval set is frozen and versioned separately**, human double-verified, and
-held constant across corpus versions so model versions compare like with like.
-:func:`assert_eval_set_disjoint` enforces the part of that which code can:
-**no eval ``source_id`` may appear in any corpus split.** Train on your eval set
-and every number in the registry becomes a measurement of memorisation, with no
-symptom anywhere — the loss curve looks fine and the gate passes.
+**The eval set is frozen and versioned separately**, one per tenant, human
+double-verified, and held constant across corpus versions so model versions
+compare like with like. :func:`assert_eval_set_disjoint` enforces the part of
+that which code can: **no eval ``source_id`` may appear in any of the tenant's
+corpus splits.** Train on your eval set and every number in the registry becomes
+a measurement of memorisation, with no symptom anywhere — the loss curve looks
+fine and the gate passes.
 
 Per-document **error records** are kept, not just aggregates, because
 ``vit_gate`` (IMPL-06) needs the perception-vs-reasoning split and failure-mode
@@ -93,12 +94,32 @@ def corpus_source_ids(
     return found
 
 
-def eval_set_source_ids(client: BlobClient) -> set[str]:
-    """Every ``source_id`` in the frozen golden eval set."""
-    prefix = paths.golden_eval_set_dir()
+def eval_set_keys(client: BlobClient, tenant_id: str | None = None) -> list[str]:
+    """Every key in this tenant's frozen golden eval set, and no other tenant's.
+
+    Listing is by bare prefix, and ``golden-eval-set/acme`` is a prefix of
+    ``golden-eval-set/acme-2``: without the boundary one tenant would read
+    another's documents as its own.
+    """
+    root = paths.golden_eval_set_dir(tenant_id) + "/"
+    return [key for key in client.list(root) if key.startswith(root)]
+
+
+def eval_set_source_ids(client: BlobClient, tenant_id: str | None = None) -> set[str]:
+    """Every ``source_id`` in this tenant's frozen golden eval set.
+
+    Only this tenant's: source ids are numbered per tenant, so another tenant's
+    frozen ``policy_0001`` says nothing about this tenant's ``policy_0001``.
+    """
+    from evaluation.freeze_eval_set import refuse_unscoped_set
+
+    # A set still at the root would make every tenant's set read as empty here,
+    # and the leakage check pass by having nothing to compare.
+    refuse_unscoped_set(client)
+    root = paths.golden_eval_set_dir(tenant_id) + "/"
     return {
-        key[len(prefix):].strip("/").split("/")[0]
-        for key in client.list(prefix)
+        key[len(root):].split("/")[0]
+        for key in eval_set_keys(client, tenant_id)
         if key.endswith("golden.json")
     }
 
@@ -112,12 +133,18 @@ def assert_eval_set_disjoint(
     than an intention. Without it the failure is completely silent: training
     succeeds, the loss curve looks healthy, every metric improves, the gate
     passes, and the numbers describe memorisation.
+
+    The tenant's own frozen set against the tenant's own corpus: both number
+    their documents per tenant, so comparing across tenants would report leaks
+    that are only two documents sharing an id.
     """
-    overlap = eval_set_source_ids(client) & corpus_source_ids(client, corpus_version, tenant_id)
+    overlap = (eval_set_source_ids(client, tenant_id)
+               & corpus_source_ids(client, corpus_version, tenant_id))
     if overlap:
         raise EvalSetLeakage(
-            f"{len(overlap)} document(s) are in BOTH the frozen golden eval set and corpus "
-            f"{corpus_version}: {sorted(overlap)[:10]}. Every metric measured against this eval "
+            f"{len(overlap)} document(s) are in BOTH the frozen golden eval set "
+            f"({paths.golden_eval_set_dir(tenant_id)}/) and corpus {corpus_version}: "
+            f"{sorted(overlap)[:10]}. Every metric measured against this eval "
             "set is a measurement of memorisation, and nothing else in the pipeline would show it "
             "— the loss curve looks healthy and the gate passes. Remove them from the corpus (the "
             "eval set is the thing held constant across versions, so it is the corpus that "

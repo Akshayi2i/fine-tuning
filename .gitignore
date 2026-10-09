@@ -37,6 +37,8 @@ data/audit_report/
 data/source data/
 data/training data/
 data/bundles/
+data/CGL source data/
+data/cgl_bundles/
 data/bundle_exclusions.csv
 data/bundle_lob_overrides.csv
 

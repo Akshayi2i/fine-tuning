@@ -46,8 +46,17 @@ AdapterKind = Literal["foundation", "doc_type"]
 #: than being scattered into the v1 ``eval-reports/`` and ``calibration/`` trees:
 #: those are still unscoped, and adding a tenant segment to only some paths
 #: beneath them would make ``tenant_of`` read a version tag as a tenant id.
+#:
+#: ``golden-eval-set`` is here because each tenant is gated on its own frozen
+#: set. The set is copied from one tenant's test split, so it holds that tenant's
+#: documents; and source ids are numbered per tenant, so one shared prefix would
+#: let the first tenant to freeze fix the yardstick for every tenant and make
+#: another tenant's ``policy_0001`` look frozen. The whole prefix moved at once:
+#: a set frozen at its root before this is refused until it is moved under its
+#: tenant (``evaluation.freeze_eval_set``), so ``tenant_of`` never reads a source id.
 TENANT_SCOPED: Final[frozenset[str]] = frozenset(
-    {"raw-documents", "processed", "golden-labels", "corpus", "releases", "exports"}
+    {"raw-documents", "processed", "golden-labels", "corpus", "releases", "exports",
+     "golden-eval-set"}
 )
 
 #: Blob prefixes holding no tenant data. These are never prefixed — the pinned
@@ -61,7 +70,7 @@ TENANT_SCOPED: Final[frozenset[str]] = frozenset(
 #: that limitation is stated rather than left implicit.
 SHARED: Final[frozenset[str]] = frozenset(
     {"base-models", "adapters", "merged-models", "quantized-models",
-     "registry", "golden-eval-set", "eval-reports", "calibration"}
+     "registry", "eval-reports", "calibration"}
 )
 
 _VERSION_RE = re.compile(r"^v\d+(\.\d+)*$")
@@ -581,10 +590,29 @@ def checkpoint_selection(
     )
 
 
-def golden_eval_set_dir() -> str:
-    """Frozen and versioned separately, held constant across corpus versions so
-    model versions stay comparable (arch §8). Never trained on."""
-    return "golden-eval-set"
+def golden_eval_set_dir(tenant_id: str | None = None) -> str:
+    """``golden-eval-set/{tenant}`` — one tenant's frozen eval set.
+
+    Frozen and versioned separately, held constant across corpus versions so
+    model versions stay comparable (arch §8). Never trained on.
+
+    Per tenant, because each tenant's releases are gated on documents like its
+    own, and because source ids are allocated per tenant: under one shared
+    prefix, the tenant that froze first would fix the yardstick for all of them,
+    and another tenant's document with the same id would be taken as frozen.
+    """
+    return _join("golden-eval-set", _tenant(tenant_id))
+
+
+def legacy_golden_eval_manifest() -> str:
+    """Where a set frozen before eval sets were per tenant kept its manifest.
+
+    Nothing reads a set there. It is named only so it can be refused rather than
+    ignored (``evaluation.freeze_eval_set``): ignored, its tenant would look
+    unfrozen and could freeze a new set, changing the yardstick its earlier
+    versions were compared on.
+    """
+    return _join("golden-eval-set", "manifest.json")
 
 
 # --------------------------------------------------------------------------

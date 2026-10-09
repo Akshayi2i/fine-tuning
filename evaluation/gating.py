@@ -120,6 +120,10 @@ CONDITIONAL_METRICS: frozenset[str] = frozenset({
     "auto_accept_error_rate",
     # Only common-model lines with enough values scored per line produce it.
     "worst_line_field_match",
+    # Only an eval set holding scanned documents measures it. A line whose
+    # documents all arrive digital (the CGL originals) has none to hold, and a
+    # set that holds scans still holds it to non-inferiority with the baseline.
+    "scanned_accuracy",
 })
 
 
@@ -161,12 +165,12 @@ def floors_for(scope: Any) -> dict[str, float]:
         floors.update(getattr(scope, "floors", {}) or {})
     return floors
 
-#: NOT conditional, deliberately: image_only_accuracy, scanned_accuracy and
-#: ocr_arbitration_accuracy. They look like subset metrics, but §6 REQUIRES the
-#: corpus and the golden eval set to cover all three modality regimes — so an
-#: eval run that produced none of them has a defective eval set, and that is
-#: worth blocking on. Exempting them would let the eval set quietly stop
-#: covering the no-OCR production path while the gate kept passing.
+#: NOT conditional, deliberately: image_only_accuracy and ocr_arbitration_accuracy.
+#: They look like subset metrics, but every document is read in both regimes, so
+#: an eval run that produced neither has a defective eval set, and that is worth
+#: blocking on. Exempting them would let the eval set quietly stop covering the
+#: no-OCR production path while the gate kept passing. scanned_accuracy is
+#: conditional (above): scans are not always there to hold.
 
 #: Absolute floors (arch v2.1 §0d, pilot-exit column). The single source of
 #: targets: §16.3's pilot criteria reference the same table. Production values

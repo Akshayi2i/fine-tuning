@@ -55,6 +55,20 @@ delivered apart (``--originals``, default ``data/source data``: ``pdfs/`` and
 becomes a real document (``synthetic`` false) in its twins' family and split,
 read from the twins' manifest, so a seed and its twins are never on two sides;
 its gold gets the same corrections.
+
+**Real documents alone** - no twins, no manifest, no split - of one line
+(``--lob``), laid out as ``<input>/PDFs/<carrier>/<name>.pdf`` with
+``<input>/Gold JSON/<carrier>/<name>.gold.json`` (the CGL source data):
+
+    python -m data_pipeline.ingestion.prepare_bundles --input "data/CGL source data" --lob gl \\
+        --scope casualty_fleet --out data/cgl_bundles
+
+Each pair becomes ``<line>__<carrier>__<name>``, its gold corrected as above. A
+family is one insured: a declarations page, the policy and its renewals stay on
+one side. The split is drawn as the corpus build draws one
+(:func:`~data_pipeline.dataset_builder.split_groups.assign_group_splits`) and
+delivered in the metadata, so it is the same on every re-run and a smoke batch
+can be drawn from it; ``<out>/split.csv`` lists it for review.
 """
 
 from __future__ import annotations
@@ -80,6 +94,9 @@ REQUIRED_COLUMNS = ("split", "lob", "source", "kind", "pdf", "gold", "ok")
 
 #: A SPEC_21 delivery's manifest: one row per twin, both renders and the gold.
 TWIN_MANIFEST = "split_manifest.csv"
+#: Real documents with no twins (:func:`prepare_original_bundles`).
+ORIGINAL_PDFS = "PDFs"
+ORIGINAL_GOLDS = "Gold JSON"
 TWIN_COLUMNS = ("split", "lob", "carrier", "seed", "twin", "digital", "scanned", "gold")
 
 #: Line names a delivery misspells, in its folders and its manifest's lob column.
@@ -491,14 +508,178 @@ def _bundle_originals(
         _write_new(folder / "metadata.json", json.dumps(metadata, indent=2))
 
 
+def _slug(text: str) -> str:
+    """``Johnson & Johnson`` -> ``johnson_johnson``: a folder name with no spaces
+    or symbols, for a blob path and a source id's provenance."""
+    import re
+
+    return "_".join(re.findall(r"[a-z0-9]+", text.lower()))
+
+
+def _insured_family(gold: dict, line: str, fallback: str) -> str:
+    """One insured's documents, as one family: ``<line>/<hash of the name>``.
+
+    The declarations, the policy and its renewals print the same insured, and a
+    model scored on one of them after training on another is scored on a
+    document it has as good as seen. Hashed so a family id names no one.
+    """
+    import hashlib
+
+    name = (gold.get("named_insured") or {}).get("primary_name")
+    name = name.get("raw") if isinstance(name, dict) else name
+    key = _slug(str(name)) if name else ""
+    return f"{line}/{hashlib.sha256((key or fallback).encode()).hexdigest()[:10]}"
+
+
+def _printed_carrier_key(gold: dict) -> str | None:
+    """The carrier the gold names, case and punctuation aside - a folder is not
+    always one carrier (a broker's folder holds several)."""
+    name = (gold.get("carrier") or {}).get("name")
+    name = name.get("raw") if isinstance(name, dict) else name
+    return (_slug(str(name)) or None) if name else None
+
+
+def prepare_original_bundles(
+    source: Path,
+    out: Path = DEFAULT_OUT,
+    *,
+    lob: str,
+    lines: frozenset[str] | None = None,
+    mode: str = "link",
+    exclusions: dict[str, str] | None = None,
+    dry_run: bool = False,
+    seed: int = 42,
+) -> PrepareReport:
+    """Bundles from real documents of one line with no twins and no split.
+
+    ``<source>/PDFs/<carrier>/<name>.pdf`` with ``<source>/Gold JSON/<carrier>/
+    <name>.gold.json``. Each gold is corrected as a seed's is (:func:`corrected_gold`);
+    one outside the line's schema, or a package policy, is left out with the
+    reason. The split is drawn by insured family and written into each
+    document's metadata, so the corpus build uses it as delivered.
+    """
+    from data_pipeline.dataset_builder.split_groups import GroupRecord, assign_group_splits
+
+    line = delivery_line(lob)
+    if lines is not None and line not in lines:
+        raise BundleError(f"{line} is outside the scope's lines {sorted(lines)}; pass that line's scope")
+    if mode not in ("link", "copy", "move"):
+        raise BundleError(f"mode {mode!r} is not link, copy or move")
+    pdf_root, gold_root = source / ORIGINAL_PDFS, source / ORIGINAL_GOLDS
+    pdfs = {p.relative_to(pdf_root).with_suffix(""): p for p in pdf_root.rglob("*.pdf")}
+    golds = {p.relative_to(gold_root).with_name(p.name[: -len(".gold.json")]): p
+             for p in gold_root.rglob("*.gold.json")}
+    if not pdfs:
+        raise BundleError(f"no PDFs under {pdf_root}")
+
+    recodes = read_recodes()
+    report = PrepareReport(out=out, dry_run=dry_run)
+    names = {key: f"{line}__{_slug(str(key.parent))}__{_slug(key.name)}" for key in pdfs.keys() | golds.keys()}
+    clashes = Counter(names.values())
+    if duplicate := sorted(n for n, count in clashes.items() if count > 1):
+        raise BundleError(f"two documents would share the folder name(s) {duplicate}")
+
+    kept: dict[str, tuple[Path, dict, list[tuple[str, str]], Path]] = {}
+    for key in sorted(pdfs.keys() | golds.keys()):
+        name = names[key]
+        if key not in golds or key not in pdfs:
+            report.skipped["a PDF without its gold" if key in pdfs else "a gold without its PDF"] += 1
+            continue
+        if exclusions and name in exclusions:
+            report.skipped[f"excluded: {exclusions[name]}"] += 1
+            continue
+        gold, notes, problem = corrected_gold(
+            json.loads(golds[key].read_text(encoding="utf-8")), line,
+            carrier=str(key.parent.name), text_pdf=pdfs[key], recodes=recodes)
+        if problem:
+            report.skipped[f"gold left out: {problem.split(':', 1)[0]}"] += 1
+            report.correction_rows.append((name, "left out", problem))
+            continue
+        kept[name] = (pdfs[key], gold, notes, golds[key])
+
+    # One family per insured, split as the corpus build splits a tenant with no
+    # delivered split - so the documents are where the build would have put them.
+    family = {name: _insured_family(gold, line, name) for name, (_, gold, _, _) in kept.items()}
+    members: dict[str, list[str]] = {}
+    for name, group in sorted(family.items()):
+        members.setdefault(group, []).append(name)
+    records = [GroupRecord(group_id=group, doc_type="policy", source_ids=docs, line=line,
+                           carrier=_printed_carrier_key(kept[docs[0]][1]))
+               for group, docs in sorted(members.items())]
+    assignment = assign_group_splits({"policy": records}, seed=seed).assignment
+
+    for name, (pdf, gold, notes, gold_path) in sorted(kept.items()):
+        split = assignment[family[name]]
+        for kind, detail in notes:
+            report.corrections[kind] += 1
+            report.correction_rows.append((name, kind, detail))
+        metadata = {
+            "lob": line,
+            "synthetic": False,
+            "template_id": family[name],
+            "split": split,
+            # Left to the gold's own carrier: a folder is not always one carrier.
+            "carrier": None,
+            "source_system": "original",
+            "sample": None,
+            "render_mode": None,
+            "unprinted_values": _unprinted(notes),
+        }
+        report.written[(split, "real")] += 1
+        if dry_run:
+            continue
+        folder = out / name
+        folder.mkdir(parents=True, exist_ok=True)
+        _place(pdf, folder / "document.pdf", mode, report)
+        if _gold_changed(notes):
+            _write_gold(folder / "golden.json", gold)
+        else:
+            _place(gold_path, folder / "golden.json", mode, report)
+        _write_new(folder / "metadata.json", json.dumps(metadata, indent=2))
+
+    # What an earlier run bundled of this source and this one leaves out.
+    for name in sorted(set(names.values()) - set(kept)):
+        if (out / name).is_dir():
+            report.removed += 1
+            if not dry_run:
+                shutil.rmtree(out / name)
+
+    if not dry_run:
+        out.mkdir(parents=True, exist_ok=True)
+        with (out / "corrections.csv").open("w", encoding="utf-8", newline="") as fh:
+            writer = csv.writer(fh)
+            writer.writerow(["document", "correction", "detail"])
+            writer.writerows(report.correction_rows)
+        with (out / "split.csv").open("w", encoding="utf-8", newline="") as fh:
+            writer = csv.writer(fh)
+            writer.writerow(["document", "family", "split"])
+            writer.writerows((name, family[name], assignment[family[name]]) for name in sorted(kept))
+    return report
+
+
 def read_recodes(path: Path = RECODES) -> dict[str, dict[str, str]]:
-    """``{line: {code in no list: listed code}}``; empty when there is no table."""
+    """``{line: {code in no list: listed code}}``.
+
+    Two sources: the codes a line's own coverage-code file says a listed code
+    replaces (``replaces_codes`` in ``<line>.coverage_codes.yaml`` - gl 3.0.0
+    moved GL_ADDITIONAL_INSURED to the shared X_ADDITIONAL_INSURED), and this
+    repository's table at ``path``, which wins where both name a code.
+    """
     import yaml
 
-    if not path.is_file():
-        return {}
-    return {str(line): {str(k): str(v) for k, v in (codes or {}).items()}
-            for line, codes in (yaml.safe_load(path.read_text(encoding="utf-8")) or {}).items()}
+    from common.schemas import CANONICAL_DIR
+
+    out: dict[str, dict[str, str]] = {}
+    for codes_file in sorted(CANONICAL_DIR.glob("*.coverage_codes.yaml")):
+        data = yaml.safe_load(codes_file.read_text(encoding="utf-8")) or {}
+        line = str(data.get("lob") or codes_file.name.split(".", 1)[0])
+        for entry in data.get("codes") or []:
+            for old in (entry.get("replaces_codes") or []) if isinstance(entry, dict) else []:
+                out.setdefault(line, {})[str(old)] = str(entry["code"])
+    if path.is_file():
+        for line, codes in (yaml.safe_load(path.read_text(encoding="utf-8")) or {}).items():
+            out.setdefault(str(line), {}).update({str(k): str(v) for k, v in (codes or {}).items()})
+    return out
 
 
 def _amount(value: object) -> float | None:
@@ -520,7 +701,8 @@ def corrected_gold(
     as a :data:`~data_pipeline.ingestion.label_rules.PRINTED_NOWHERE` note):
 
     * **coverage code** in no list of the line, re-coded to the listed code the
-      overlays' changelogs give for it (``configs/coverage_code_recodes.yaml``):
+      line's code file says replaces it, or the overlays' changelogs give for it
+      (:func:`read_recodes`):
       the decoder only writes listed codes, so a target with another one is an
       answer the served model can never produce;
     * **premium written twice**: a ``premium.items`` entry for a coverage whose
@@ -533,8 +715,9 @@ def corrected_gold(
       document: ``carrier.name`` is filled with it as printed, citing the pages
       that print it (All State's policies print only the brand, "Allstate").
 
-    ``problem`` is the first schema error left after them; such a gold is not
-    bundled.
+    ``problem`` is the first schema error left after them - or, on a
+    common-model line, a package policy (two parts, or a part of another line)
+    - and such a gold is not bundled.
     """
     import copy
 
@@ -590,6 +773,18 @@ def corrected_gold(
         notes.extend(apply_label_rules(gold, page_texts(text_pdf), scanned=scanned_pages(text_pdf)))
 
     errors = list(iter_validation_errors(gold, "policy", None, lob))
+    if not errors and is_common_model("policy", None, lob):
+        # A package policy (a general liability part and an inland marine part)
+        # lists every line and is read against the fallback: filed under one
+        # common-model line it is a target the corpus build refuses, and one
+        # refused target stops the whole build.
+        from common.canonical import CanonicalLabelError
+        from data_pipeline.dataset_builder.policy_windows import with_own_part
+
+        try:
+            with_own_part(gold, lob)
+        except CanonicalLabelError as exc:
+            errors = [f"package policy: {str(exc).split(', but', 1)[0]}"]
     return gold, notes, (errors[0][:200] if errors else None)
 
 
@@ -683,6 +878,7 @@ def main(argv: list[str] | None = None) -> int:
                         help="report the bundles (and a SPEC_21 delivery's gold corrections), write nothing")
     parser.add_argument("--originals", type=Path, default=DEFAULT_ORIGINALS,
                         help="SPEC_21 delivery: the seed documents (pdfs/, gold json/); 'none' leaves them out")
+    parser.add_argument("--lob", help="real documents alone (PDFs/ + Gold JSON/): the line every one is of")
     args = parser.parse_args(argv)
     # On the pod, run detached in tmux: a closed laptop must not stop this job.
     from orchestration.detach import detach_module_if_needed
@@ -692,7 +888,15 @@ def main(argv: list[str] | None = None) -> int:
 
     lines = None if args.scope == "none" else get_scope(args.scope).lines or None
     try:
-        if (args.input / TWIN_MANIFEST).is_file():
+        if (args.input / ORIGINAL_PDFS).is_dir() and (args.input / ORIGINAL_GOLDS).is_dir():
+            if not args.lob:
+                print(f"{args.input} holds real documents alone ({ORIGINAL_PDFS}/, {ORIGINAL_GOLDS}/): "
+                      "pass --lob, the line they are all of", file=sys.stderr)
+                return 1
+            report = prepare_original_bundles(args.input, args.out, lob=args.lob, lines=lines,
+                                              mode=args.mode, exclusions=read_exclusions(args.exclude),
+                                              dry_run=args.dry_run)
+        elif (args.input / TWIN_MANIFEST).is_file():
             originals = None if str(args.originals).lower() == "none" else args.originals
             if originals is not None and not (originals / "pdfs").is_dir():
                 print(f"no seed documents at {originals} (pdfs/); pass --originals none to bundle the "
@@ -709,7 +913,8 @@ def main(argv: list[str] | None = None) -> int:
         print(exc, file=sys.stderr)
         return 1
     print(report.describe())
-    print(f"\nNext: python -m data_pipeline.audit --input \"{args.out}\"")
+    scope = "" if args.scope == "personal_lines" else f" --scope {args.scope}"
+    print(f"\nNext: python -m data_pipeline.audit --input \"{args.out}\"{scope}")
     return 0
 
 

@@ -1,8 +1,8 @@
 """Measure how well the base model reads a policy's line of business, before detection is switched on.
 
-    python scripts/measure_lob_detection.py --corpus v3 [--mode ocr_plus_image] [--out reports/lob_detection.json]
+    python scripts/measure_lob_detection.py --corpus v3 [--tenant T] [--mode ocr_plus_image] [--out reports/lob_detection.json]
 
-Reads the frozen golden eval set the way the golden eval does, withholds each
+Reads the tenant's frozen golden eval set the way the golden eval does, withholds each
 policy's line, and has the base model read it zero-shot - the classifier serving
 would run (``ZeroShotClassifier``) - resolved at the endpoint's own thresholds
 (evaluation.lob_detection_eval). ``routing.detect_lob`` stays off until this
@@ -30,6 +30,8 @@ def main(argv: list[str] | None = None) -> int:
                         default="ocr_plus_image")
     parser.add_argument("--format", dest="quant_format", default=None)
     parser.add_argument("--limit", type=int, default=None, help="read only the first N policies")
+    parser.add_argument("--tenant", default=None,
+                        help="whose frozen eval set to read; each tenant has its own")
     parser.add_argument("--out", default="reports/lob_detection.json")
     args = parser.parse_args(argv)
 
@@ -45,17 +47,19 @@ def main(argv: list[str] | None = None) -> int:
     from evaluation.freeze_eval_set import is_frozen
     from evaluation.golden_eval import load_golden_set
     from evaluation.lob_detection_eval import detection_cases, measure_lob_detection, serving_lob_thresholds
+    from evaluation.run_eval import eval_set_keys
     from inference_core.model_runner import generate, load_model, release_model
     from serving.doc_type_classifier import ZeroShotClassifier
     from training.stage_data import localize_keys
 
     client = BlobClient()
-    if client.list(paths.golden_eval_set_dir()) and not is_frozen(client):
+    # is_frozen first: it also refuses a set still frozen at the unscoped root.
+    if not is_frozen(client, tenant_id=args.tenant) and eval_set_keys(client, args.tenant):
         print("the golden eval set has documents but no manifest: finish its freeze first", file=sys.stderr)
         return 1
-    documents = load_golden_set(client, ["policy"])[: args.limit]
+    documents = load_golden_set(client, ["policy"], tenant_id=args.tenant)[: args.limit]
     local = localize_keys(client, sorted({key for doc in documents for key in doc.image_keys}),
-                          paths.staging_train_images_dir(f"golden-{args.corpus}"))
+                          paths.staging_train_images_dir(f"golden-{args.corpus}", args.tenant))
     cases = detection_cases(documents, local, mode=args.mode)
     if not cases:
         print("the frozen eval set holds no policy with one known line", file=sys.stderr)

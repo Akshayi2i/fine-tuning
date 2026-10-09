@@ -1,10 +1,15 @@
-"""Freeze a corpus's test split into the golden eval set, once (arch v2.1 §8).
+"""Freeze a corpus's test split into the golden eval set, once per tenant (arch v2.1 §8).
 
-The promotion gate scores the frozen set at ``golden-eval-set/`` — the same
-documents for every model version, so two versions' numbers are comparable. The
-corpus's own test split cannot be that: it is re-drawn on every rebuild. Nothing
-populated the frozen set, and nothing read the test split, so the gate had no
-documents and the test documents were held out for nothing.
+The promotion gate scores the frozen set at ``golden-eval-set/{tenant}/`` — the
+same documents for every model version, so two versions' numbers are comparable.
+The corpus's own test split cannot be that: it is re-drawn on every rebuild.
+Nothing populated the frozen set, and nothing read the test split, so the gate
+had no documents and the test documents were held out for nothing.
+
+Each tenant freezes its own set, from its own corpus, and is gated on it. One
+shared set would be the first tenant's documents gating every tenant, and since
+source ids are numbered per tenant, another tenant's ``policy_0001`` would be
+taken as frozen and dropped from its corpus.
 
 This joins the two. The first real corpus build's test split is copied, per
 document, into the layout :mod:`evaluation.golden_eval` reads — the golden label,
@@ -20,6 +25,10 @@ Freezing twice is refused. A set that changes between versions stops being the
 yardstick the gate compares them on; replacing it is a deliberate act (delete
 the prefix, then freeze again), after which old and new scores are not
 comparable.
+
+A set frozen before sets were per tenant sits at the root, ``golden-eval-set/``.
+It is refused, never ignored (:func:`refuse_unscoped_set`): ignored, its tenant
+would read as unfrozen, draw a new test split and freeze a different set.
 """
 
 from __future__ import annotations
@@ -56,37 +65,64 @@ def is_scanned(ocr_meta: dict[str, Any]) -> bool:
     return bool(ocr_meta.get("failed_pages"))
 
 
-def manifest_key() -> str:
-    return f"{paths.golden_eval_set_dir()}/manifest.json"
+def manifest_key(*, tenant_id: str | None = None) -> str:
+    return f"{paths.golden_eval_set_dir(tenant_id)}/manifest.json"
 
 
-def is_frozen(client: BlobClient) -> bool:
-    """Whether the golden eval set is frozen: its manifest exists.
+def refuse_unscoped_set(client: BlobClient) -> None:
+    """Refuse to go on while a set frozen before sets were per tenant is at the root.
+
+    Nothing reads ``golden-eval-set/manifest.json`` any more. Left there, the
+    tenant it was frozen from reads as unfrozen: its next corpus build draws a
+    test split, and a freeze from that build replaces the yardstick its earlier
+    versions were gated on. Moving the files is the operator's call, because only
+    the operator can confirm which tenant the set belongs to.
+    """
+    legacy = paths.legacy_golden_eval_manifest()
+    if not client.exists(legacy):
+        return
+    tenant = str(client.read_json(legacy).get("tenant_id") or "").strip()
+    target = (
+        f"golden-eval-set/{tenant}/ (its manifest says it was frozen from tenant {tenant!r})"
+        if tenant else "golden-eval-set/{tenant}/, for the tenant it was frozen from"
+    )
+    raise FreezeError(
+        f"a golden eval set frozen before eval sets were kept per tenant is still at the root "
+        f"({legacy}). Each tenant now reads only its own set under golden-eval-set/{{tenant}}/, "
+        "so this one is read by nobody, and its tenant would look unfrozen and could freeze a "
+        "different set. Move the root set — manifest.json and each document directory beside "
+        f"it — under {target}, then run again."
+    )
+
+
+def is_frozen(client: BlobClient, *, tenant_id: str | None = None) -> bool:
+    """Whether this tenant's golden eval set is frozen: its manifest exists.
 
     The manifest is written last, so it is the commit point. Keying on "any
     golden.json exists" made an interrupted freeze (40 of 180 documents copied)
     permanent — re-freezing was refused and the gate scored 40 documents.
     """
-    return client.exists(manifest_key())
+    refuse_unscoped_set(client)
+    return client.exists(manifest_key(tenant_id=tenant_id))
 
 
-def partial_freeze(client: BlobClient) -> dict[str, str]:
+def partial_freeze(client: BlobClient, *, tenant_id: str | None = None) -> dict[str, str]:
     """Documents left by an interrupted freeze: ``{source_id: frozen_from_corpus}``."""
     from evaluation.run_eval import eval_set_source_ids
 
-    if is_frozen(client):
+    if is_frozen(client, tenant_id=tenant_id):
         return {}
-    root = paths.golden_eval_set_dir()
+    root = paths.golden_eval_set_dir(tenant_id)
     found = {}
-    for source_id in eval_set_source_ids(client):
+    for source_id in eval_set_source_ids(client, tenant_id=tenant_id):
         key = f"{root}/{source_id}/metadata.json"
         meta = client.read_json(key) if client.exists(key) else {}
         found[source_id] = str(meta.get("frozen_from_corpus") or "unknown")
     return found
 
 
-def frozen_manifest(client: BlobClient) -> dict[str, Any]:
-    key = manifest_key()
+def frozen_manifest(client: BlobClient, *, tenant_id: str | None = None) -> dict[str, Any]:
+    key = manifest_key(tenant_id=tenant_id)
     return client.read_json(key) if client.exists(key) else {}
 
 
@@ -98,7 +134,10 @@ def freeze_eval_set(
     git_commit: str = "unknown",
     allow_small: bool = False,
 ) -> dict[str, Any]:
-    """Copy ``corpus_version``'s test split into ``golden-eval-set/``. Returns the manifest.
+    """Copy ``corpus_version``'s test split into ``golden-eval-set/{tenant}/``. Returns the manifest.
+
+    The tenant's own corpus, into the tenant's own set: freezing one tenant never
+    reads or changes another's.
 
     Refused when any document type would freeze with fewer than
     :data:`MIN_FROZEN_DOCS_PER_TYPE` documents, unless ``allow_small``: the frozen
@@ -108,10 +147,11 @@ def freeze_eval_set(
     from data_pipeline.dataset_builder.split_groups import line_of
     from data_pipeline.labeling.export_golden_labels import load_golden_label
 
-    partial = partial_freeze(client)
+    root = paths.golden_eval_set_dir(tenant_id)
+    partial = partial_freeze(client, tenant_id=tenant_id)
     if partial and set(partial.values()) != {corpus_version}:
         raise FreezeError(
-            f"an interrupted freeze left {len(partial)} document(s) in {paths.golden_eval_set_dir()}/ "
+            f"an interrupted freeze left {len(partial)} document(s) in {root}/ "
             f"from corpus {sorted(set(partial.values()))}, not {corpus_version}. Delete that prefix "
             "and freeze again, or re-run the freeze from the corpus it started from."
         )
@@ -120,14 +160,14 @@ def freeze_eval_set(
             "resuming an interrupted freeze from corpus %s: %d document(s) already copied are "
             "copied again", corpus_version, len(partial),
         )
-    if is_frozen(client):
-        existing = frozen_manifest(client)
+    if is_frozen(client, tenant_id=tenant_id):
+        existing = frozen_manifest(client, tenant_id=tenant_id)
         raise FreezeError(
-            f"the golden eval set is already frozen (from corpus "
+            f"the golden eval set at {root}/ is already frozen (from corpus "
             f"{existing.get('frozen_from_corpus', 'unknown')}, "
             f"{len(existing.get('source_ids', []))} documents). Re-freezing would change the "
             "yardstick every version is compared on. To replace it on purpose, delete "
-            f"{paths.golden_eval_set_dir()}/ first — and treat older scores as not comparable."
+            f"{root}/ first — and treat older scores as not comparable."
         )
 
     test_key = paths.corpus_eval_split(corpus_version, "test", tenant_id)
@@ -162,7 +202,6 @@ def freeze_eval_set(
     split = corpus_manifest.get("split_assignment") or {}
     held_out_ids = set(split.get("held_out_source_ids") or [])
 
-    root = paths.golden_eval_set_dir()
     by_type: dict[str, int] = {}
     by_line: dict[str, int] = {}
     for source_id, doc_type in sorted(documents.items()):
@@ -221,7 +260,7 @@ def freeze_eval_set(
         "held_out_carriers": split.get("held_out_carriers", {}),
         "held_out_carriers_by_line": split.get("held_out_carriers_by_line", {}),
     }
-    client.write_json(manifest_key(), manifest)
+    client.write_json(manifest_key(tenant_id=tenant_id), manifest)
     log.info(
         "froze %d document(s) from corpus %s into %s: %s",
         len(documents), corpus_version, root, manifest["documents_by_doc_type"],

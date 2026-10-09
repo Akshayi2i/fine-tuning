@@ -83,6 +83,8 @@ _CANONICAL_NOT_REGISTERED = ("_common", "classic_auto")
 LOB_SCHEMA_ALIASES: dict[str, str] = {
     "workers_comp": "wc",
     "general_liability": "gl",
+    # The L1 code of commercial general liability, and its SPEC_21 routing key.
+    "cgl": "gl",
     "commercial_auto": "auto",
 }
 

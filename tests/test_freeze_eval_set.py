@@ -140,3 +140,152 @@ def test_a_pilot_sized_set_is_not_frozen_by_accident(client, controller):
     with pytest.raises(FreezeError, match="allow-small"):
         freeze_eval_set(client, ctx.corpus)
     assert not is_frozen(client)
+
+
+# --------------------------------------------------------------------------
+# One frozen set per tenant
+# --------------------------------------------------------------------------
+
+
+def _seed_test_split(client, tenant, corpus, labels):
+    """A tenant's corpus test split, and what a freeze copies for each document."""
+    import json
+
+    rows = "".join(json.dumps({"source_id": sid, "doc_type": "policy"}) + "\n" for sid in labels)
+    client.write_text(paths.corpus_eval_split(corpus, "test", tenant), rows)
+    for source_id, label in labels.items():
+        client.write_json(paths.golden_label("policy", source_id, tenant), label)
+        client.write_json(paths.label_metadata("policy", source_id, tenant), {"lob": "homeowners"})
+        client.write_json(paths.ocr_meta("policy", source_id, tenant), {"page_count": 1})
+        client.write_bytes(paths.processed_page("policy", source_id, 1, "png", tenant), b"png")
+
+
+def test_two_tenants_freeze_independently_and_each_reads_only_its_own(client):
+    """Source ids are numbered per tenant, so both tenants have a policy_0001.
+    Freezing one must neither freeze nor fill the other."""
+    _seed_test_split(client, "personal", "v1", {
+        "policy_0001": {"insured_name": "Personal One"}, "policy_0002": {"insured_name": "P2"},
+    })
+    _seed_test_split(client, "cgl", "v1", {
+        "policy_0001": {"insured_name": "CGL One"}, "policy_0003": {"insured_name": "C3"},
+    })
+
+    freeze_eval_set(client, "v1", tenant_id="personal", allow_small=True)
+    assert is_frozen(client, tenant_id="personal")
+    assert not is_frozen(client, tenant_id="cgl")
+    assert eval_set_source_ids(client, tenant_id="cgl") == set()
+
+    manifest = freeze_eval_set(client, "v1", tenant_id="cgl", allow_small=True)  # not "already frozen"
+    assert manifest["tenant_id"] == "cgl"
+    assert manifest["source_ids"] == ["policy_0001", "policy_0003"]
+    assert client.exists(manifest_key(tenant_id="cgl"))
+
+    assert eval_set_source_ids(client, tenant_id="personal") == {"policy_0001", "policy_0002"}
+    assert eval_set_source_ids(client, tenant_id="cgl") == {"policy_0001", "policy_0003"}
+    for tenant, insured in (("personal", "Personal One"), ("cgl", "CGL One")):
+        root = paths.golden_eval_set_dir(tenant)
+        assert client.read_json(f"{root}/policy_0001/golden.json") == {"insured_name": insured}
+        documents = load_golden_set(client, tenant_id=tenant)
+        assert all(key.startswith(f"{root}/") for d in documents for key in d.image_keys)
+    # Freezing twice is still refused, per tenant.
+    with pytest.raises(FreezeError, match="golden-eval-set/cgl/ is already frozen"):
+        freeze_eval_set(client, "v1", tenant_id="cgl", allow_small=True)
+
+
+def test_a_tenant_never_reads_a_tenant_whose_name_extends_its_own(client):
+    """`golden-eval-set/acme` is a prefix of `golden-eval-set/acme-2`, and listing
+    is by bare prefix."""
+    client.write_json(f"{paths.golden_eval_set_dir('acme-2')}/policy_0001/golden.json", {})
+    client.write_json(f"{paths.golden_eval_set_dir('acme-2')}/policy_0001/metadata.json",
+                      {"doc_type": "policy"})
+    client.write_bytes(f"{paths.golden_eval_set_dir('acme-2')}/policy_0001/page_1.png", b"png")
+    assert eval_set_source_ids(client, tenant_id="acme") == set()
+    assert load_golden_set(client, tenant_id="acme") == []
+    assert eval_set_source_ids(client, tenant_id="acme-2") == {"policy_0001"}
+
+
+def test_an_id_frozen_in_one_tenant_is_not_frozen_in_another(client, controller):
+    """The other tenant's policy_0001 is a different document: it stays in this
+    tenant's corpus, and this tenant still draws its own test split."""
+    import json
+
+    from evaluation.run_eval import assert_eval_set_disjoint
+    from orchestration.pipeline_dag import exclude_eval_families, plan_corpus
+
+    seeded = seed_corpus(client)                       # the default tenant's documents
+    colliding = seeded[0]
+    other = paths.golden_eval_set_dir("other")
+    client.write_json(f"{other}/{colliding}/golden.json", {})
+    client.write_json(manifest_key(tenant_id="other"), {"source_ids": [colliding]})
+
+    # The corpus build: the default tenant is not frozen, and keeps the document.
+    plan = plan_corpus(make_context(client, controller))
+    assert not plan.frozen
+    assert colliding in {d.source_id for d in plan.documents}
+
+    doc = SimpleNamespace(source_id=colliding, family="fam-a", carrier=None)
+    kept, excluded = exclude_eval_families(client, [doc], tenant_id=None)
+    assert kept == [doc] and excluded == []
+    kept, excluded = exclude_eval_families(client, [doc], tenant_id="other")
+    assert kept == [] and excluded == [colliding]
+
+    # The leakage check: the same id in the default tenant's train split is no leak...
+    client.write_text(paths.corpus_epoch_file("v9", 1, None),
+                      json.dumps({"source_id": colliding, "doc_type": "policy"}) + "\n")
+    assert_eval_set_disjoint(client, "v9", None)
+    # ...but it is one in the tenant that froze it.
+    client.write_text(paths.corpus_epoch_file("v9", 1, "other"),
+                      json.dumps({"source_id": colliding, "doc_type": "policy"}) + "\n")
+    from evaluation.run_eval import EvalSetLeakage
+
+    with pytest.raises(EvalSetLeakage, match=colliding):
+        assert_eval_set_disjoint(client, "v9", "other")
+
+
+def test_a_set_frozen_at_the_unscoped_root_is_refused_with_where_to_move_it(client):
+    """Ignored, its tenant would read as unfrozen and could freeze a new set,
+    changing the yardstick its earlier versions were gated on."""
+    from evaluation.freeze_eval_set import frozen_manifest, partial_freeze
+    from evaluation.run_eval import assert_eval_set_disjoint
+
+    client.write_json("golden-eval-set/manifest.json",
+                      {"tenant_id": "personal", "source_ids": ["policy_0001"]})
+    client.write_json("golden-eval-set/policy_0001/golden.json", {})
+    _seed_test_split(client, "personal", "v1", {"policy_0002": {"insured_name": "P2"}})
+
+    guidance = r"golden-eval-set/manifest\.json.*Move the root set.*under golden-eval-set/personal/"
+    with pytest.raises(FreezeError, match=guidance):
+        is_frozen(client, tenant_id="personal")
+    # Every tenant, not only the one it came from: no tenant can tell it is not theirs.
+    with pytest.raises(FreezeError, match=guidance):
+        is_frozen(client, tenant_id="cgl")
+    with pytest.raises(FreezeError, match=guidance):
+        partial_freeze(client, tenant_id="personal")
+    with pytest.raises(FreezeError, match=guidance):
+        freeze_eval_set(client, "v1", tenant_id="personal", allow_small=True)
+    with pytest.raises(FreezeError, match=guidance):
+        assert_eval_set_disjoint(client, "v1", "personal")
+    # The gate too, although this tenant's own prefix is empty.
+    from common.scopes import get_scope
+    from evaluation.golden_eval import evaluate_version
+
+    with pytest.raises(FreezeError, match=guidance):
+        evaluate_version(client, object(), version="v1", corpus_version="v1",
+                         scope=get_scope("policy"), tenant_id="personal")
+    assert not client.exists(manifest_key(tenant_id="personal"))   # nothing was frozen
+
+    # Moved under its tenant, it is that tenant's frozen set again.
+    client.delete("golden-eval-set/manifest.json")
+    client.delete("golden-eval-set/policy_0001/golden.json")
+    client.write_json(manifest_key(tenant_id="personal"),
+                      {"tenant_id": "personal", "source_ids": ["policy_0001"]})
+    client.write_json(f"{paths.golden_eval_set_dir('personal')}/policy_0001/golden.json", {})
+    assert is_frozen(client, tenant_id="personal")
+    assert frozen_manifest(client, tenant_id="personal")["source_ids"] == ["policy_0001"]
+    assert eval_set_source_ids(client, tenant_id="personal") == {"policy_0001"}
+
+
+def test_a_root_manifest_naming_no_tenant_still_says_what_to_do(client):
+    client.write_json("golden-eval-set/manifest.json", {"source_ids": ["policy_0001"]})
+    with pytest.raises(FreezeError, match=r"golden-eval-set/\{tenant\}/, for the tenant it was frozen from"):
+        is_frozen(client)
